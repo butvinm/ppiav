@@ -2,7 +2,7 @@
 
 This document captures the design decisions made during brainstorm. Treat it as the single source of truth for the architecture; any deviation in code requires updating this doc first.
 
-**Status:** Sections 1 and 2a approved. Section 2b drafted, pending review. Section 2c (bench) not yet drafted.
+**Status:** Sections 1, 2a, and 2b approved. Section 2c (bench) not yet drafted.
 
 ---
 
@@ -459,9 +459,7 @@ w.WriteHeader(http.StatusOK)
 
 ---
 
-## 11. Section 2b: Actor packages (PENDING REVIEW)
-
-Drafted, not yet approved. May change after review.
+## 11. Section 2b: Actor packages (APPROVED)
 
 ### `internal/vclient`
 
