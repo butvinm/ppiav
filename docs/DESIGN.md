@@ -260,7 +260,47 @@ ppiav/
 
 ## 9. Resource access flow
 
-> Let's add mermaid sequence diagram with protocol definition and add our message names (SessionOpened, etc) on arrows
+```mermaid
+sequenceDiagram
+    participant RC as RClient
+    participant RS as RService
+    participant VA as VAgent
+    participant VC as VClient
+    participant VS as VService
+
+    %% Session setup
+    RC->>RS: POST /api/start (StartVerification)
+    RS->>VA: POST /sessions (SessionOpen)
+    VA-->>RS: SessionOpened
+    VA->>VS: POST /sessions (SessionOpen)
+    VS-->>VA: SessionOpened
+    RS-->>RC: VerificationStarted (sid, redirectURL)
+    RC->>VA: GET /verify?sid (loads VClient SPA)
+
+    %% Keys
+    VC->>VC: Keygen
+    VC->>VA: POST /sessions/{sid}/keys (KeySetUpload)
+    VA->>VS: POST /sessions/{sid}/keys (KeySetUpload)
+
+    %% Image and inference
+    VC->>VA: GET /sessions/{sid}/result (open SSE)
+    VC->>VC: EncryptImage
+    VC->>VA: POST /sessions/{sid}/image (EncryptedImage)
+    VA->>VS: POST /sessions/{sid}/image (EncryptedImage)
+    VS->>VS: Infer
+    VS-->>VA: result_ct (HTTP 200 body)
+    VA->>VA: MACTag (samples a, b)
+    VA-->>VC: SSE event: TaggedResult
+
+    %% Decryption, MAC verify, verdict
+    VC->>VC: Decrypt
+    VC->>VA: POST /sessions/{sid}/decrypted (DecryptedPair)
+    VA->>VA: VerifyDecryption (MAC + policy)
+    VA->>RS: POST /api/callback (VerdictNotification)
+    VA-->>VC: 302 redirect to RService
+    RC->>RS: GET /protected?sid
+    RS-->>RC: content (or denied)
+```
 
 1. Browser opens `RService /protected`.
 2. Page calls `POST /api/start-verification` on RService.
