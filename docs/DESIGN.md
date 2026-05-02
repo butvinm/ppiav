@@ -260,6 +260,8 @@ ppiav/
 
 ## 9. Resource access flow
 
+> Let's add mermaid sequence diagram with protocol definition and add our message names (SessionOpened, etc) on arrows
+
 1. Browser opens `RService /protected`.
 2. Page calls `POST /api/start-verification` on RService.
 3. RService allocates `session_id`, calls `POST /sessions` on VAgent (with callback URL).
@@ -383,7 +385,7 @@ package protocol
 
 import "github.com/tuneinsight/lattigo/v6/core/rlwe"
 
-type SessionOpen          struct { CallbackURL string }
+type SessionOpen          struct{}
 type SessionOpened        struct { SessionID SessionID }
 type KeySetUpload         struct { Keys PublicKeySet }
 type EncryptedImage       struct { Ct *rlwe.Ciphertext }
@@ -398,19 +400,22 @@ type VerificationStarted  struct { SessionID SessionID; RedirectURL string }
 
 Single-field wrappers (`KeySetUpload`, `EncryptedImage`, `VerdictNotification`) are kept for consistency and future evolution — adding a field doesn't break the handler contract.
 
+`SessionOpen` and `StartVerification` are intentionally empty. The protocol presentation slide shows a callback URL flowing from RService to VAgent in the open-session step; we collapse that field because RService↔VAgent are co-deployed by the same operator and pin URLs in config (the OAuth/OIDC pattern). Reintroduce a field if a future scenario requires runtime URL exchange.
+
 **Naming convention:** payload nouns. Direction is implicit in the HTTP route. No `*Request` / `*Response` suffixes (HTTP-RPC pairing is gRPC-flavor; Go REST commonly uses payload structs).
 
 **Architecture invariant:** actor methods take individual domain-type args (idiomatic Go); message types are wire-format only. HTTP handlers in `cmd/*` decode the message, call the actor method, encode the response.
 
 ```go
-// idiomatic
-func (a *Agent) OpenSession(callbackURL string) protocol.SessionID
+// idiomatic — actor takes domain types, no transport leaking in
+func (a *Agent) StoreKeys(sid protocol.SessionID, keys protocol.PublicKeySet) error
 
-// at HTTP boundary only
-var msg protocol.SessionOpen
+// at HTTP boundary — handler extracts sid from URL path, decodes body, calls actor
+sid := protocol.SessionID(chi.URLParam(r, "sid"))
+var msg protocol.KeySetUpload
 json.NewDecoder(r.Body).Decode(&msg)
-sid := h.agent.OpenSession(msg.CallbackURL)
-json.NewEncoder(w).Encode(protocol.SessionOpened{SessionID: sid})
+if err := h.agent.StoreKeys(sid, msg.Keys); err != nil { /* 4xx */ }
+w.WriteHeader(http.StatusOK)
 ```
 
 **Note on style:** no `var _ Iface = (*T)(nil)` compile-time interface assertions. Per project preference; Lattigo interface conformance is verified by usage.
@@ -463,21 +468,19 @@ type Agent struct {
     params   ckks.Parameters
     eps      float64
     encoder  *ckks.Encoder
-    eval     *ckks.Evaluator
+    eval     *ckks.Evaluator   // constructed with nil EvaluationKeySet — shared across sessions
     sessions map[protocol.SessionID]*sessionState
     mu       sync.Mutex
 }
 
 type sessionState struct {
-    callbackURL string
-    keys        protocol.PublicKeySet
-    mac         protocol.MACSecret
+    keys protocol.PublicKeySet
+    mac  protocol.MACSecret
 }
 
 func New(params ckks.Parameters, eps float64) (*Agent, error)
 
-func (a *Agent) OpenSession(callbackURL string) protocol.SessionID
-func (a *Agent) CallbackURL(sid protocol.SessionID) (string, bool)
+func (a *Agent) OpenSession() protocol.SessionID
 func (a *Agent) StoreKeys(sid protocol.SessionID, keys protocol.PublicKeySet) error
 func (a *Agent) MACTag(sid protocol.SessionID, resultCt *rlwe.Ciphertext) (*rlwe.Ciphertext, error)
 func (a *Agent) VerifyDecryption(sid protocol.SessionID, result, tag []float64) (protocol.Verdict, error)
@@ -543,15 +546,16 @@ func (s *Service) CheckAccess(sid protocol.SessionID) protocol.Verdict
 ### Architecture invariants
 
 1. **No actor depends on another actor's package.** All depend on `internal/protocol` and Lattigo. Phase 3 HTTP handlers in `cmd/*` orchestrate calls between actors via injected HTTP clients.
-2. **Sessions are owned by the actor that creates them.** RService creates sids in `StartVerification`. VAgent and VService receive sids via `OpenSession`/`StoreKeys` — they don't generate their own.
-3. **MAC state is single-use.** `MACTag` writes `mac` to session; `VerifyDecryption` reads it once and zeroes. Subsequent verifies on the same session error out.
-4. **Keys live where they're used.** `vclient` holds `sk`. `vagent` holds `PublicKeySet` (forwarded for protocol completeness). `vservice` builds an `Evaluator` per-session from the evk.
+2. **Actors are transport-agnostic.** No actor holds URLs, HTTP clients, retry policies, or any other transport state. Phase 1 CLI orchestrates by calling actor methods in sequence. Phase 3 HTTP handlers in `cmd/*` hold the transport state (URLs from config, `*http.Client`) and orchestrate the same way over the wire. Same actors, two orchestrators.
+3. **Sessions are owned by the actor that creates them.** RService creates sids in `StartVerification`. VAgent and VService receive sids via `OpenSession`/`StoreKeys` — they don't generate their own.
+4. **MAC state is single-use.** `MACTag` writes `mac` to session; `VerifyDecryption` reads it once and zeroes. Subsequent verifies on the same session error out.
+5. **Keys live where they're used.** `vclient` holds `sk`. `vagent` holds `PublicKeySet` (forwarded for protocol completeness). `vservice` builds an `Evaluator` per-session from the evk.
 
-### Open concerns flagged during draft
+### Resolved concerns
 
-- **`vagent.eval` shared across sessions vs per-session.** Lattigo's `Evaluator` holds keys via the `EvaluationKeySet` interface. Plaintext-mul/add in `MACTag` does not need eval keys — verify Lattigo API allows constructing an evaluator with empty/nil keyset for these operations. Resolution before Phase 1 starts.
-- **`MACTag` returns only `tag_ct`** (caller already has `result_ct`). Returning the pair would be self-documenting but redundant.
-- **`StartVerification` redirect URL.** RService should not know VAgent's URL. The orchestrating HTTP handler in `cmd/ppiav-rservice` builds the redirect from deployment config; RService returns just `sid`. Adjusted in the signature above.
+- **`vagent.eval` shared across sessions vs per-session.** _Resolved: shared._ Verified that `ckks.NewEvaluator(params, nil)` constructs successfully and supports `MulNew(ct, plaintext)` + `AddNew(ct, plaintext)` + `Rescale` for the MAC step (verification script: `/tmp/ppiav-scratch/eval_no_keys/main.go`; output confirmed `1.5·2.0 + 0.5 ≈ 3.5` with ~7e-6 CKKS noise; `MulRelinNew(ct, ct)` correctly errors on nil keyset). One `*ckks.Evaluator` per `Agent`, constructed in `New()`.
+
+- **`StartVerification` redirect URL location.** _Resolved: not in the actor._ Both URLs (RService→VAgent redirect, VAgent→RService callback) are deployment config-time constants — RService and VAgent are co-deployed by the same operator (server↔Keycloak pattern). Holding URLs on actor structs would force Phase 1 to invent values it doesn't need. The Phase 3 HTTP handlers in `cmd/ppiav-{rservice,vagent}` hold the URLs from config; they call actor methods (sid in, sid out) and build/POST URLs themselves. `SessionOpen` is correspondingly empty; `RService.StartVerification()` returns only sid.
 
 ---
 
