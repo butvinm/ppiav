@@ -2,7 +2,7 @@
 
 This document captures the design decisions made during brainstorm. Treat it as the single source of truth for the architecture; any deviation in code requires updating this doc first.
 
-**Status:** Sections 1, 2a, and 2b approved. Section 2c (bench) not yet drafted.
+**Status:** Sections 1, 2a, 2b, and 2c approved.
 
 ---
 
@@ -594,9 +594,101 @@ func (s *Service) CheckAccess(sid protocol.SessionID) protocol.Verdict
 
 ---
 
-## 12. Section 2c: Bench package (NOT YET DRAFTED)
+## 12. Section 2c: Bench package (APPROVED)
 
-To be added.
+`internal/bench` is the measurement harness used by `cmd/ppiav-cli` (and any test wanting reproducible perf data). Pure Go, no external deps beyond stdlib + `runtime/debug`.
+
+```go
+// internal/bench/bench.go
+package bench
+
+import (
+    "runtime"
+    "time"
+)
+
+type Sample struct {
+    Name       string        `json:"name"`
+    Iter       int           `json:"iter,omitempty"`               // 0..N-1 within a Repeat batch
+    Wall       time.Duration `json:"wall_ns,omitempty"`
+    HeapAlloc  uint64        `json:"heap_alloc_bytes,omitempty"`   // post-call HeapAlloc
+    HeapInuse  uint64        `json:"heap_inuse_bytes,omitempty"`   // post-call HeapInuse
+    Sys        uint64        `json:"sys_bytes,omitempty"`          // post-call Sys (total from OS)
+    AllocDelta uint64        `json:"alloc_delta_bytes,omitempty"`  // (HeapAlloc - pre.HeapAlloc); 0 if GC ran
+    NumGC      uint32        `json:"num_gc_in_call,omitempty"`     // GC cycles during the call
+    PauseNs    uint64        `json:"pause_ns_in_call,omitempty"`   // total GC pause during the call
+    VmHWM      uint64        `json:"vmhwm_bytes,omitempty"`        // Linux peak RSS, 0 elsewhere
+    Bytes      uint64        `json:"bytes,omitempty"`              // optional artifact size
+}
+
+func Measure(name string, fn func() error) (Sample, error)
+func MeasureWithSize(name string, fn func() (size uint64, err error)) (Sample, error)
+func Repeat(n int, name string, fn func() error) ([]Sample, error)
+func RepeatWithWarmup(n, warmup int, name string, fn func() error) ([]Sample, error)
+
+// Linux-only; returns 0 elsewhere. Reads /proc/self/status VmHWM.
+func readVmHWM() uint64
+```
+
+```go
+// internal/bench/run.go
+package bench
+
+import "time"
+
+type Run struct {
+    Name      string         `json:"name"`
+    Phase     string         `json:"phase"`
+    Started   time.Time      `json:"started"`
+    GoVersion string         `json:"go_version"`
+    GOOS      string         `json:"goos"`
+    GOARCH    string         `json:"goarch"`
+    NumCPU    int            `json:"num_cpu"`
+    Metadata  map[string]any `json:"metadata"`
+    Samples   []Sample       `json:"samples"`
+}
+
+func NewRun(name, phase string) *Run
+func (r *Run) Append(s ...Sample)
+func (r *Run) WriteJSON(path string) error  // pretty-printed for git-friendly diffs
+```
+
+**Usage shape (in `cmd/ppiav-cli`):**
+
+```go
+run := bench.NewRun("phase1-keygen", "1")
+run.Metadata["ckks_params"] = ckksParamsAsMap(params)
+
+samples, _ := bench.RepeatWithWarmup(*n, 1, "keygen", func() error {
+    _, err := vclient.Keygen()
+    return err
+})
+run.Append(samples...)
+
+// Artifact-size samples are constructed manually (no time/memory dimensions).
+keys, _ := vclient.Keygen()
+pkBytes, _ := keys.PK.MarshalBinary()
+evkBytes, _ := keys.Evk.MarshalBinary()
+run.Append(
+    bench.Sample{Name: "pk_size",  Bytes: uint64(len(pkBytes))},
+    bench.Sample{Name: "evk_size", Bytes: uint64(len(evkBytes))},
+)
+
+run.WriteJSON("results/phase1/keygen.json")
+```
+
+**Design notes:**
+
+- **One sample per iteration, no aggregation in Go.** Mean / stddev / percentiles are computed in `bench/plot.py` and `bench/tables.py`. Keeps Go simple and lets analysis evolve without recompilation.
+- **Warmup is mandatory-by-default convention.** Lattigo's `NewParametersFromLiteral` and similar init paths have one-time costs (NTT tables, sampling structures). Without warmup, sample 0 is consistently slower than steady-state and pollutes the mean. `RepeatWithWarmup(n, 1, ...)` is the recommended call shape.
+- **Memory deltas can be negative if GC runs during the call.** `AllocDelta` is clipped to 0 in that case; `NumGC > 0` flags it for the analysis script to discard or note.
+- **No timer ceremony for the user.** `Measure`/`Repeat` own the `time.Now()` calls, the `runtime.ReadMemStats` calls, and the `readVmHWM` calls.
+- **Single `Sample` type with `omitempty` everywhere.** Bytes-only samples (pk_size, evk_size) leave Wall, Heap\*, Sys, etc. zero and they're elided from JSON. One type to reason about, no JSON bloat.
+- **Artifact-size measurement is separate from time/memory measurement.** Sizes are deterministic (`len(MarshalBinary())`) and don't need warmup or repetition.
+- **No nested measurements.** `e2e` and per-step samples live as separate entries (or separate `Run`s); `bench/plot.py` reconciles them across files.
+- **Pretty-printed JSON.** Run files in `results/phase{1,2,3,4}/*.json` are git-diff-readable when we commit snapshot results.
+
+**Out of scope for §12:** the CLI command surface (`ppiav-cli keygen --n 10`, `ppiav-cli e2e --bandwidth 100`, etc.) belongs to a future Phase 1 implementation plan, not this design doc. `internal/bench` is the harness; `cmd/ppiav-cli` is the user-facing CLI that uses it.
 
 ---
 
