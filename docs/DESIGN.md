@@ -96,14 +96,31 @@ Single-use: `(a, b)` is generated in `MACTag` and consumed in `VerifyDecryption`
 
 ## 4. Implementation phases
 
-| Phase | Scope                                                                          | Deliverables                                                                                                                                 |
-| ----- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1     | Real CKKS, synthetic `x²` circuit, CLI + bench harness, no models, no services | Go packages (`internal/{protocol,ckks,vclient,vagent,vservice,rservice,bench}`), `cmd/ppiav-cli`, JSON results, Markdown/Typst tables, plots |
-| 2     | Orion-compiled C3AE inference replaces `x²`                                    | `models/` Python pipeline (train.py, compile.py), `c3ae.orion` artifact, `internal/ckks` removed (params from manifest)                      |
-| 3     | HTTP services + browser SPAs                                                   | `cmd/ppiav-{vservice,vagent,rservice}`, `web/{vclient,rclient,ppiav-crypto}`, Dockerfiles, docker-compose                                    |
-| 4     | Hierarchical rotation keys                                                     | Extended `web/ppiav-crypto/bridge` (or upstream into Orion's `js/lattigo`), reduced key transmission cost                                    |
-
 Implementation rule: Phase N must not reach into Phase N+1 work. If a Phase N decision constrains Phase N+1, document it here.
+
+### Phase 1
+
+**Scope:** Real CKKS, synthetic `x²` circuit, CLI + bench harness, no models, no services
+
+**Deliverable:** Go packages (`internal/{protocol,ckks,vclient,vagent,vservice,rservice,bench}`), `cmd/ppiav-cli`, JSON results, Markdown/Typst tables, plots
+
+### Phase 2
+
+**Scope:** Orion-compiled C3AE inference replaces `x²`
+
+**Deliverable:** `models/` Python pipeline (train.py, compile.py), `c3ae.orion` artifact, `internal/ckks` removed (params from manifest)
+
+### Phase 3
+
+**Scope:** HTTP services + browser SPAs
+
+**Deliverable:** `cmd/ppiav-{vservice,vagent,rservice}`, `web/{vclient,rclient,ppiav-crypto}`, Dockerfiles, docker-compose
+
+### Phase 4
+
+**Scope:** Hierarchical rotation keys
+
+**Deliverable:** Extended `web/ppiav-crypto/bridge` (or upstream into Orion's `js/lattigo`), reduced key transmission cost
 
 ---
 
@@ -120,8 +137,6 @@ RingType        = standard
 - 15 multiplicative levels, no bootstrap needed for C3AE.
 - `LogQP = 851` < 881-bit threshold for 128-bit security at LogN=15 (HE Standard, uniform ternary).
 - Single ciphertext ≈ 3.4 MB before serialization; 16384 max slots.
-
-**Security flag.** The older experiment in `~/Dev/ITMO/thesis/experiments/c3ae-orion-experiment/config.yml` uses LogN=14 with bootstrap and `LogQP=598`, exceeding the 429-bit threshold for 128-bit security at N=2^14 (per Mono et al., AFRICACRYPT 2023, cited in lattigo-hierkeys README). We do **not** use those params. The Orion c3ae-demo params above are within the bound. The thesis methodology section should reference Bossuat et al. 2025, _Security Guidelines for Implementing Homomorphic Encryption_ (in TASK.md references).
 
 `internal/ckks` is **planned for removal in Phase 2**: once Orion is wired in, params come from the `.orion` manifest (`Model.client_params()`).
 
@@ -166,6 +181,8 @@ Go CLI emits JSON (per-bench, per-phase). Python scripts in `./bench/` consume J
 - `tables.py` — Markdown (for README) and Typst (for thesis `#include`) tables
 
 No LaTeX anywhere in the project.
+
+> TODO: design model benchmarks: compare accuracy, FNR/FPR of clean and FHE-compatible models. Two factors: ReLU replacement with polynomial and FHE-noise
 
 ---
 
@@ -237,12 +254,7 @@ ppiav/
 - **Constraint:** `internal/vclient` must compile under both `linux/amd64` and `js/wasm`. Pure Go only — no cgo, no `os.Open` on filesystem paths, no `os/exec`. Lattigo and lattigo-hierkeys are pure Go, so this holds.
 - **JS side:** vanilla JS, no TypeScript at the `web/vclient` and `web/rclient` SPA level (Orion's TS wrappers in `src/` come along when we copy and stay TS for type safety inside the WASM module).
 
-**Phase 4 implication.** Hierarchical rotation keys need WASM access. Either:
-
-- Add `bridge/hierkeys.go` and `src/hierkeys.ts` to ppiav-crypto, or
-- Upstream hierkeys into Orion's `js/lattigo` and pull from there.
-
-Decision deferred to Phase 4 entry.
+**Phase 4 implication.** Hierarchical rotation keys need WASM access. Add hierkeys to ppiav-crypto WASM bridge.
 
 ---
 
@@ -373,14 +385,18 @@ import "github.com/tuneinsight/lattigo/v6/core/rlwe"
 
 type SessionOpen          struct { CallbackURL string }
 type SessionOpened        struct { SessionID SessionID }
-type KeySetUpload         struct { SessionID SessionID; Keys PublicKeySet }
-type EncryptedImage       struct { SessionID SessionID; Ct *rlwe.Ciphertext }
-type TaggedResult         struct { SessionID SessionID; Result, Tag *rlwe.Ciphertext }
-type DecryptedPair        struct { SessionID SessionID; Result, Tag []float64 }
-type VerdictNotification  struct { SessionID SessionID; Verdict Verdict }
+type KeySetUpload         struct { Keys PublicKeySet }
+type EncryptedImage       struct { Ct *rlwe.Ciphertext }
+type TaggedResult         struct { Result, Tag *rlwe.Ciphertext }
+type DecryptedPair        struct { Result, Tag []float64 }
+type VerdictNotification  struct { Verdict Verdict }
 type StartVerification    struct{}
 type VerificationStarted  struct { SessionID SessionID; RedirectURL string }
 ```
+
+**Session ID convention.** Only `SessionOpened` and `VerificationStarted` carry `SessionID` in the body — these messages _deliver_ a freshly-allocated sid to the caller. All other messages omit it; HTTP routes carry sid in the URL path (e.g. `POST /sessions/{sid}/keys`) and handlers extract it before calling actor methods. Phase 1 in-process orchestration passes sid as a separate arg.
+
+Single-field wrappers (`KeySetUpload`, `EncryptedImage`, `VerdictNotification`) are kept for consistency and future evolution — adding a field doesn't break the handler contract.
 
 **Naming convention:** payload nouns. Direction is implicit in the HTTP route. No `*Request` / `*Response` suffixes (HTTP-RPC pairing is gRPC-flavor; Go REST commonly uses payload structs).
 
