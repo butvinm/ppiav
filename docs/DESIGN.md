@@ -49,9 +49,9 @@ Mirrors the protocol from `~/Dev/ITMO/thesis/presentation/presentation.typ`.
 ### 3.1 Session setup
 
 1. RClient → RService: request access to gated resource.
-2. RService → VAgent: open session (with verdict-callback URL).
+2. RService (server-side, on detecting no valid session) → VAgent: open session.
 3. VAgent → VService: open session.
-4. RService → RClient: redirect to VAgent's verification page.
+4. RService → RClient: 302 redirect to VAgent's verification page.
 
 ### 3.2 Key generation and submission
 
@@ -268,13 +268,13 @@ sequenceDiagram
     participant VC as VClient
     participant VS as VService
 
-    %% Session setup
-    RC->>RS: POST /api/start (StartVerification)
+    %% Initial request — RService initiates verification server-side
+    RC->>RS: GET /protected (no session cookie)
     RS->>VA: POST /sessions (SessionOpen)
     VA-->>RS: SessionOpened
     VA->>VS: POST /sessions (SessionOpen)
     VS-->>VA: SessionOpened
-    RS-->>RC: VerificationStarted (sid, redirectURL)
+    RS-->>RC: 302 → VAgent /verify?sid (Set-Cookie: sid)
     RC->>VA: GET /verify?sid (loads VClient SPA)
 
     %% Keys
@@ -297,26 +297,25 @@ sequenceDiagram
     VC->>VA: POST /sessions/{sid}/decrypted (DecryptedPair)
     VA->>VA: VerifyDecryption (MAC + policy)
     VA->>RS: POST /api/callback (VerdictNotification)
-    VA-->>VC: 302 redirect to RService
-    RC->>RS: GET /protected?sid
+    VA-->>VC: 302 → RService /protected
+    RC->>RS: GET /protected (with cookie)
     RS-->>RC: content (or denied)
 ```
 
-1. Browser opens `RService /protected`.
-2. Page calls `POST /api/start-verification` on RService.
-3. RService allocates `session_id`, calls `POST /sessions` on VAgent (with callback URL).
-4. RService returns `{redirect, session_id}` to browser.
-5. Browser navigates to VAgent's `/verify?session=...` (this serves the VClient SPA).
-6. VClient runs the protocol (file upload → keygen → encrypt → upload → SSE-stream tagged result → decrypt → POST plaintexts → redirect).
-7. VAgent verifies MAC + policy, calls `POST /api/callback` on RService with verdict.
-8. VAgent redirects browser to `RService /protected?session=...`.
-9. RService consults its session table (already populated by callback in step 7) → serves content or denied page.
+1. Browser GETs `RService /protected` (no session cookie on first visit).
+2. RService has no valid session → server-side, allocates `sid` and calls `POST /sessions` on VAgent.
+3. RService records `sid` in its session table and sets a session cookie identifying this browser; responds with `302 Found` to `VAgent /verify?sid=...`.
+4. Browser follows the redirect; VAgent serves the VClient SPA at `/verify`.
+5. VClient runs the protocol (file upload → keygen → encrypt → upload → SSE-stream tagged result → decrypt → POST plaintexts).
+6. VAgent verifies MAC + policy, calls `POST /api/callback` on RService with the verdict; RService writes verdict into its session table for `sid`.
+7. VAgent responds to VClient's last POST with a `302 Found` to `RService /protected`.
+8. Browser GETs `RService /protected` (with the cookie set in step 3); RService reads `sid` from cookie → looks up verdict → serves content (or denied page).
 
 **Decisions:**
 
 - **Image source:** file upload (drag-and-drop / file picker). No webcam — adds permissions complexity unrelated to the FHE story.
 - **Resource:** stub page ("Доступ предоставлен" + verdict JSON). Real content gating is out of scope.
-- **Session correlation:** callback for verdict + redirect for UX. Avoids token signing (which is "auth", out of scope).
+- **Session correlation:** RService stores `sid` server-side and identifies the browser via an unsigned session cookie set on the redirect. Callback path delivers the verdict; redirect handles UX. Cookie spoofing defense and signed tokens are "auth", out of scope.
 - **Result delivery to client:** SSE (`text/event-stream`) with `Flusher.Flush()`. Native `EventSource` in browser, ~15 lines of Go handler.
 - **Wire format:** JSON for control messages; `application/octet-stream` for ciphertext-bearing endpoints. No base64 inflation.
 
@@ -432,15 +431,13 @@ type EncryptedImage       struct { Ct *rlwe.Ciphertext }
 type TaggedResult         struct { Result, Tag *rlwe.Ciphertext }
 type DecryptedPair        struct { Result, Tag []float64 }
 type VerdictNotification  struct { Verdict Verdict }
-type StartVerification    struct{}
-type VerificationStarted  struct { SessionID SessionID; RedirectURL string }
 ```
 
-**Session ID convention.** Only `SessionOpened` and `VerificationStarted` carry `SessionID` in the body — these messages _deliver_ a freshly-allocated sid to the caller. All other messages omit it; HTTP routes carry sid in the URL path (e.g. `POST /sessions/{sid}/keys`) and handlers extract it before calling actor methods. Phase 1 in-process orchestration passes sid as a separate arg.
+**Session ID convention.** Only `SessionOpened` carries `SessionID` in the body — VAgent uses it to tell RService which sid was allocated server-to-server. All other messages omit it; HTTP routes carry sid in the URL path (e.g. `POST /sessions/{sid}/keys`) and handlers extract it before calling actor methods. Phase 1 in-process orchestration passes sid as a separate arg.
 
 Single-field wrappers (`KeySetUpload`, `EncryptedImage`, `VerdictNotification`) are kept for consistency and future evolution — adding a field doesn't break the handler contract.
 
-`SessionOpen` and `StartVerification` are intentionally empty. The protocol presentation slide shows a callback URL flowing from RService to VAgent in the open-session step; we collapse that field because RService↔VAgent are co-deployed by the same operator and pin URLs in config (the OAuth/OIDC pattern). Reintroduce a field if a future scenario requires runtime URL exchange.
+`SessionOpen` is intentionally empty. The protocol presentation slide shows a callback URL flowing from RService to VAgent in the open-session step; we collapse that field because RService↔VAgent are co-deployed by the same operator and pin URLs in config (the OAuth/OIDC pattern). Reintroduce a field if a future scenario requires runtime URL exchange.
 
 **Naming convention:** payload nouns. Direction is implicit in the HTTP route. No `*Request` / `*Response` suffixes (HTTP-RPC pairing is gRPC-flavor; Go REST commonly uses payload structs).
 
