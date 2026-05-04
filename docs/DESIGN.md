@@ -15,7 +15,7 @@ This document captures the design decisions made during brainstorm. Treat it as 
 **Threat model.**
 
 - **Subject (client) — covert adversary.** May deviate from the protocol to bypass verification but avoids being detected. Defended via Carter–Wegman MAC on the decrypted result (§3.4).
-- **Verification side — semi-honest.** Follows the protocol but tries to extract information from observed data. Defended by FHE: it never sees plaintexts.
+- **Verification side — semi-honest.** Follows the protocol but tries to extract information from observed data. Defended by FHE: VService never sees plaintexts; VAgent sees only the decrypted result vector (model logits, not the input image) plus the resulting verdict. Quantitative analysis of result-side leakage — what the logit reveals beyond the binary verdict — is treated in the thesis, not here.
 - **Resource side — semi-honest.** Receives the verdict; never receives personal data.
 
 **Out of scope.** Auth, TLS, rate limiting, presentation-attack detection, malicious-server defenses. These are explicitly deprioritized in the thesis.
@@ -136,7 +136,6 @@ RingType        = standard
 
 - 15 multiplicative levels, no bootstrap needed for C3AE.
 - `LogQP = 851` < 881-bit threshold for 128-bit security at LogN=15 (HE Standard, uniform ternary).
-- Single ciphertext ≈ 3.4 MB before serialization; 16384 max slots.
 
 `internal/ckks` is **planned for removal in Phase 2**: once Orion is wired in, params come from the `.orion` manifest (`Model.client_params()`).
 
