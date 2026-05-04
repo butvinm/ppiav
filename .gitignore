@@ -1,0 +1,27 @@
+# Go
+*.test
+*.out
+# Built CLI binaries (left in cmd/ subdirs by `go build`)
+/cmd/*/ppiav-*
+!/cmd/*/*.go
+
+# Python (bench/, models/)
+**/.venv/
+**/__pycache__/
+**/*.pyc
+**/.mypy_cache/
+**/.pytest_cache/
+**/.ruff_cache/
+
+# Phase 2 prep
+models/data/
+
+# Benchmark results — selectively committed snapshots only
+results/*/
+!results/.gitkeep
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+.DS_Store
