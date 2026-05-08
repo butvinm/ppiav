@@ -436,3 +436,45 @@ func NewRun(name, phase string) *Run
 func (r *Run) Append(s ...Sample)
 func (r *Run) WriteJSON(path string) error
 ```
+
+#### `web/ppiav`
+
+WASM module bridging the browser to the same Go crypto code the CLI uses. Copied from Orion's `js/lattigo` and renamed — the bridge exports more than crypto (e.g. Orion's diagonal encoding), so the `-crypto` suffix would be misleading.
+
+**Two namespaces, two Go subpackages.** `globalThis.lattigo` exposes low-level Lattigo APIs (params, keys, encryption primitives) from `bridge/lattigo`. `globalThis.ppiav` exposes protocol-shaped APIs (`Keygen`, `EncryptImage`, `Decrypt`) from `bridge/ppiav`. Concerns don't tangle: page code reaches into one namespace per task.
+
+**Single entry point.** `bridge/main.go` (`//go:build js && wasm`) calls each subpackage's `RegisterJS()` and blocks. Each subpackage owns registration of its own namespace.
+
+**Reuse, not parallel implementation.** `bridge/ppiav` imports `internal/vclient`. The protocol-shaped functions (slot packing, encoding, encryption, decryption) are the same Go code in the CLI binary and the WASM binary. CLI bench numbers therefore represent the algorithmic cost of the WASM path; only V8/runtime overhead is browser-specific.
+
+**Same Go module.** No separate `bridge/go.mod` — `internal/` imports just work without `go.work` choreography.
+
+**Pure-Go constraint.** `internal/vclient` and its transitive imports must compile under both `linux/amd64` and `js/wasm`. No cgo, no `os.Open` on filesystem paths, no `os/exec`. Lattigo and lattigo-hierkeys are verified pure-Go.
+
+**TypeScript end-to-end.** `web/ppiav/src/{lattigo,ppiav}/` carries TS wrappers (vendored from Orion). SPAs (`web/vclient`, `web/rclient`) are also TS — the alignment is deliberate: the Go↔WASM↔JS edge is exactly where shape mismatches go silent at runtime, and the wrappers are typed already, so the SPAs may as well consume them with types. Going TS everywhere also means upstream Orion vendor refreshes are drop-in (no re-port to JS).
+
+**Phase 4.** lattigo-hierkeys is added to `web/ppiav` as separate subpackage.
+
+#### `web/vclient`
+
+Single-page app served by VAgent at `/verify?sid=…`. TypeScript, transpiled with `tsc` (no framework, esbuild as the bundler if needed for ergonomics). Loads `web/ppiav` WASM and drives the protocol against VAgent through the typed wrappers.
+
+**Image source: file upload only.** `<input type="file">` plus a drag-and-drop overlay. No webcam — the permissions UX (HTTPS gating, `getUserMedia` quirks across mobile platforms) is orthogonal to the FHE story.
+
+**SSE via native `EventSource`.** Opens `GET /sessions/{sid}/result` and listens for the `TaggedResult` event. The matching server side is ~15 lines of Go using `http.Flusher.Flush()`.
+
+**Wire formats.** JSON for control messages (`SessionOpened`, `VerdictNotification`); `application/octet-stream` for ciphertext-bearing endpoints (`/keys`, `/image`, `/decrypted`). No base64 inflation on the hot path.
+
+**Sid from URL.** SPA reads `?sid=…` at load time and threads it through every subsequent request. No JS-side cookie reading.
+
+**No persistent client state.** Secret key lives in a closure for the lifetime of the tab; closing the tab is the cleanup. No `localStorage` / `IndexedDB`.
+
+#### `web/rclient`
+
+Single-page app served by RService at `/protected`. TypeScript (consistency with `web/vclient`; the SPA itself is trivial, but sharing toolchain avoids one-off setup). Cookie-gated stub page.
+
+**Two states.** If RService's response indicates an accepted verdict, render an "Access granted" message plus the verdict JSON for visibility. Otherwise render "Verification required" with a button that fires the redirect chain into VAgent.
+
+**Real content gating is out of scope.** The thesis demonstrates that the FHE protocol works end-to-end; what RService actually protects (database, API, media) is irrelevant to the prototype.
+
+**No JS-side cookie inspection.** RService reads the cookie server-side; the SPA only renders what RService served it.
