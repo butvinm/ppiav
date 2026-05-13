@@ -1,6 +1,6 @@
 # PPIAV design
 
-**Privacy-Preserving Image Attribute Verification.** End-to-end demonstrator of FHE-based facial-attribute verification: a verifier runs an ML model on a CKKS-encrypted image and returns an encrypted result; the user decrypts; an agent confirms the decryption against policy. Demonstration case: age estimation via C3AE.
+**Privacy-Preserving Image Attribute Verification.** End-to-end demonstrator of FHE-based facial-attribute verification: a verifier runs an ML model on a CKKS-encrypted image and returns an encrypted result; the two parties jointly decrypt; the agent reads the recovered logit and binarises it. Demonstration case: age estimation via C3AE, framed as a binary classifier (above/below age threshold) — the threshold is baked into the model at training time, not a runtime parameter.
 
 This document is the single source of truth for the architecture. Any deviation in code requires updating this doc first.
 
@@ -56,7 +56,7 @@ flowchart LR
 ```
 
 - **VService.** Runs FHE inference on the encrypted image. Issues session IDs. Receives the aggregated relinearization key and the aggregated Galois keys from VAgent. In the canonical (Phase 4) form the Galois-key wire payload is `gks_master`, from which VService derives the per-rotation `gks` hierarchically via lattigo-hierkeys; in Phase 1–3 VService receives the already-assembled full Galois key set instead — same protocol shape, simpler transport.
-- **VAgent.** Mediates the protocol _and_ holds one half of the secret key (`sk_a`). Generates and contributes its key shares to every collaborative key (public key, two-round rlk, Galois keys), forwards the aggregated `rlk` and Galois keys to VService, builds the authenticated ciphertext over the inference result, performs the final step of the joint decryption, checks authenticity, applies the verdict policy, calls RService back with the verdict.
+- **VAgent.** Mediates the protocol _and_ holds one half of the secret key (`sk_a`). Generates and contributes its key shares to every collaborative key (public key, two-round rlk, Galois keys), forwards the aggregated `rlk` and Galois keys to VService, builds the authenticated ciphertext over the inference result, performs the final step of the joint decryption, checks authenticity, binarises the recovered logit (`accept iff logit > 0`), calls RService back with the verdict.
 - **VClient.** Subject-side crypto. Holds the other half of the secret key (`sk_c`). Per-session generates `sk_c`, `pk_c`, ephemeral `ephSk_c`, the two rlk shares `rlk_c⁽¹⁾`/`rlk_c⁽²⁾`, and its Galois-key shares; aggregates the public components with VAgent's matching shares; encrypts the image; runs the partial decryption (its share of the joint decryption) with noise flooding before returning the partially-decrypted ciphertext to VAgent. **Never sees the plaintext result.**
 - **RService.** Owns the gated resource. Initiates verification on first hit, receives the verdict via callback, gates content on subsequent hits.
 - **RClient.** User-facing protected page.
@@ -142,7 +142,7 @@ sequenceDiagram
     VA-->>VC: SSE event AuthenticatedResult{authenticated_ct}
     VC->>VC: PartialDecrypt (sk_c, noise flooding)
     VC->>VA: POST /sessions/{sid}/partial-decryption (partial_ct)
-    VA->>VA: FinalDecrypt (sk_a); authenticity check; apply policy
+    VA->>VA: FinalDecrypt (sk_a); authenticity check; verdict = sign(logit)
 
     %% Stage 4b — verdict callback and resource access
     VA->>RS: POST /api/callback (VerdictNotification)
@@ -182,7 +182,7 @@ The session-specific CKKS keys are generated jointly by VClient and VAgent. The 
 1. **Authenticated ciphertext.** VAgent picks fresh secret verification values and folds them into `result_ct` to produce an authenticated ciphertext bound to this session's secret material. The construction is described in §Multiparty decryption with authentication.
 2. **Partial decryption.** VAgent streams the authenticated ciphertext to VClient over SSE. VClient runs the first step of the joint decryption using `sk_c`, adding flood noise to mask its secret share, and posts the partially-decrypted ciphertext back to VAgent. VClient never recovers a plaintext.
 3. **Final decryption and authenticity check.** VAgent completes the decryption with `sk_a`, recovers the plaintext result vector, and checks that the verification values it injected come out intact. A mismatch indicates the client deviated from the protocol; VAgent aborts with a reject verdict.
-4. **Policy and verdict.** VAgent applies the verification policy (e.g., age threshold) to the recovered result vector and derives a binary verdict.
+4. **Verdict.** The C3AE model emits a binary-classifier logit at slot 0 (positive = "above the trained age threshold"). VAgent binarises directly: `Verdict = Accept` iff the recovered `m > 0`, else `Reject`. There is no runtime threshold or policy interface — the classification boundary is baked into model training. (Equivalent statement: `sigmoid(m) > 0.5`. Same decision.)
 5. **Callback and redirect.** VAgent calls RService's verdict callback with the result for this sid. RService persists the verdict. VAgent then signals VClient that verification is complete; VClient redirects the browser back to RService. The browser hits the original gated URL with its session cookie, RService looks up the verdict, and serves either the content or a denied page.
 
 ---
@@ -250,7 +250,7 @@ Accept iff **both**:
 1. **Verification slots match.** For all `i ∈ S`: `P[i] ≈ε v[i] / Δ`, where `v[i] = F(i)`.
 2. **Value slots agree.** Pick any single reference `j* ∈ [0, λ) \ S` (e.g., the smallest). For all `i ∈ [0, λ) \ S`: `P[i] ≈ε P[j*]`.
 
-If both pass, the recovered message is `m_recovered = P[j*]`, fed into the verdict policy.
+If both pass, the recovered message is `m_recovered = P[j*]` — the binary-classifier logit. VAgent emits `Accept` iff `m_recovered > 0`. (Edge case: if `|m_recovered| < ε` after a passing `Ver`, the verdict is whichever side of zero the noise lands on. The thesis quantifies the probability mass of that ambiguous region; we do not add a special "abstain" verdict at the prototype level.)
 
 ### Why it works
 
@@ -295,7 +295,7 @@ ppiav/
 │   ├── verification/                  # Per-session verification values + authenticated-ct construction (used by vagent)
 │   ├── vclient/                       # Subject-side crypto (sk_c share, partial decryption)
 │   ├── vservice/                      # FHE inference; sid issuer (Phase 4: gks derivation from gks_master)
-│   ├── vagent/                        # Protocol mediator; sk_a share; final decryption; verdict policy
+│   ├── vagent/                        # Protocol mediator; sk_a share; final decryption; logit→verdict binarisation
 │   ├── rservice/                      # Resource gating
 │   └── bench/                         # Measurement harness
 ├── web/
@@ -538,14 +538,13 @@ func (s *Service) Infer(sid protocol.SessionID, inputCt *rlwe.Ciphertext) (*rlwe
 
 #### `internal/vagent`
 
-Protocol mediator **and** holder of the secret-key share `sk_a`. Generates VAgent's matching share at every keygen step, aggregates with VClient's, ships the aggregated `rlk` and Galois keys to VService, builds the authenticated ciphertext, runs the final step of the joint decryption, and applies the verdict policy.
+Protocol mediator **and** holder of the secret-key share `sk_a`. Generates VAgent's matching share at every keygen step, aggregates with VClient's, ships the aggregated `rlk` and Galois keys to VService, builds the authenticated ciphertext, runs the final step of the joint decryption, and binarises the recovered classifier logit into a verdict.
 
 ```go
 package vagent
 
 type Agent struct {
     params   protocol.Params
-    policy   Policy // e.g., age threshold + ε for the verification check
     encoder  *ckks.Encoder
     sessions map[protocol.SessionID]*sessionState
     mu       sync.Mutex
@@ -562,7 +561,7 @@ type sessionState struct {
     verif     *verification.Session           // per-session MPD-Auth state
 }
 
-func New(params protocol.Params, policy Policy) (*Agent, error)
+func New(params protocol.Params) (*Agent, error)
 
 // Stage 1
 func (a *Agent) OpenSession(sid protocol.SessionID) error
@@ -605,7 +604,7 @@ func (a *Agent) FinalizeDecryption(
 ) (protocol.Verdict, error)
 ```
 
-`OpenSession(sid)` registers the sid that VService allocated and primes the session state for keygen. The pk/rlk/Galois responders all draw fresh shares with the session-scoped CRS, aggregate with the client's, and persist the running aggregates. `BuildAuthenticatedCt` calls `verification.Session.Auth` on `result_ct`. `FinalizeDecryption` combines VClient's `KeySwitchShare` with VAgent's own share (computed from `sk_a` against the authenticated ciphertext), applies the key-switch to recover the plaintext result vector, runs `verification.Session.Ver`, and — if it passes — applies `Policy` to the recovered message to derive the verdict. The MPD-Auth state is single-use: `Ver` zeroizes the session.
+`OpenSession(sid)` registers the sid that VService allocated and primes the session state for keygen. The pk/rlk/Galois responders all draw fresh shares with the session-scoped CRS, aggregate with the client's, and persist the running aggregates. `BuildAuthenticatedCt` calls `verification.Session.Auth` on `result_ct`. `FinalizeDecryption` combines VClient's `KeySwitchShare` with VAgent's own share (computed from `sk_a` against the authenticated ciphertext), applies the key-switch to recover the plaintext result vector, runs `verification.Session.Ver`, and — if it passes — returns `Accept` iff the recovered `m > 0`, else `Reject`. The MPD-Auth state is single-use: `Ver` zeroizes the session.
 
 #### `internal/rservice`
 
