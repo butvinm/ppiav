@@ -57,7 +57,7 @@ flowchart LR
 
 - **VService.** Runs FHE inference on the encrypted image. Issues session IDs. Receives the aggregated relinearization key and the aggregated Galois keys from VAgent. In the canonical (Phase 4) form the Galois-key wire payload is `gks_master`, from which VService derives the per-rotation `gks` hierarchically via lattigo-hierkeys; in Phase 1–3 VService receives the already-assembled full Galois key set instead — same protocol shape, simpler transport.
 - **VAgent.** Mediates the protocol _and_ holds one half of the secret key (`sk_a`). Generates and contributes its key shares to every collaborative key (public key, two-round rlk, Galois keys), forwards the aggregated `rlk` and Galois keys to VService, builds the authenticated ciphertext over the inference result, performs the final step of the joint decryption, checks authenticity, binarises the recovered logit (`accept iff logit > 0`), calls RService back with the verdict.
-- **VClient.** Subject-side crypto. Holds the other half of the secret key (`sk_c`). Per-session generates `sk_c`, `pk_c`, ephemeral `ephSk_c`, the two rlk shares `rlk_c⁽¹⁾`/`rlk_c⁽²⁾`, and its Galois-key shares; aggregates the public components with VAgent's matching shares; encrypts the image; runs the partial decryption (its share of the joint decryption) with noise flooding before returning the partially-decrypted ciphertext to VAgent. **Never sees the plaintext result.**
+- **VClient.** Subject-side crypto. Holds the other half of the secret key (`sk_c`). Per-session generates `sk_c`, `pk_c`, ephemeral `ephSk_c`, the two rlk shares `rlk_c⁽¹⁾`/`rlk_c⁽²⁾`, and its Galois-key shares; aggregates the public components with VAgent's matching shares; preprocesses the user-supplied image to the model's input tensor (resize to 64×64, normalize to `[-1, 1]`, CHW layout, see §`internal/vclient`); encrypts the tensor; runs the partial decryption (its share of the joint decryption) with noise flooding before returning the partially-decrypted ciphertext to VAgent. **Never sees the plaintext result.**
 - **RService.** Owns the gated resource. Initiates verification on first hit, receives the verdict via callback, gates content on subsequent hits.
 - **RClient.** User-facing protected page.
 
@@ -493,12 +493,31 @@ func (c *Client) GenRLKShareRound2() (multiparty.RelinearizationKeyGenShare, err
 // a single gks_master share via lattigo-hierkeys.
 func (c *Client) GenGaloisShares() ([]multiparty.GaloisKeyGenShare, error)
 
-// Stage 3
+// Stage 3 — image must already be the preprocessed tensor (see below).
+// Hard-fails on wrong length to avoid silent zero-padding masking a
+// wrong-shape input.
 func (c *Client) EncryptImage(image []float64) (*rlwe.Ciphertext, error)
 
 // Stage 4a — partial decryption with noise flooding
 func (c *Client) PartialDecrypt(authenticatedCt *rlwe.Ciphertext) (multiparty.KeySwitchShare, error)
 ```
+
+**Image preprocessing contract.** `EncryptImage` consumes the model's input tensor as a flat `[]float64` and encrypts at `params.DefaultScale()` and the compiled model's input level (`inputLevel` from the Orion manifest, padded to `params.MaxSlots()` with zeros). It does **not** do raw-image-to-tensor conversion — that lives one layer up. The canonical pipeline, fixed by the C3AE training-time preprocessing (see `~/Dev/orion/examples/c3ae-demo/models/utkface.py:74` and `models/prepare_samples.py:81`):
+
+1. Decode image, convert to RGB (drop alpha).
+2. Resize to `64×64`. PIL's default since Pillow 9.1 is bicubic; the Phase-3 browser pipeline pins bicubic explicitly to match.
+3. Cast to float, divide by `255.0` to get pixel values in `[0, 1]`.
+4. Apply `(x - 0.5) / 0.5` per channel → values in `[-1, 1]`.
+5. Permute HWC → CHW (channel-first), shape `(3, 64, 64)`.
+6. Flatten row-major to `12288 = 3 · 64 · 64` float64 values.
+
+Reject inputs whose length isn't exactly `12288` rather than zero-padding — a wrong-shape image silently padded gives a syntactically valid but semantically garbage inference (`bench/encrypt.go:97` enforces the same rule in the Orion demo).
+
+**Where the conversion happens per phase:**
+
+- **Phase 1 (CLI):** read pre-prepared `.bin` blobs (little-endian float64, 12288 values) produced by the same `models/prepare_samples.py` pipeline as the Orion demo. No image decoding inside `internal/vclient`.
+- **Phase 2:** same as Phase 1 (still CLI-driven; Orion's compiled C3AE replaces `x²`).
+- **Phase 3 (browser SPA):** `web/vclient` runs the pipeline in JS using the Canvas API (`<canvas>` for decode + resize, manual normalize + permute + flatten into a `Float64Array`) before handing the buffer to the WASM bridge's `EncryptImage`. The 5 steps above are the cross-language contract — JS-side and Python-side must match within float-precision tolerance, otherwise the model's prediction distribution shifts.
 
 #### `internal/vservice`
 
