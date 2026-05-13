@@ -46,6 +46,10 @@ ppiav/
 - Lattigo (CKKS): `~/Dev/3rd-party/lattigo/`
 - lattigo-hierkeys (hierarchical rotation keys): `~/Dev/lattigo-hierkeys/` — https://github.com/butvinm/lattigo-hierkeys
 
+## Lattigo concurrency
+
+Lattigo **v6.2.0** made all per-structure methods (encryptor, decryptor, evaluator, samplers, PRNG) safe to call concurrently. v6.2.0 removed `ShallowCopy()` because it is no longer needed.
+
 ## Out of scope
 
 Auth, TLS, rate limiting, presentation-attack detection (deepfake/spoofing), input sanitization beyond what the protocol demands. The thesis explicitly deprioritizes these as orthogonal concerns.
