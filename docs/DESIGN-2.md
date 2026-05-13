@@ -165,7 +165,7 @@ sequenceDiagram
 
 The session-specific CKKS keys are generated jointly by VClient and VAgent. The secret key is additively shared (`sk = sk_c + sk_a`) and **never reconstructed in any single place**. The aggregated public components (pk, rlk, Galois keys) are what gets shipped to VService for inference.
 
-1. **Parameters.** VClient fetches the protocol parameters (ring degree, modulus chain, scale, verification configuration, session-scoped CRS seed) from VAgent, which sources them from VService. VAgent persists its copy under the sid. Both parties keygen against the same params and the same CRS.
+1. **Parameters.** VClient fetches the protocol parameters (ring degree, modulus chain, scale, verification configuration) from VAgent, which sources them from VService. VAgent persists its copy under the sid. The CRS that both parties feed to the multi-party keygen protocols is **derived deterministically from the sid** — no extra seed material crosses the wire (see §CRS below for the construction).
 2. **Public key (one round).** VClient generates `sk_c, pk_c` and sends `pk_c` to VAgent. VAgent generates its own `sk_a, pk_a`, aggregates `pk = pk_c + pk_a`, and returns `pk_a` to VClient so it can compute the same aggregate locally.
 3. **Relinearization key (two rounds).** Both rounds follow the same client-share-then-agent-share pattern. Round 1: VClient generates an ephemeral secret `ephSk_c` and its first-round share `rlk_c⁽¹⁾`; VAgent generates its own `ephSk_a, rlk_a⁽¹⁾`; both sides aggregate `rlk⁽¹⁾_agg`. Round 2: VClient generates `rlk_c⁽²⁾`, VAgent generates `rlk_a⁽²⁾`, both aggregate the final `rlk`. The two-round structure follows the standard multi-party CKKS relinearization protocol.
 4. **Rotation keys.** Both parties contribute matching `multiparty.GaloisKeyGenShare` shares for the rotations the compiled circuit needs, and the aggregated Galois keys are forwarded to VService. The canonical (Phase 4) form, shown in the diagram, collapses the per-rotation shares into a single `gks_master` pair (`gks_master_c`, `gks_master_a` → `gks_master`) that VService hierarchically expands into the full `gks` set via lattigo-hierkeys — this is purely a transport-and-storage optimisation. Phase 1–3 skip the master/derive step: VClient and VAgent emit one share per rotation, aggregate the assembled `gks` directly, and ship the full set to VService. The multi-party protocol is identical; only the wire shape differs.
@@ -392,7 +392,31 @@ type VerdictNotification struct { Verdict Verdict }
 
 `SessionOpened` carries the sid that VService allocated; subsequent routes carry sid in the URL path. VService never sees `PublicKeyGenShare` or `pk` directly — only the aggregated `rlk` and aggregated Galois keys arrive over `EvalKeysUpload`. In Phase 4 the Galois payload becomes `gks_master` and VService runs the hierarchical derivation in `StoreEvalKeys`.
 
-Common reference polynomials (CRPs) used by the multi-party keygen protocols are derived from the sid (or, equivalently, from a session-scoped CRS seed delivered with the params response). VClient and VAgent therefore reach the same CRPs without exchanging them.
+**CRS.** Lattigo's `multiparty.CRS` is just a `sampling.PRNG` whose byte output both parties must agree on. We use `sampling.NewKeyedPRNG(seed)` with a session-scoped, sid-derived seed — no CRS material crosses the wire.
+
+```go
+import "github.com/tuneinsight/lattigo/v6/utils/sampling"
+
+const crsDomain = "ppiav-crs/v1"
+
+// Both VClient and VAgent construct their CRS this way at session open.
+// VService does not need one — it never generates key shares.
+func newSessionCRS(sid SessionID) (*sampling.KeyedPRNG, error) {
+    return sampling.NewKeyedPRNG([]byte(crsDomain + "|" + string(sid)))
+}
+```
+
+The seed is `"ppiav-crs/v1|" || sid`. The domain prefix is hygiene against ever reusing the sid for another KDF purpose; the prefix also lets us rotate the construction without coordinating a sid format change.
+
+`sid` carries ≥128 bits of entropy (see §`internal/vservice` — `OpenSession` draws fresh randomness), so the seed is well past the cryptographic-collision floor. CRS being public-only means even an adversarial VService picking `sid` cannot weaken the protocol — Lattigo's multi-party security holds for any CRS, the agreement requirement is purely about correctness.
+
+**Canonical CRP draw order.** `sampling.KeyedPRNG` is stateful, so both parties must call the multi-party `SampleCRP` methods in the same order. We fix the sequence as:
+
+1. `multiparty.PublicKeyGenProtocol.SampleCRP(crs)` — Stage 2b.
+2. `multiparty.RelinearizationKeyGenProtocol.SampleCRP(crs, evkParams)` — Stage 2c, used by both rounds.
+3. For each rotation index `k` in ascending order: `multiparty.GaloisKeyGenProtocol.SampleCRP(crs, evkParams)` — Stage 2d.
+
+VAgent and VClient iterate the same list of rotation indices (derived from `λ` for MPD-Auth plus whatever the inference circuit declares from Phase 2 onward) so the per-rotation CRPs line up.
 
 #### `internal/verification`
 
