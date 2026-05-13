@@ -11,7 +11,7 @@ This document is the single source of truth for the architecture. Any deviation 
 Companion materials live alongside this repo and inform the design.
 
 - **Thesis** — `~/Dev/ITMO/thesis/`. ITMO bachelor's thesis (Russian). The assignment is at `task/TASK.md`.
-- **Presentation** — `~/Dev/ITMO/thesis/presentation/presentation.typ`. Early draft of the components and protocol. **Outdated relative to this doc**; when in conflict, this design wins.
+- **Thesis text** — `~/Dev/ITMO/thesis/thesis/` (Typst sources: `thesis.typ`, `protocol.typ`, `refs.bib`, etc.). Authoritative narrative for the protocol, threat model, and quantitative analysis. The protocol diagram in this repo (`docs/protocol.mermaid`) is synced from `~/Dev/ITMO/thesis/thesis/protocol.mermaid`; when they disagree, the thesis text wins.
 
 Reference repositories — read for understanding, do **not** copy code from them or from the thesis experiments (`~/Dev/ITMO/thesis/experiments/`). Write fresh idiomatic Go.
 
@@ -25,8 +25,8 @@ Reference repositories — read for understanding, do **not** copy code from the
 
 Three parties; each has a distinct adversarial profile.
 
-- **Subject (client) — covert adversary.** May deviate from the protocol to bypass verification, but avoids being detected. Defense: a MAC bound to the encrypted result forces the client to return a value consistent with what VAgent homomorphically tagged.
-- **Verifier (VService) — semi-honest.** Follows the protocol but tries to extract information from observed data. Defense: FHE — VService never sees plaintexts;
+- **Subject (client) — covert adversary.** May deviate from the protocol to bypass verification, but avoids being detected. Defense: multi-party CKKS. The secret key is additively split into `sk_c` (held by VClient) and `sk_a` (held by VAgent); neither party alone can decrypt. After inference VAgent folds secret verification values into the result ciphertext (authenticated ciphertext) and the two parties run a joint decryption: VClient produces a partial decryption under `sk_c` (with noise flooding to hide its share), VAgent finalises with `sk_a` and recovers the plaintext. Because the verification values are unknown to the client, any deviation from honest partial decryption corrupts them and is detected. The client never sees the plaintext result — VAgent does.
+- **Verifier (VService) — semi-honest.** Follows the protocol but tries to extract information from observed data. Defense: FHE — VService only ever sees ciphertexts (image, eval keys, result) and never holds any secret share.
 - **Resource Owner (VAgent, RService) — semi-honest.** Follows the protocol but tries to extract information from observed data. Defense: VAgent observes only the decrypted result vector (model output, not the input image) plus the resulting verdict. The result vector itself does leak something beyond the binary verdict; that quantitative leakage analysis lives in the thesis, not here. RService receives the verdict; never receives personal data.
 
 **Out of scope.** Authentication, TLS, rate limiting, presentation-attack detection (deepfake / spoofing), input sanitization beyond what the protocol demands, malicious-server defenses. The thesis explicitly deprioritizes these.
@@ -55,9 +55,9 @@ flowchart LR
     RS <--> RC
 ```
 
-- **VService.** Runs FHE inference on the encrypted image. Issues session IDs.
-- **VAgent.** Mediates the protocol: forwards keys and image between VClient and VService, tags the encrypted result with a MAC, applies the verdict policy on the decrypted plaintexts, calls RService back with the verdict.
-- **VClient.** Subject-side crypto: per-session keygen, image encryption, decryption of the (result, tag) pair, posting plaintexts back to VAgent.
+- **VService.** Runs FHE inference on the encrypted image. Issues session IDs. Receives the aggregated relinearization key and the aggregated Galois keys from VAgent. In the canonical (Phase 4) form the Galois-key wire payload is `gks_master`, from which VService derives the per-rotation `gks` hierarchically via lattigo-hierkeys; in Phase 1–3 VService receives the already-assembled full Galois key set instead — same protocol shape, simpler transport.
+- **VAgent.** Mediates the protocol _and_ holds one half of the secret key (`sk_a`). Generates and contributes its key shares to every collaborative key (public key, two-round rlk, Galois keys), forwards the aggregated `rlk` and Galois keys to VService, builds the authenticated ciphertext over the inference result, performs the final step of the joint decryption, checks authenticity, applies the verdict policy, calls RService back with the verdict.
+- **VClient.** Subject-side crypto. Holds the other half of the secret key (`sk_c`). Per-session generates `sk_c`, `pk_c`, ephemeral `ephSk_c`, the two rlk shares `rlk_c⁽¹⁾`/`rlk_c⁽²⁾`, and its Galois-key shares; aggregates the public components with VAgent's matching shares; encrypts the image; runs the partial decryption (its share of the joint decryption) with noise flooding before returning the partially-decrypted ciphertext to VAgent. **Never sees the plaintext result.**
 - **RService.** Owns the gated resource. Initiates verification on first hit, receives the verdict via callback, gates content on subsequent hits.
 - **RClient.** User-facing protected page.
 
@@ -67,59 +67,87 @@ Implementation tech (Go HTTP services, browser SPA, WASM, Docker) is described p
 
 ## Protocol
 
+The canonical sequence diagram lives in `docs/protocol.mermaid` (synced from the thesis). The Mermaid below is the same flow with concise English labels and HTTP-route hints for the implementation. When they disagree, the thesis file wins; resync this one.
+
 ```mermaid
 sequenceDiagram
     participant RC as RClient
-    participant RS as RService
-    participant VA as VAgent
     participant VC as VClient
+    participant VA as VAgent
     participant VS as VService
+    participant RS as RService
 
-    %% Stage 1 — session initiation (VService issues sid)
+    %% Stage 1 — session initiation
     RC->>RS: GET /protected (no session cookie)
     RS->>VA: POST /sessions (SessionOpen)
     VA->>VS: POST /sessions (SessionOpen)
     VS->>VS: allocate sid
     VS-->>VA: 200 SessionOpened{sid}
+    VA->>VA: register sid
     VA-->>RS: 200 SessionOpened{sid}
-    RS-->>RC: 302 → VAgent /verify?sid (Set-Cookie sid)
-    RC->>VA: GET /verify?sid
-    VA-->>RC: 200 (VClient SPA)
+    RS-->>RC: 302 → VClient /verify?sid (Set-Cookie sid)
+    RC->>VC: GET /verify?sid (loads SPA)
 
-    %% Stage 2 — keys
-    VC->>VC: Keygen (per-session)
-    VC->>VA: POST /sessions/{sid}/keys (KeySetUpload {pk, evk})
-    VA->>VS: POST /sessions/{sid}/eval-key (EvalKeyUpload {evk})
+    %% Stage 2a — protocol parameters
+    VC->>VA: GET /sessions/{sid}/params
+    VA->>VS: GET /params
+    VS-->>VA: Params
+    VA->>VA: persist params
+    VA-->>VC: Params
+
+    %% Stage 2b — public key (one round)
+    VC->>VC: Keygen sk_c, pk_c
+    VC->>VA: POST /sessions/{sid}/pk-share {pk_c}
+    VA->>VA: Keygen sk_a, pk_a; aggregate pk
+    VA-->>VC: 200 {pk_a}
+    VC->>VC: aggregate pk
+
+    %% Stage 2c — relinearization key (round 1)
+    VC->>VC: Keygen ephSk_c, rlk_c⁽¹⁾
+    VC->>VA: POST /sessions/{sid}/rlk/round1 {rlk_c⁽¹⁾}
+    VA->>VA: Keygen ephSk_a, rlk_a⁽¹⁾; aggregate rlk⁽¹⁾_agg
+    VA-->>VC: 200 {rlk_a⁽¹⁾}
+    VC->>VC: aggregate rlk⁽¹⁾_agg
+
+    %% Stage 2c — relinearization key (round 2)
+    VC->>VC: Keygen rlk_c⁽²⁾
+    VC->>VA: POST /sessions/{sid}/rlk/round2 {rlk_c⁽²⁾}
+    VA->>VA: Keygen rlk_a⁽²⁾; aggregate rlk
+    VA-->>VC: 200 (rlk complete)
+
+    %% Stage 2d — rotation keys (gks_master + hierarchical derivation)
+    VC->>VC: Keygen gks_master_c
+    VC->>VA: POST /sessions/{sid}/gks-master {gks_master_c}
+    VA->>VA: Keygen gks_master_a; aggregate gks_master
+    VA->>VS: POST /sessions/{sid}/eval-keys {rlk, gks_master}
+    VS->>VS: hierarchical derivation of gks from gks_master
     VS-->>VA: 200
-    VA-->>VC: 200
+    VA-->>VC: 200 (setup complete)
 
-    %% Stage 2 — SSE channel for the eventual result
+    %% Stage 2e — SSE channel for the eventual authenticated result
     VC->>VA: GET /sessions/{sid}/result (open SSE)
     VA-->>VC: 200 (event-stream)
 
-    %% Stage 2 — image
+    %% Stage 3 — image submission and inference
     VC->>VC: EncryptImage
     VC->>VA: POST /sessions/{sid}/image (EncryptedImage)
     VA->>VS: POST /sessions/{sid}/image (EncryptedImage)
-
-    %% Stage 3 — inference; VA blocks on VS
     activate VS
     VS->>VS: Infer
     VS-->>VA: 200 result_ct
     deactivate VS
-    VA->>VA: MACTag (ct-ct)
-    VA-->>VC: SSE event TaggedResult{result_ct, tag_ct}
-    VA-->>VC: 200 (image POST response)
 
-    %% Stage 3 — decryption
-    VC->>VC: Decrypt
-    VC->>VA: POST /sessions/{sid}/decrypted (DecryptedPair)
+    %% Stage 4a — MPD-Auth joint decryption
+    VA->>VA: pick verification values; build authenticated_ct
+    VA-->>VC: SSE event AuthenticatedResult{authenticated_ct}
+    VC->>VC: PartialDecrypt (sk_c, noise flooding)
+    VC->>VA: POST /sessions/{sid}/partial-decryption (partial_ct)
+    VA->>VA: FinalDecrypt (sk_a); authenticity check; apply policy
 
-    %% Stage 4 — verdict
-    VA->>VA: VerifyDecryption (MAC + policy)
+    %% Stage 4b — verdict callback and resource access
     VA->>RS: POST /api/callback (VerdictNotification)
     RS-->>VA: 200
-    VA-->>VC: 302 → RService /protected
+    VA-->>VC: 302 → RClient (verification complete)
     RC->>RS: GET /protected (with sid cookie)
     RS-->>RC: 200 (content) or 403 (denied)
 ```
@@ -129,40 +157,108 @@ sequenceDiagram
 1. The user's browser requests a gated resource from RService and presents no session cookie.
 2. RService asks VAgent to start a verification flow.
 3. VAgent forwards the request to VService, which is the authoritative session issuer.
-4. VService allocates a fresh, opaque session ID and returns it to VAgent.
-5. The session ID propagates back through VAgent to RService.
-6. RService records the session ID, sets a session cookie on the browser, and redirects to VAgent's verification page.
-7. The browser follows the redirect and loads the VClient SPA from VAgent.
+4. VService allocates a fresh, opaque session ID and returns it through VAgent (which registers it) back to RService.
+5. RService records the session ID, sets a session cookie on the browser, and redirects to VClient's verification page.
+6. The browser follows the redirect and loads the VClient SPA (served by VAgent at `/verify?sid`). From this point on, the user interacts with VClient until the flow terminates with a redirect back to RClient.
 
-### Stage 2: Keys and image exchange
+### Stage 2: Collaborative setup
 
-1. VClient generates a fresh CKKS key set for this session: secret key (kept local), public key, and evaluation key.
-2. VClient sends both keys to VAgent. VAgent forwards only the evaluation key to VService — VService needs it for inference but never sees the public key. VAgent retains both: the public key for encrypting MAC scalars, the evaluation key for the homomorphic MAC step.
-3. VClient opens a server-sent-events connection to VAgent. The eventual tagged result will arrive over this channel; opening it before submitting the image avoids a race.
-4. VClient encrypts the user-supplied image into a CKKS ciphertext.
-5. VClient sends the ciphertext to VAgent, which forwards it to VService.
+The session-specific CKKS keys are generated jointly by VClient and VAgent. The secret key is additively shared (`sk = sk_c + sk_a`) and **never reconstructed in any single place**. The aggregated public components (pk, rlk, Galois keys) are what gets shipped to VService for inference.
 
-### Stage 3: Inference
+1. **Parameters.** VClient fetches the protocol parameters (ring degree, modulus chain, scale, verification configuration, session-scoped CRS seed) from VAgent, which sources them from VService. VAgent persists its copy under the sid. Both parties keygen against the same params and the same CRS.
+2. **Public key (one round).** VClient generates `sk_c, pk_c` and sends `pk_c` to VAgent. VAgent generates its own `sk_a, pk_a`, aggregates `pk = pk_c + pk_a`, and returns `pk_a` to VClient so it can compute the same aggregate locally.
+3. **Relinearization key (two rounds).** Both rounds follow the same client-share-then-agent-share pattern. Round 1: VClient generates an ephemeral secret `ephSk_c` and its first-round share `rlk_c⁽¹⁾`; VAgent generates its own `ephSk_a, rlk_a⁽¹⁾`; both sides aggregate `rlk⁽¹⁾_agg`. Round 2: VClient generates `rlk_c⁽²⁾`, VAgent generates `rlk_a⁽²⁾`, both aggregate the final `rlk`. The two-round structure follows the standard multi-party CKKS relinearization protocol.
+4. **Rotation keys.** Both parties contribute matching `multiparty.GaloisKeyGenShare` shares for the rotations the compiled circuit needs, and the aggregated Galois keys are forwarded to VService. The canonical (Phase 4) form, shown in the diagram, collapses the per-rotation shares into a single `gks_master` pair (`gks_master_c`, `gks_master_a` → `gks_master`) that VService hierarchically expands into the full `gks` set via lattigo-hierkeys — this is purely a transport-and-storage optimisation. Phase 1–3 skip the master/derive step: VClient and VAgent emit one share per rotation, aggregate the assembled `gks` directly, and ship the full set to VService. The multi-party protocol is identical; only the wire shape differs.
+5. **Result channel.** VClient opens a server-sent-events connection to VAgent for the eventual authenticated result. Opening it before submitting the image avoids a race.
 
-1. VService runs the FHE-compatible model on the encrypted image and produces an encrypted result.
-2. VService returns the result ciphertext to VAgent.
-3. VAgent computes a MAC tag over the encrypted result, binding it to per-session secret material that the client cannot guess. The mechanism is described in §MAC.
-4. VAgent streams the (result, tag) ciphertext pair to VClient over SSE.
-5. VClient decrypts both ciphertexts, obtaining a plaintext result vector and a plaintext tag vector.
-6. VClient posts the two plaintext vectors back to VAgent.
+### Stage 3: Image submission and inference
 
-### Stage 4: Verdict
+1. VClient encrypts the user-supplied image under the aggregated `pk`.
+2. VClient sends the ciphertext to VAgent, which forwards it to VService.
+3. VService runs the FHE-compatible model on the encrypted image, producing `result_ct`, and returns it to VAgent.
 
-1. VAgent checks the MAC: the returned tag must be consistent with the result the client claims to have decrypted, otherwise the client tampered with the value. VAgent then applies the policy (e.g., age threshold) to derive a binary verdict.
-2. VAgent calls RService's verdict callback with the result for this session ID.
-3. VAgent redirects the browser back to RService.
-4. The browser hits the original gated URL with its session cookie. RService looks up the verdict and serves either the content or a denied page.
+### Stage 4: Authenticated joint decryption and verdict
+
+1. **Authenticated ciphertext.** VAgent picks fresh secret verification values and folds them into `result_ct` to produce an authenticated ciphertext bound to this session's secret material. The construction is described in §Multiparty decryption with authentication.
+2. **Partial decryption.** VAgent streams the authenticated ciphertext to VClient over SSE. VClient runs the first step of the joint decryption using `sk_c`, adding flood noise to mask its secret share, and posts the partially-decrypted ciphertext back to VAgent. VClient never recovers a plaintext.
+3. **Final decryption and authenticity check.** VAgent completes the decryption with `sk_a`, recovers the plaintext result vector, and checks that the verification values it injected come out intact. A mismatch indicates the client deviated from the protocol; VAgent aborts with a reject verdict.
+4. **Policy and verdict.** VAgent applies the verification policy (e.g., age threshold) to the recovered result vector and derives a binary verdict.
+5. **Callback and redirect.** VAgent calls RService's verdict callback with the result for this sid. RService persists the verdict. VAgent then signals VClient that verification is complete; VClient redirects the browser back to RService. The browser hits the original gated URL with its session cookie, RService looks up the verdict, and serves either the content or a denied page.
 
 ---
 
-## MAC
+## Multiparty decryption with authentication
 
-_TODO — to be filled in._
+We deliberately avoid the term **verifiable decryption** because it has a precise meaning in the cryptography literature (typically: a NIZK proof that a decryption is correct). Our construction does something different: VAgent embeds a secret authentication pattern into the ciphertext before the joint decryption, then checks the pattern survived after the decryption completes. We call it **MPD-Auth** (multiparty decryption with authentication).
+
+### Parameters
+
+All configurable in `verification.Config`. Defaults set in this section; can be overridden per-session.
+
+| Param   | Default           | Role                                                                                                                                                                                              |
+| ------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `λ`     | 128               | Security parameter; total authentication slots used.                                                                                                                                              |
+| `\|S\|` | `λ/2 = 64`        | Number of verification (random-pattern) slots; the remaining `λ - \|S\|` slots replicate the inference message `m`.                                                                               |
+| `Q_0`   | level-0 modulus   | The largest/special prime `q_0` of the CKKS modulus chain (~51–60 bits); bounds the verification-value distribution. See note below on chain notation.                                            |
+| `ε`     | `2^20`            | Approximate-equality tolerance, expressed in **scaled-message space** (i.e., before the decoder divides by Δ). Also drives the noise-flooding sigma applied by VClient during partial decryption. |
+| `F`     | session-fresh PRG | Deterministic from a session-fresh seed; samples uniformly from `(-Q_0/2, Q_0/2)`.                                                                                                                |
+
+VAgent owns `S`, the seed of `F`, and (consequently) the verification vector `v`. VClient is told `λ`, `|S|`, and `ε` (the last because it computes its noise-flooding sigma from it). All authentication secrets stay on the VAgent side.
+
+**Note on chain notation.** We use the convention `Q_chain = [q_0, q_1, ..., q_L]`, where `q_0` is the special/base prime (~51–60 bits in our params) and `q_1..q_L` are the rescaling primes each ≈ `log2(Δ)` bits (~40 bits in Phase 1). At fresh encryption the ciphertext is at level `L` with modulus `Q_L = q_0 · q_1 · … · q_L`; each rescaling drops the top prime; what survives at level 0 is `Q_0 = q_0`. So `Q_0` here refers to the same prime that's largest in absolute size and is the one left after all rescalings — _not_ a small "leftover" prime.
+
+Assumption on the inference circuit: the message `m` (the prediction) lives in slot 0 of `result_ct`. Other slots are not assumed to be zero — `Auth` step 3 explicitly drops them by replicating slot 0 over the chosen output positions.
+
+### Auth (VAgent, post-inference)
+
+Input: `result_ct` from VService, with `m` at slot 0.
+
+1. Sample `S ⊂ [0, λ)`, `|S| = λ/2`, uniformly at random.
+2. Build the verification vector `v` of length `λ`:
+   - `v[i] = F(i)` if `i ∈ S`, otherwise `v[i] = 0`.
+   - The `F(i)` values are already in **scaled space** — they are placed directly into the plaintext slot coefficients with _no_ multiplication by Δ.
+3. Build the replicated-message ciphertext by rotating `result_ct` to put `m` at each value slot:
+   ```
+   ct_m^Rep = Σ_{j ∈ [0, λ) \ S}  Rot(result_ct, j)
+   ```
+   Slots in `[0, λ) \ S` now carry `m`; slots in `S` carry 0 (after the value-slot rotations contribute nothing to them, by choice of rotation indices).
+4. Encrypt `v` under the aggregated session `pk` at the scale of `ct_m^Rep` to get `ct_v`.
+5. The **authenticated ciphertext** is
+   ```
+   ct_M = ct_m^Rep + ct_v
+   ```
+   with expected per-slot plaintext:
+   - `i ∈ [0, λ) \ S`: `m`
+   - `i ∈ S`: `v[i] / Δ` (because `v[i]` was placed unscaled and CKKS decoding divides by Δ)
+   - `i ≥ λ`: arbitrary (we only check `[0, λ)`).
+
+VAgent retains `(S, seed_F, scale_of_v)` to drive the post-decryption check.
+
+### Ver (VAgent, post-decryption)
+
+Input: plaintext slot vector `P` recovered from the joint decryption.
+
+Define `a ≈ε b` iff `|a·Δ - b·Δ| < ε` — comparison in scaled-message space.
+
+Accept iff **both**:
+
+1. **Verification slots match.** For all `i ∈ S`: `P[i] ≈ε v[i] / Δ`, where `v[i] = F(i)`.
+2. **Value slots agree.** Pick any single reference `j* ∈ [0, λ) \ S` (e.g., the smallest). For all `i ∈ [0, λ) \ S`: `P[i] ≈ε P[j*]`.
+
+If both pass, the recovered message is `m_recovered = P[j*]`, fed into the verdict policy.
+
+### Why it works
+
+- **Unforgeability against a covert client.** A client wanting the joint decryption to recover an arbitrary `m' ≠ m` must inject a structured offset into its partial-decryption share. The client knows neither `S` nor `v`, and the verification values are uniform over a `~Q₀`-bit range while `ε` is only ~20 bits — so a random tampered share passes any one verification slot with probability `≤ 2ε / Q₀ ≈ 2²¹⁻⁵¹ = 2⁻³⁰`. Independence of the `|S| = 64` slots compounds this to a forgery probability well below `2⁻⁶⁴`. The value-slot agreement check (2) closes the alternative attack where the client randomises everything but somehow hits the right verification pattern: with check (2) the client must also keep the value slots consistent, which requires knowing the partition `S ↔ [λ]\S`.
+- **Soundness under noise flooding.** VClient applies flooding noise of sigma matched to `ε` during partial decryption. Honest decryption thus stays within `ε` of every slot's expected value, so honest behavior passes; dishonest behavior cannot hide under `ε` because the verification values are spaced ≫ ε apart in expectation.
+- **No leakage to VClient.** VClient observes only `ct_M`, a fresh CKKS ciphertext under the joint `pk` whose semantic security is what CKKS already provides. The client never holds `S`, the seed of `F`, `v`, or any other authentication state.
+
+### Implementation notes
+
+- **Rotations are needed from Phase 1.** `Auth` step 3 calls `Rot(result_ct, j)` for `j ∈ [0, λ) \ S`. Even the Phase-1 synthetic `x²` inference circuit therefore exercises rotation keys: the collaborative `multiparty.GaloisKeyGen` handshake produces Galois keys for indices `1..λ-1` so that `Auth` can run.
+- **Rotation count.** Naïve `Auth` does `λ - |S| = 64` rotations and one addition tree. `Evaluator.InnerSum`-style tree reductions cut this to `O(log λ)` rotations with appropriate Galois-key selection — a Phase-2 optimisation once bench numbers show the cost.
+- **Phase 4 rotation composition.** In Phases 1–3, VService receives the full Galois key set, so a rotation by any `j` is one ciphertext op. In Phase 4 VService holds only the hierarchical master set — a small set of "atom" rotations such as `{1, 2, 4, 8, 16, 32, 64}` — and arbitrary rotations are realised by **decomposing the shift into atoms and chaining the rotations**. To rotate by 69 with that atom set, VService applies `Rot(·, 64)`, then `Rot(·, 4)`, then `Rot(·, 1)` (since `69 = 64 + 4 + 1`). This trades key-material size on the wire for additional ciphertext rotations during `Auth` — bench impact tracked from Phase 4 onward.
+- **VAgent's own partial-decryption share** is computed from `sk_a` against the same `ct_M` it generated. The two `KeySwitchShare`s aggregate; the key-switch then recovers `P`.
 
 ---
 
@@ -170,12 +266,14 @@ _TODO — to be filled in._
 
 We deliver a Go-first prototype that grows in four phases. Phase 1 is a single CLI binary running all actors in one process with a benchmark harness; later phases swap the synthetic circuit for a real model, split actors into HTTP services, and add browser SPAs.
 
-| Phase | Scope                                                                                              |
-| ----- | -------------------------------------------------------------------------------------------------- |
-| 1     | Real CKKS, synthetic `x²` circuit, in-process actors orchestrated by `ppiav-cli`, JSON benchmarks. |
-| 2     | Orion-compiled C3AE inference replaces `x²`; CKKS params sourced from the Orion manifest.          |
-| 3     | HTTP services and browser SPAs.                                                                    |
-| 4     | Hierarchical rotation keys via lattigo-hierkeys, exposed through the WASM bridge.                  |
+The multi-party CKKS protocol — collaborative keygen and MPD-Auth joint decryption — is **baseline from Phase 1**, because it's what gives the threat model teeth. Hierarchical Galois keys (lattigo-hierkeys) are orthogonal: a transport optimization on top of the same multi-party `GaloisKeyGen` shares. Until Phase 4, VClient and VAgent emit one `multiparty.GaloisKeyGenShare` per rotation and ship the assembled full Galois key set to VService; Phase 4 swaps that for the much smaller `gks_master` + hierarchical derivation.
+
+| Phase | Scope                                                                                                                                                                                                                                                                |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | Multi-party CKKS, synthetic `x²` inference circuit, MPD-Auth joint decryption (which needs rotations for `Auth` even though `x²` doesn't), in-process actors orchestrated by `ppiav-cli`, JSON benchmarks.                                                           |
+| 2     | Orion-compiled C3AE inference replaces `x²`; rotations enter the picture via per-rotation collaborative `GaloisKeyGen` shares (no hierkeys yet); CKKS params sourced from the Orion manifest.                                                                        |
+| 3     | HTTP services and browser SPAs; the multi-party protocol that ran in-process in Phase 1–2 is now driven over HTTP.                                                                                                                                                   |
+| 4     | lattigo-hierkeys integration: VClient generates `gks_master_c` natively, VAgent ships `gks_master` to VService instead of the full `gks` set, VService hierarchically derives `gks` from `gks_master`. The thesis-canonical wire format becomes the implemented one. |
 
 ### Layout
 
@@ -187,11 +285,11 @@ ppiav/
 │   ├── ppiav-vagent/                  # Phase 3+
 │   └── ppiav-rservice/                # Phase 3+
 ├── internal/
-│   ├── protocol/                      # Domain types, wire messages, parameter sets (CKKS, MAC, Orion)
-│   ├── mac/                           # Per-session MAC scheme (used by vagent)
-│   ├── vclient/                       # Subject-side crypto
-│   ├── vservice/                      # FHE inference; sid issuer
-│   ├── vagent/                        # Protocol mediator; MAC application; verdict policy
+│   ├── protocol/                      # Domain types, wire messages, parameter sets (CKKS, verification, Orion)
+│   ├── verification/                  # Per-session verification values + authenticated-ct construction (used by vagent)
+│   ├── vclient/                       # Subject-side crypto (sk_c share, partial decryption)
+│   ├── vservice/                      # FHE inference; sid issuer (Phase 4: gks derivation from gks_master)
+│   ├── vagent/                        # Protocol mediator; sk_a share; final decryption; verdict policy
 │   ├── rservice/                      # Resource gating
 │   └── bench/                         # Measurement harness
 ├── web/
@@ -212,15 +310,15 @@ ppiav/
 
 #### `internal/protocol`
 
-Domain types, wire messages, and the parameter sets all parties must agree on. Real protocols (TLS, TCP) include parameter definitions as part of the protocol specification — same logic applies here. All Lattigo wire-relevant types implement `encoding.BinaryMarshaler`/`BinaryUnmarshaler` natively.
+Domain types, wire messages, and the parameter sets all parties must agree on. Real protocols (TLS, TCP) include parameter definitions as part of the protocol specification — same logic applies here. All Lattigo wire-relevant types (shares, ciphertexts, eval-key components) implement `encoding.BinaryMarshaler`/`BinaryUnmarshaler` natively.
 
 ```go
 package protocol
 
 import (
     "github.com/tuneinsight/lattigo/v6/core/rlwe"
+    "github.com/tuneinsight/lattigo/v6/multiparty"
     "github.com/tuneinsight/lattigo/v6/schemes/ckks"
-    "github.com/tuneinsight/lattigo/v6/ring"
 )
 
 type SessionID string
@@ -231,148 +329,277 @@ const (
     VerdictAccept
     VerdictReject
 )
-
-type PublicKeySet struct {
-    PK  *rlwe.PublicKey
-    Evk *rlwe.MemEvaluationKeySet
-}
-
-func (m PublicKeySet) MarshalBinary() ([]byte, error)
-func (m *PublicKeySet) UnmarshalBinary(data []byte) error
 ```
 
-Parameters — defaults grow over phases (CKKS now; MAC fields when §MAC is fleshed out; Orion params arrive in Phase 2):
+Parameters — defaults grow over phases (CKKS + verification config now; Orion params arrive in Phase 2):
 
 ```go
-func DefaultCKKSParams() (ckks.Parameters, error)
+type Params struct {
+    CKKS         ckks.Parameters
+    Verification verification.Config // see §Multiparty decryption with authentication
+}
+
+func Defaults() (Params, error)
 ```
 
-Defaults for Phase 1: `LogN=15`, `LogQ=[51,40×15]`, `LogP=[50×4]`, `LogDefaultScale=40`, `RingType=Standard`. 15 multiplicative levels, 128-bit security at LogN=15. In Phase 2, defaults are derived from the Orion manifest instead.
+Defaults for Phase 1 (CKKS): `LogN=15`, `LogQ=[51,40×15]`, `LogP=[50×4]`, `LogDefaultScale=40`, `RingType=Standard`. 15 multiplicative levels, 128-bit security at LogN=15. In Phase 2, defaults are derived from the Orion manifest instead.
 
 Wire messages — payload nouns; direction is implicit in the HTTP route.
 
 ```go
-type SessionOpen          struct{}
-type SessionOpened        struct { SessionID SessionID }
-type KeySetUpload         struct { Keys PublicKeySet }            // VClient → VAgent
-type EvalKeyUpload        struct { Evk  *rlwe.MemEvaluationKeySet } // VAgent → VService
-type EncryptedImage       struct { Ct *rlwe.Ciphertext }
-type TaggedResult         struct { Result, Tag *rlwe.Ciphertext }
-type DecryptedPair        struct { Result, Tag []float64 }
-type VerdictNotification  struct { Verdict Verdict }
+type SessionOpen           struct{}
+type SessionOpened         struct { SessionID SessionID }
+
+// Stage 2b: pk share exchange (VClient ↔ VAgent)
+type PKShareUpload         struct { Share multiparty.PublicKeyGenShare } // VClient → VAgent
+type PKShareReply          struct { Share multiparty.PublicKeyGenShare } // VAgent → VClient
+
+// Stage 2c: rlk share exchange, two rounds (VClient ↔ VAgent)
+type RLKRound1Upload       struct { Share multiparty.RelinearizationKeyGenShare }
+type RLKRound1Reply        struct { Share multiparty.RelinearizationKeyGenShare }
+type RLKRound2Upload       struct { Share multiparty.RelinearizationKeyGenShare }
+// no round-2 reply share — round 2 just acks completion
+
+// Stage 2d: Galois-key share exchange (VClient → VAgent) and forward to VService.
+// Phase 1–3 emits one share per rotation; Phase 4 collapses these into a single
+// gks_master share via lattigo-hierkeys.
+type GaloisKeyShareUpload struct { Shares []multiparty.GaloisKeyGenShare } // VClient → VAgent
+// after aggregation:
+type EvalKeysUpload struct { // VAgent → VService
+    RLK *rlwe.RelinearizationKey
+    GKS *rlwe.GaloisKeySet // Phase 1–3: full assembled set
+    // Phase 4: replaced by GKSMaster (lattigo-hierkeys; exact type pinned with that API)
+}
+
+// Stage 3: image
+type EncryptedImage struct { Ct *rlwe.Ciphertext }
+
+// Stage 4a: VAgent → VClient (over SSE) — result ct with verification values folded in
+type AuthenticatedResult struct { Ct *rlwe.Ciphertext }
+
+// Stage 4a: VClient → VAgent — partial-decryption share with noise flooding applied
+type PartialDecryption struct { Share multiparty.KeySwitchShare }
+
+// Stage 4b: VAgent → RService
+type VerdictNotification struct { Verdict Verdict }
 ```
 
-`SessionOpened` carries the sid that VService allocated; subsequent routes carry sid in the URL path. The key-upload message is split: VClient sends the full `KeySetUpload` (pk + evk) to VAgent, which forwards only the evaluation key as `EvalKeyUpload` — VService never sees the public key. Ciphertexts travel as `*rlwe.Ciphertext` directly — they already satisfy `BinaryMarshaler`.
+`SessionOpened` carries the sid that VService allocated; subsequent routes carry sid in the URL path. VService never sees `PublicKeyGenShare` or `pk` directly — only the aggregated `rlk` and aggregated Galois keys arrive over `EvalKeysUpload`. In Phase 4 the Galois payload becomes `gks_master` and VService runs the hierarchical derivation in `StoreEvalKeys`.
 
-#### `internal/mac`
+Common reference polynomials (CRPs) used by the multi-party keygen protocols are derived from the sid (or, equivalently, from a session-scoped CRS seed delivered with the params response). VClient and VAgent therefore reach the same CRPs without exchanging them.
 
-Per-session MAC secrets and tag computation. Used by VAgent in `MACTag` and `VerifyDecryption`. Construction details, parameter choices, and the verify tolerance ε live in §MAC.
+#### `internal/verification`
+
+Per-session MPD-Auth state and the `Auth` / `Ver` operations. Used by VAgent immediately after inference (`Auth` builds `ct_M`) and again after the final joint decryption (`Ver` checks the recovered plaintext). The algorithm, parameter meanings, and ε bound live in §Multiparty decryption with authentication.
 
 ```go
-package mac
+package verification
 
 import (
+    "io"
+
     "github.com/tuneinsight/lattigo/v6/core/rlwe"
     "github.com/tuneinsight/lattigo/v6/schemes/ckks"
 )
 
-type Secret struct{ /* TBD — see §MAC */ }
+type Config struct {
+    Lambda  int     // λ; default 128
+    SetSize int     // |S|; default Lambda / 2
+    Epsilon float64 // approximate-equality tolerance in scaled-message space; default 2^20
+    // Q0 is read from ckks.Parameters at session creation; not configured here.
+}
 
-func NewSecret(slots int) (Secret, error)
+func DefaultConfig() Config
 
-// Tag computes tag_ct from result_ct via ciphertext × ciphertext operations
-// — the per-session secret material is encrypted under the session's pk and
-// combined with result_ct. Requires a per-session Encryptor (built from pk)
-// and a per-session Evaluator (built from evk; relinearization needed).
-func (s Secret) Tag(
+// NoiseFloodSigma returns the partial-decryption noise sigma matching
+// Config.Epsilon. VClient calls this when constructing its KeySwitchShare.
+func (cfg Config) NoiseFloodSigma() float64
+
+// Session holds the per-session authentication secret: the index set S, the
+// PRG seed for F, and the scale used when encoding v. Single-use: Check
+// zeroizes the state.
+type Session struct{ /* opaque — S, seedF, scale */ }
+
+func NewSession(cfg Config, params ckks.Parameters, rand io.Reader) (*Session, error)
+
+// Auth builds ct_M from result_ct per §MPD-Auth/Auth. Requires session-bound
+// primitives: encoder, encryptor under the aggregated pk, evaluator wired
+// with the aggregated rlk and Galois keys for rotations 1..Lambda-1.
+func (s *Session) Auth(
     enc *ckks.Encoder,
     encryptor *rlwe.Encryptor,
     eval *ckks.Evaluator,
     resultCt *rlwe.Ciphertext,
-) (*rlwe.Ciphertext, error)
+) (ctM *rlwe.Ciphertext, err error)
 
-// Verify checks tag against result within ε.
-func (s Secret) Verify(result, tag []float64, eps float64) bool
+// Ver runs the post-decryption check per §MPD-Auth/Ver. Returns the recovered
+// message m (taken from a value slot) and ok = true iff both the
+// verification-slot and value-slot checks pass within Config.Epsilon.
+// State is zeroized before return.
+func (s *Session) Ver(plaintext []float64) (m float64, ok bool)
+
+// Check tests the recovered plaintext against the per-session verification
+// values within ε. Returns false if the client deviated from the joint
+// decryption protocol.
+func (s Secret) Check(cfg Config, decrypted []float64) bool
 ```
 
 #### `internal/vclient`
 
-Subject-side crypto. Holds the secret key. Must compile under `linux/amd64` and `js/wasm` (no cgo, no filesystem access).
+Subject-side crypto. Holds **one share** of the secret key (`sk_c`). Must compile under `linux/amd64` and `js/wasm` (no cgo, no filesystem access).
+
+VClient drives the keygen handshake from the client side, producing one share per step and aggregating VAgent's matching shares as they come back. Lattigo's multi-party protocols (`multiparty.PublicKeyGenProtocol`, `RelinearizationKeyGenProtocol`, `GaloisKeyGenProtocol`, `KeySwitchProtocol`) provide the share/aggregate primitives.
 
 ```go
 package vclient
 
 type Client struct {
-    params    ckks.Parameters
-    sk        *rlwe.SecretKey
+    params    protocol.Params
+    sid       protocol.SessionID
+
+    // Long-lived per-session state.
+    skShare   *rlwe.SecretKey   // sk_c
+    pkAgg     *rlwe.PublicKey   // aggregated pk after Stage 2b
+    rlkAgg    *rlwe.RelinearizationKey // aggregated rlk after Stage 2c
+    // Galois-key shares are generated and shipped during Stage 2d; VClient
+    // does not need to retain them after the rotation-key handshake.
+
     encoder   *ckks.Encoder
-    encryptor *rlwe.Encryptor
-    decryptor *rlwe.Decryptor
+    encryptor *rlwe.Encryptor   // built from pkAgg
+    // Note: no plain decryptor — VClient never decrypts on its own.
 }
 
-func New(params ckks.Parameters) *Client
+func New(params protocol.Params, sid protocol.SessionID) *Client
 
-func (c *Client) Keygen() (protocol.PublicKeySet, error)
+// Stage 2b
+func (c *Client) GenPKShare() (multiparty.PublicKeyGenShare, error)
+func (c *Client) AggregatePK(agentShare multiparty.PublicKeyGenShare) error
+
+// Stage 2c — round 1
+func (c *Client) GenRLKShareRound1() (multiparty.RelinearizationKeyGenShare, error)
+func (c *Client) AggregateRLKRound1(agentShare multiparty.RelinearizationKeyGenShare) error
+
+// Stage 2c — round 2
+func (c *Client) GenRLKShareRound2() (multiparty.RelinearizationKeyGenShare, error)
+// VClient does not finalize rlk itself — only VAgent and VService need it.
+
+// Stage 2d — Phase 1–3 emits one share per rotation; Phase 4 collapses to
+// a single gks_master share via lattigo-hierkeys.
+func (c *Client) GenGaloisShares() ([]multiparty.GaloisKeyGenShare, error)
+
+// Stage 3
 func (c *Client) EncryptImage(image []float64) (*rlwe.Ciphertext, error)
-func (c *Client) Decrypt(resultCt, tagCt *rlwe.Ciphertext) (result, tag []float64, err error)
+
+// Stage 4a — partial decryption with noise flooding
+func (c *Client) PartialDecrypt(authenticatedCt *rlwe.Ciphertext) (multiparty.KeySwitchShare, error)
 ```
 
 #### `internal/vservice`
 
-FHE inference engine. **Issues session IDs.** Holds per-session evaluator state.
+FHE inference engine. **Issues session IDs.** Holds per-session evaluator state. Receives the aggregated `rlk` and aggregated Galois keys from VAgent. Phase 1–3 takes the full assembled `*rlwe.GaloisKeySet` directly; Phase 4 takes `gks_master` and hierarchically derives the per-rotation `gks` via lattigo-hierkeys.
 
 ```go
 package vservice
 
 type Service struct {
-    params   ckks.Parameters
+    params   protocol.Params
     sessions map[protocol.SessionID]*sessionState
     mu       sync.Mutex
 }
 
 type sessionState struct {
-    eval *ckks.Evaluator
+    eval *ckks.Evaluator // wired with rlk + gks
 }
 
-func New(params ckks.Parameters) *Service
+func New(params protocol.Params) *Service
 
 func (s *Service) OpenSession() (protocol.SessionID, error)
-func (s *Service) StoreEvalKey(sid protocol.SessionID, evk *rlwe.MemEvaluationKeySet) error
+func (s *Service) Params() protocol.Params
+
+// StoreEvalKeys builds the session evaluator from the aggregated keys.
+// Phase 4 swaps the gks argument for a lattigo-hierkeys MasterKey and runs
+// the hierarchical derivation here.
+func (s *Service) StoreEvalKeys(
+    sid protocol.SessionID,
+    rlk *rlwe.RelinearizationKey,
+    gks *rlwe.GaloisKeySet,
+) error
+
 func (s *Service) Infer(sid protocol.SessionID, inputCt *rlwe.Ciphertext) (*rlwe.Ciphertext, error)
 ```
 
-`OpenSession` draws fresh randomness (≥128 bits), reserves a session-table slot, and returns the sid. The per-session `Evaluator` is built from the evk in `StoreEvalKey`. VService only ever receives the evaluation key — never the public key.
+`OpenSession` draws fresh randomness (≥128 bits), reserves a session-table slot, and returns the sid. The per-session `Evaluator` is built in `StoreEvalKeys`. VService never sees individual key shares, the aggregated `pk`, or any secret-share material; only the aggregated `rlk` and aggregated Galois keys arrive over the wire.
 
 #### `internal/vagent`
 
-Protocol mediator: builds per-session crypto primitives from the uploaded keys, computes MAC tags via ct-ct operations, verifies decrypted plaintexts against the MAC and policy.
+Protocol mediator **and** holder of the secret-key share `sk_a`. Generates VAgent's matching share at every keygen step, aggregates with VClient's, ships the aggregated `rlk` and Galois keys to VService, builds the authenticated ciphertext, runs the final step of the joint decryption, and applies the verdict policy.
 
 ```go
 package vagent
 
 type Agent struct {
-    params   ckks.Parameters
-    eps      float64
+    params   protocol.Params
+    policy   Policy // e.g., age threshold + ε for the verification check
     encoder  *ckks.Encoder
     sessions map[protocol.SessionID]*sessionState
     mu       sync.Mutex
 }
 
 type sessionState struct {
-    encryptor *rlwe.Encryptor   // built from pk; encrypts MAC scalars
-    eval      *ckks.Evaluator   // built from evk; ct-ct mul + relinearize
-    mac       mac.Secret
+    skShare   *rlwe.SecretKey                 // sk_a
+    pkAgg     *rlwe.PublicKey
+    rlkAgg    *rlwe.RelinearizationKey
+    gksAgg    *rlwe.GaloisKeySet              // Phase 4: replaced by lattigohierkeys.MasterKey
+
+    encryptor *rlwe.Encryptor                 // built from pkAgg
+    eval      *ckks.Evaluator                 // built from rlkAgg
+    verif     *verification.Session           // per-session MPD-Auth state
 }
 
-func New(params ckks.Parameters, eps float64) (*Agent, error)
+func New(params protocol.Params, policy Policy) (*Agent, error)
 
+// Stage 1
 func (a *Agent) OpenSession(sid protocol.SessionID) error
-func (a *Agent) StoreKeys(sid protocol.SessionID, keys protocol.PublicKeySet) error
-func (a *Agent) MACTag(sid protocol.SessionID, resultCt *rlwe.Ciphertext) (*rlwe.Ciphertext, error)
-func (a *Agent) VerifyDecryption(sid protocol.SessionID, result, tag []float64) (protocol.Verdict, error)
+
+// Stage 2b — pk share exchange
+func (a *Agent) RespondPKShare(
+    sid protocol.SessionID,
+    clientShare multiparty.PublicKeyGenShare,
+) (multiparty.PublicKeyGenShare, error)
+
+// Stage 2c — rlk share exchange, two rounds
+func (a *Agent) RespondRLKRound1(
+    sid protocol.SessionID,
+    clientShare multiparty.RelinearizationKeyGenShare,
+) (multiparty.RelinearizationKeyGenShare, error)
+func (a *Agent) RespondRLKRound2(
+    sid protocol.SessionID,
+    clientShare multiparty.RelinearizationKeyGenShare,
+) error
+
+// Stage 2d — Galois-key share exchange and aggregation. Phase 1–3 emits one
+// share per rotation; Phase 4 collapses to a single gks_master share and the
+// return shape switches to lattigohierkeys.MasterKey.
+func (a *Agent) RespondGaloisShares(
+    sid protocol.SessionID,
+    clientShares []multiparty.GaloisKeyGenShare,
+) (rlk *rlwe.RelinearizationKey, gks *rlwe.GaloisKeySet, err error)
+
+// Stage 4a — build authenticated ciphertext
+func (a *Agent) BuildAuthenticatedCt(
+    sid protocol.SessionID,
+    resultCt *rlwe.Ciphertext,
+) (*rlwe.Ciphertext, error)
+
+// Stage 4a/b — final joint decryption + authenticity check + verdict
+func (a *Agent) FinalizeDecryption(
+    sid protocol.SessionID,
+    authenticatedCt *rlwe.Ciphertext,
+    clientShare multiparty.KeySwitchShare,
+) (protocol.Verdict, error)
 ```
 
-`OpenSession(sid)` registers the sid that VService allocated. `StoreKeys` builds the per-session `*rlwe.Encryptor` from `pk` and `*ckks.Evaluator` from `evk`, retaining the derived primitives in `sessionState`; the keys themselves are not kept. `MACTag` writes the per-session MAC secret; `VerifyDecryption` reads it once and zeroes (single-use invariant).
+`OpenSession(sid)` registers the sid that VService allocated and primes the session state for keygen. The pk/rlk/Galois responders all draw fresh shares with the session-scoped CRS, aggregate with the client's, and persist the running aggregates. `BuildAuthenticatedCt` calls `verification.Session.Auth` on `result_ct`. `FinalizeDecryption` combines VClient's `KeySwitchShare` with VAgent's own share (computed from `sk_a` against the authenticated ciphertext), applies the key-switch to recover the plaintext result vector, runs `verification.Session.Ver`, and — if it passes — applies `Policy` to the recovered message to derive the verdict. The MPD-Auth state is single-use: `Ver` zeroizes the session.
 
 #### `internal/rservice`
 
@@ -461,9 +688,9 @@ Single-page app served by VAgent at `/verify?sid=…`. TypeScript, transpiled wi
 
 **Image source: file upload only.** `<input type="file">` plus a drag-and-drop overlay. No webcam — the permissions UX (HTTPS gating, `getUserMedia` quirks across mobile platforms) is orthogonal to the FHE story.
 
-**SSE via native `EventSource`.** Opens `GET /sessions/{sid}/result` and listens for the `TaggedResult` event. The matching server side is ~15 lines of Go using `http.Flusher.Flush()`.
+**SSE via native `EventSource`.** Opens `GET /sessions/{sid}/result` and listens for the `AuthenticatedResult` event. The matching server side is ~15 lines of Go using `http.Flusher.Flush()`.
 
-**Wire formats.** JSON for control messages (`SessionOpened`, `VerdictNotification`); `application/octet-stream` for ciphertext-bearing endpoints (`/keys`, `/image`, `/decrypted`). No base64 inflation on the hot path.
+**Wire formats.** JSON for control messages (`SessionOpened`, `VerdictNotification`); `application/octet-stream` for share- and ciphertext-bearing endpoints (`/pk-share`, `/rlk/round1`, `/rlk/round2`, `/galois-shares`, `/image`, `/partial-decryption`). No base64 inflation on the hot path. (Phase 4 renames `/galois-shares` to `/gks-master` as the payload shape changes.)
 
 **Sid from URL.** SPA reads `?sid=…` at load time and threads it through every subsequent request. No JS-side cookie reading.
 
