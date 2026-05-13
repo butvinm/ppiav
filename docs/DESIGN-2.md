@@ -195,15 +195,16 @@ We deliberately avoid the term **verifiable decryption** because it has a precis
 
 All configurable in `verification.Config`. Defaults set in this section; can be overridden per-session.
 
-| Param   | Default           | Role                                                                                                                                                                                              |
-| ------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `λ`     | 128               | Security parameter; total authentication slots used.                                                                                                                                              |
-| `\|S\|` | `λ/2 = 64`        | Number of verification (random-pattern) slots; the remaining `λ - \|S\|` slots replicate the inference message `m`.                                                                               |
-| `Q_0`   | level-0 modulus   | The largest/special prime `q_0` of the CKKS modulus chain (~51–60 bits); bounds the verification-value distribution. See note below on chain notation.                                            |
-| `ε`     | `2^20`            | Approximate-equality tolerance, expressed in **scaled-message space** (i.e., before the decoder divides by Δ). Also drives the noise-flooding sigma applied by VClient during partial decryption. |
-| `F`     | session-fresh PRG | Deterministic from a session-fresh seed; samples uniformly from `(-Q_0/2, Q_0/2)`.                                                                                                                |
+| Param     | Default           | Role                                                                                                                                                       |
+| --------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `λ`       | 128               | Security parameter; total authentication slots used.                                                                                                       |
+| `\|S\|`   | `λ/2 = 64`        | Number of verification (random-pattern) slots; the remaining `λ - \|S\|` slots replicate the inference message `m`.                                        |
+| `Q_0`     | level-0 modulus   | The largest/special prime `q_0` of the CKKS modulus chain (~51–60 bits); bounds the verification-value distribution. See note below on chain notation.     |
+| `ε`       | `2^20`            | Approximate-equality tolerance for `Ver`, expressed in **scaled-message space** (i.e., before the decoder divides by Δ).                                   |
+| `σ_flood` | `2^16`            | Std of the discrete-Gaussian flooding noise VClient adds during partial decryption. Constant, independent of `ε` and the circuit (see §Noise for the why). |
+| `F`       | session-fresh PRG | Deterministic from a session-fresh seed; samples uniformly from `(-Q_0/2, Q_0/2)`.                                                                         |
 
-VAgent owns `S`, the seed of `F`, and (consequently) the verification vector `v`. VClient is told `λ`, `|S|`, and `ε` (the last because it computes its noise-flooding sigma from it). All authentication secrets stay on the VAgent side.
+VAgent owns `S`, the seed of `F`, and (consequently) the verification vector `v`. VClient is told `λ`, `|S|`, `ε`, and `σ_flood`. All authentication secrets stay on the VAgent side.
 
 **Note on chain notation.** We use the convention `Q_chain = [q_0, q_1, ..., q_L]`, where `q_0` is the special/base prime (~51–60 bits in our params) and `q_1..q_L` are the rescaling primes each ≈ `log2(Δ)` bits (~40 bits in Phase 1). At fresh encryption the ciphertext is at level `L` with modulus `Q_L = q_0 · q_1 · … · q_L`; each rescaling drops the top prime; what survives at level 0 is `Q_0 = q_0`. So `Q_0` here refers to the same prime that's largest in absolute size and is the one left after all rescalings — _not_ a small "leftover" prime.
 
@@ -265,6 +266,70 @@ If both pass, the recovered message is `m_recovered = P[j*]` — the binary-clas
 - **The mask plaintext is reusable.** `pt_one_hot = [1, 0, ..., 0]` at scale 1 is session-independent: encode it once per `verification.Config` (when params are loaded) and reuse across every session's `Auth`.
 - **Phase 4 rotation composition.** In Phases 1–3, VService receives the full Galois key set, so a rotation by any `j` is one ciphertext op. In Phase 4 VService holds only the hierarchical master set — a small set of "atom" rotations such as `{1, 2, 4, 8, 16, 32, 64}` — and arbitrary rotations are realised by **decomposing the shift into atoms and chaining the rotations**. To rotate by 69 with that atom set, VService applies `Rot(·, 64)`, then `Rot(·, 4)`, then `Rot(·, 1)` (since `69 = 64 + 4 + 1`). This trades key-material size on the wire for additional ciphertext rotations during `Auth` — bench impact tracked from Phase 4 onward.
 - **VAgent's own partial-decryption share** is computed from `sk_a` against the same `ct_M` it generated. The two `KeySwitchShare`s aggregate; the key-switch then recovers `P`.
+
+---
+
+## Noise and modulus chain
+
+CKKS noise lives in two independent dimensions: **level depth** (how many `q_i` primes we consume via rescaling) and **noise magnitude** (the additive error std, in scaled-message units). Rotations and `ct × pt` consume zero levels but still contribute noise.
+
+### Level budget — Phase 1 (synthetic `x²`)
+
+Params: `LogN=16`, `LogQ = [55] + [40]×15` (15 multiplicative levels), `LogP=[55]×6`, Δ=2⁴⁰. Fresh ciphertext sits at level `L = 15`.
+
+| Stage | Op                                             | Levels consumed |
+| ----- | ---------------------------------------------- | --------------- |
+| 3     | Image encrypt                                  | 0               |
+| 3     | Inference: `x²` (mul + rescale)                | **1**           |
+| 4a    | Auth: mask `ct × pt_one_hot` at scale 1        | 0               |
+| 4a    | Auth: rotate-and-sum (64 rotations + add tree) | 0               |
+| 4a    | Auth: encrypt `v`, add to `ct_m^Rep`           | 0               |
+| 4a    | Partial decrypt + flooding                     | 0               |
+| 4a    | Final decrypt                                  | 0               |
+| **Σ** |                                                | **1 of 15**     |
+
+14 levels of slack — Phase 1 is nowhere near level-bound. The whole budget exists to absorb Phase 2's deeper inference.
+
+### Level budget — Phase 2 (C3AE)
+
+C3AE's compiled depth comes from the Orion manifest (`Model.ClientParams()` exposes `inputLevel`). Auth still consumes 0 levels regardless of the underlying circuit, because everything in `Auth` (mask, rotation+sum, encrypt-and-add of `v`) is level-free. So:
+
+```
+levels_total = orion_circuit_depth + 0 (Auth) + 0 (joint decrypt)
+```
+
+If Orion's C3AE consumes the full 15 levels, Auth still works — it operates at the model's `outputLevel`, whatever that is. Joint decryption is also level-free.
+
+### Noise magnitude
+
+Let `σ_B` denote the intrinsic-ops noise std accumulated at the point `ct_M` is built, measured in scaled-message space (i.e., units of the ring coefficient, not units of `m`). Contributors:
+
+- **Fresh PK encryption**: `σ_fresh` ≈ a few units (`NoiseFreshPk` in Lattigo).
+- **`x²` + rescale on `m ∈ [-1, 1]`**: noise roughly doubles per multiplication (dominated by the `m · noise` cross-term; the `noise²/Δ` term is tiny). One mul for `x²`, so `σ ≈ 2·σ_fresh`. For C3AE (Phase 2), this scales with the depth of the circuit.
+- **Mask `ct × pt_one_hot`** (`|pt|_∞ = 1`): essentially no growth.
+- **One rotation**: adds `~B_ks` from keyswitching. With `LogP = 6·55 = 330`, `B_ks` is bounded; concrete number from bench.
+- **Sum of 64 rotations**: independent-error std grows by `√64 = 8`, so the rotation-sum contributes `~8·B_ks`.
+- **Encrypt `v` + add**: another `σ_fresh`, dominated by accumulated noise.
+
+The dominant Phase-1 contributor is the rotation sum. Phase 2's circuit-noise eclipses that as depth grows. Both are bench-measured at the start of their phase.
+
+### ε and σ_flood
+
+Both are fixed constants for the prototype:
+
+| Quantity  | Value | Role                                                                                    |
+| --------- | ----- | --------------------------------------------------------------------------------------- | --------------- | --------------------------------------------------- |
+| `ε`       | `2²⁰` | `Ver`'s tolerance: accept iff `                                                         | P[i]·Δ − v[i]·Δ | < ε` (and likewise for value-slot pairwise checks). |
+| `σ_flood` | `2¹⁶` | Std of the discrete-Gaussian flooding noise added by VClient during partial decryption. |
+
+The pair has to satisfy two informal constraints:
+
+1. **Unforgeability:** `σ_flood ≫ σ_B` so flooding dominates intrinsic noise and a covert client can't recover information about `sk_c` from observing the partial-decryption share.
+2. **Honest-Ver-passes:** `ε > c · σ_total` for a comfortable Gaussian-tail confidence `c`, where `σ_total ≈ √(σ_B² + σ_flood²)`.
+
+At Phase-1 estimates (`σ_B ≈ 2¹⁴`, see §Noise contributors above), `σ_flood = 2¹⁶` sits at ~4× σ_B and `ε = 2²⁰` is ~16× σ_flood — both constraints comfortably satisfied for the synthetic `x²` circuit.
+
+A proper statistical calibration — measuring `σ_B` across all four phases' params and circuits, deriving `σ_flood` and `ε` from those measurements with an explicit confidence bound — is **deferred until after all four phases land**. Until then both values stay constant; if a deeper Phase-2/3 circuit pushes `σ_B` close enough to `σ_flood` to make the unforgeability margin uncomfortable, we'll catch it in bench output and bump the constants by hand. The level budget is independent and remains fixed by the params regardless.
 
 ---
 
@@ -348,7 +413,23 @@ type Params struct {
 func Defaults() (Params, error)
 ```
 
-Defaults for Phase 1 (CKKS): `LogN=15`, `LogQ=[51,40×15]`, `LogP=[50×4]`, `LogDefaultScale=40`, `RingType=Standard`. 15 multiplicative levels, 128-bit security at LogN=15. In Phase 2, defaults are derived from the Orion manifest instead.
+Defaults are aligned with the Orion C3AE demo and the `lattigo-hierkeys` `LogN16_D15_P6` scenario so we don't change the cryptographic moving parts when we light up hierkeys in Phase 4.
+
+**Phase 1–3 (CKKS, from `~/Dev/orion/examples/c3ae-demo/models/params.py:51` — `logn16`):**
+
+| Knob              | Value                          |
+| ----------------- | ------------------------------ |
+| `LogN`            | 16 (32768 slots)               |
+| `LogQ`            | `[55, 40, 40, …, 40]` (1 + 15) |
+| `LogP`            | `[55] × 6`                     |
+| `LogDefaultScale` | 40 (Δ = 2⁴⁰)                   |
+| `RingType`        | Standard                       |
+
+15 multiplicative levels of depth. `LogQP = 655 + 330 = 985` — well inside the 128-bit security envelope at `LogN=16` (`~1232` for sparse-ternary `h=192`, which is the Lattigo default; `1770` for dense). See the Orion `params.py` header for the bound derivation.
+
+**Phase 4 (CKKS + hierkeys, `lattigo-hierkeys` `LogN16_D15_P6` — `~/Dev/lattigo-hierkeys/internal/testutil/scenarios.go:91`):** same `LogN`, `LogQ`, `LogP` as above, plus the hierkeys-specific chains `LogPHK = 11×55`, `Base = 4`, `LogPHK3 = 6×55`, `LogPExtra = 14×55`. The hierkeys chains augment the base params, they don't replace them — so Phase 1–3 measurements remain comparable to Phase 4 for everything except `Auth`'s rotation cost (which goes up in Phase 4 because each user-rotation decomposes into multiple atom-rotations).
+
+In Phase 2, the **inference-circuit-side** params (`inputLevel`, scale schedule) are still drawn from the compiled C3AE Orion manifest — the same one the demo uses — and merged with the `protocol.Params` here. The two never disagree because they originate from the same `params.py`.
 
 Wire messages — payload nouns; direction is implicit in the HTTP route.
 
@@ -433,17 +514,14 @@ import (
 )
 
 type Config struct {
-    Lambda  int     // λ; default 128
-    SetSize int     // |S|; default Lambda / 2
-    Epsilon float64 // approximate-equality tolerance in scaled-message space; default 2^20
+    Lambda     int     // λ; default 128
+    SetSize    int     // |S|; default Lambda / 2
+    Epsilon    float64 // Ver tolerance in scaled-message space; default 2^20
+    FloodSigma float64 // VClient partial-decryption flooding sigma; default 2^16
     // Q0 is read from ckks.Parameters at session creation; not configured here.
 }
 
 func DefaultConfig() Config
-
-// NoiseFloodSigma returns the partial-decryption noise sigma matching
-// Config.Epsilon. VClient calls this when constructing its KeySwitchShare.
-func (cfg Config) NoiseFloodSigma() float64
 
 // Session holds the per-session authentication secret: the index set S, the
 // PRG seed for F, and the scale used when encoding v. Single-use: Check
