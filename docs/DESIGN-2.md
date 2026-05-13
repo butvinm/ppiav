@@ -187,6 +187,36 @@ The session-specific CKKS keys are generated jointly by VClient and VAgent. The 
 
 ---
 
+## Failure modes
+
+The happy path runs Stages 1–4 to a `Verdict = Accept` or `Verdict = Reject`. Everything that's not the happy path collapses into `Verdict = Reject` delivered through the standard Stage 4 callback — same wire shape, same RService 403, same UX for the user. No `Verdict = Error` variant.
+
+| ID  | Trigger                             | Where                | Resolution                                                                                                                                      |
+| --- | ----------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| F1  | `Ver` returns false                 | Stage 4, VAgent      | `Verdict = Reject` to RService. Session torn down.                                                                                              |
+| F2  | Malformed wire input                | Any stage            | HTTP 400 to the offending party (Phase 3) / Go error return (Phase 1) **plus** `Verdict = Reject` to RService. Session torn down.               |
+| F4  | Inference error                     | Stage 3, VService    | VS returns error to VAgent; VAgent surfaces `Verdict = Reject` to RService. Session torn down.                                                  |
+| F5a | VService unreachable, Stage 1 setup | Stage 1, VAgent      | No sid is issued; VAgent returns an error to RService; RService returns its own 5xx to the user. No session is opened, so nothing to tear down. |
+| F5b | VService unreachable, Stages 2–3    | Stage 2 or 3, VAgent | After retry budget exhausted, VAgent emits `Verdict = Reject` to RService. Session torn down.                                                   |
+
+### F1: forgery vs. noise are indistinguishable on purpose
+
+After joint decryption, a tampered partial-decryption share and an honest decryption whose intrinsic noise happened to exceed `ε` produce the same observable: `Ver` returns false. The only way to attribute cause would be to inspect the noise distribution in the recovered plaintext — speculative, low-signal, and an information leak that gives a covert client a learning signal across retries.
+
+We do not try. The correctness contract is "with our chosen `ε` and `σ_flood`, honest decryption passes with overwhelming probability." If `Ver` failures show up at non-negligible rate on legitimate flows, the response lives in §Noise — raise `ε` (and bump `σ_flood` with it), don't add forensic logic at the verdict layer.
+
+### Wire-shape impact
+
+- `protocol.Verdict` stays `{Unknown, Accept, Reject}` — no `Error` variant.
+- `Verdict = Unknown` is the marker RService uses for "session was opened but no verdict has been delivered yet"; RService treats Unknown as deny-by-default and returns 403 on resource fetch until either Accept or Reject arrives.
+- The same VAgent → RService callback (`POST /api/callback`) carries all verdict deliveries, including the failure-mode rejects.
+
+### No protocol-level timeouts
+
+The protocol does **not** impose per-stage timeouts. A VClient that stalls (browser tab closed mid-flow, network partition, slow keygen on a low-end device) leaves the session sitting in VAgent's session table; cleanup is the job of session lifecycle / TTL (separate gap), not per-stage timeouts. RService sees the session as `Unknown` for the whole stall — denying the user the same way a `Reject` would — so the user-visible outcome of "abandoned session" and "delivered Reject" is identical. Failure-mode parity is preserved without explicit timeouts, and Phase-3 HTTP transport stays free of per-route timeout middleware.
+
+---
+
 ## Multiparty decryption with authentication
 
 We deliberately avoid the term **verifiable decryption** because it has a precise meaning in the cryptography literature (typically: a NIZK proof that a decryption is correct). Our construction does something different: VAgent embeds a secret authentication pattern into the ciphertext before the joint decryption, then checks the pattern survived after the decryption completes. We call it **MPD-Auth** (multiparty decryption with authentication).
