@@ -207,30 +207,35 @@ VAgent owns `S`, the seed of `F`, and (consequently) the verification vector `v`
 
 **Note on chain notation.** We use the convention `Q_chain = [q_0, q_1, ..., q_L]`, where `q_0` is the special/base prime (~51–60 bits in our params) and `q_1..q_L` are the rescaling primes each ≈ `log2(Δ)` bits (~40 bits in Phase 1). At fresh encryption the ciphertext is at level `L` with modulus `Q_L = q_0 · q_1 · … · q_L`; each rescaling drops the top prime; what survives at level 0 is `Q_0 = q_0`. So `Q_0` here refers to the same prime that's largest in absolute size and is the one left after all rescalings — _not_ a small "leftover" prime.
 
-Assumption on the inference circuit: the message `m` (the prediction) lives in slot 0 of `result_ct`. Other slots are not assumed to be zero — `Auth` step 3 explicitly drops them by replicating slot 0 over the chosen output positions.
+Assumption on the inference circuit: the message `m` (the prediction) lives in slot 0 of `result_ct`. Other slots are _not_ assumed to be zero — the circuit may leave arbitrary garbage there. `Auth`'s first step explicitly masks them out so the rotation-and-sum that follows produces a clean replicated-`m` pattern.
 
 ### Auth (VAgent, post-inference)
 
-Input: `result_ct` from VService, with `m` at slot 0.
+Input: `result_ct` from VService, with `m` at slot 0 and arbitrary garbage in other slots.
 
-1. Sample `S ⊂ [0, λ)`, `|S| = λ/2`, uniformly at random.
-2. Build the verification vector `v` of length `λ`:
+1. **Mask to slot 0.** Encode the plaintext `pt_one_hot = [1, 0, 0, ..., 0]` at **scale 1** (raw values, no Δ multiplication — this plaintext is reusable across sessions). Compute
+   ```
+   ct_m = result_ct · pt_one_hot
+   ```
+   This is a ciphertext × plaintext multiplication. Scale arithmetic: `Δ · 1 = Δ`, so the result stays at scale Δ — **no rescaling is needed and no modulus-chain level is consumed**. Ciphertext × plaintext also skips relinearization. Slot 0 of `ct_m` is `m`; every other slot is `0`.
+2. Sample `S ⊂ [0, λ)`, `|S| = λ/2`, uniformly at random.
+3. Build the verification vector `v` of length `λ`:
    - `v[i] = F(i)` if `i ∈ S`, otherwise `v[i] = 0`.
    - The `F(i)` values are already in **scaled space** — they are placed directly into the plaintext slot coefficients with _no_ multiplication by Δ.
-3. Build the replicated-message ciphertext by rotating `result_ct` to put `m` at each value slot:
+4. Build the replicated-message ciphertext by rotating the masked `ct_m`:
    ```
-   ct_m^Rep = Σ_{j ∈ [0, λ) \ S}  Rot(result_ct, j)
+   ct_m^Rep = Σ_{j ∈ [0, λ) \ S}  Rot(ct_m, j)
    ```
-   Slots in `[0, λ) \ S` now carry `m`; slots in `S` carry 0 (after the value-slot rotations contribute nothing to them, by choice of rotation indices).
-4. Encrypt `v` under the aggregated session `pk` at the scale of `ct_m^Rep` to get `ct_v`.
-5. The **authenticated ciphertext** is
+   Because `ct_m` has `m` only at slot 0 and zero elsewhere, `Rot(ct_m, j)` has `m` only at slot `j`. Summing over `j ∈ [0, λ) \ S` therefore puts `m` exactly at the value-slot positions: slots in `[0, λ) \ S` carry `m`, slots in `S` carry `0`, slots `≥ λ` carry `0`.
+5. Encrypt `v` under the aggregated session `pk` at the scale of `ct_m^Rep` (i.e., scale Δ) to get `ct_v`.
+6. The **authenticated ciphertext** is
    ```
    ct_M = ct_m^Rep + ct_v
    ```
    with expected per-slot plaintext:
    - `i ∈ [0, λ) \ S`: `m`
    - `i ∈ S`: `v[i] / Δ` (because `v[i]` was placed unscaled and CKKS decoding divides by Δ)
-   - `i ≥ λ`: arbitrary (we only check `[0, λ)`).
+   - `i ≥ λ`: 0 (we only check `[0, λ)`).
 
 VAgent retains `(S, seed_F, scale_of_v)` to drive the post-decryption check.
 
@@ -255,8 +260,9 @@ If both pass, the recovered message is `m_recovered = P[j*]`, fed into the verdi
 
 ### Implementation notes
 
-- **Rotations are needed from Phase 1.** `Auth` step 3 calls `Rot(result_ct, j)` for `j ∈ [0, λ) \ S`. Even the Phase-1 synthetic `x²` inference circuit therefore exercises rotation keys: the collaborative `multiparty.GaloisKeyGen` handshake produces Galois keys for indices `1..λ-1` so that `Auth` can run.
-- **Rotation count.** Naïve `Auth` does `λ - |S| = 64` rotations and one addition tree. `Evaluator.InnerSum`-style tree reductions cut this to `O(log λ)` rotations with appropriate Galois-key selection — a Phase-2 optimisation once bench numbers show the cost.
+- **Rotations are needed from Phase 1.** `Auth` step 4 calls `Rot(ct_m, j)` for `j ∈ [0, λ) \ S`. Even the Phase-1 synthetic `x²` inference circuit therefore exercises rotation keys: the collaborative `multiparty.GaloisKeyGen` handshake produces Galois keys for indices `1..λ-1` so that `Auth` can run.
+- **Rotation count.** Naïve `Auth` does one ct × pt mask multiplication and `λ - |S| = 64` rotations followed by an addition tree. `Evaluator.InnerSum`-style tree reductions can cut the rotation count to `O(log λ)` with appropriate Galois-key selection — a Phase-2 optimisation once bench numbers show the cost.
+- **The mask plaintext is reusable.** `pt_one_hot = [1, 0, ..., 0]` at scale 1 is session-independent: encode it once per `verification.Config` (when params are loaded) and reuse across every session's `Auth`.
 - **Phase 4 rotation composition.** In Phases 1–3, VService receives the full Galois key set, so a rotation by any `j` is one ciphertext op. In Phase 4 VService holds only the hierarchical master set — a small set of "atom" rotations such as `{1, 2, 4, 8, 16, 32, 64}` — and arbitrary rotations are realised by **decomposing the shift into atoms and chaining the rotations**. To rotate by 69 with that atom set, VService applies `Rot(·, 64)`, then `Rot(·, 4)`, then `Rot(·, 1)` (since `69 = 64 + 4 + 1`). This trades key-material size on the wire for additional ciphertext rotations during `Auth` — bench impact tracked from Phase 4 onward.
 - **VAgent's own partial-decryption share** is computed from `sk_a` against the same `ct_M` it generated. The two `KeySwitchShare`s aggregate; the key-switch then recovers `P`.
 
