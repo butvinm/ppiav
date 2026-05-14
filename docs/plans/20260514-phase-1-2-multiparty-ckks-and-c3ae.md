@@ -427,14 +427,14 @@ The `models/` Python project therefore reduces to **just the image-preprocessing
 
 This task only validates what the code can verify by itself. End-to-end / Phase-2 walkthroughs are user-driven manual verification (§`Post-Completion`).
 
-- [ ] verify every code-side requirement from Overview is implemented for Phase 1 and Phase 2.
-- [ ] verify Failure-Mode F1 (Ver returns false) is unit-tested in `internal/authenticator` and the orchestrator's tamper case is covered manually.
-- [ ] verify F2 (malformed wire input) is unit-tested where wire types are unmarshalled.
-- [ ] verify F3 / F4a / F4b are documented as either covered (F4b posture test in `runner_test.go`) or deferred (HTTP-only F4a) — leave a TODO in `README.md` linking to DESIGN.md §`Failure modes` for the deferred ones.
-- [ ] run Go test suite: `go test ./...` — all unit suites green, including the orchestrator's full keygen→infer→verify chain at LogN=14.
-- [ ] run Python suites: `cd bench && uv run pytest && uv run ruff check . && uv run mypy bench tests` ; same in `models/`.
-- [ ] run `go vet ./...` and `go build ./...` — confirm no warnings, all binaries compile.
-- [ ] no snapshot bench commit — that's a manual user action when they decide a run is canonical.
+- [x] verify every code-side requirement from Overview is implemented for Phase 1 and Phase 2. Walked `internal/{bench,protocol,authenticator,vservice,vclient,vagent,rservice,orchestrator}` + `cmd/ppiav-cli` + `bench/` + `models/`; every package called for in the Overview / Task 1–15 deliverables is present with the documented surface (multi-party CKKS PK + 2-round RLK + per-rotation Galois, MPD-Auth via `internal/authenticator`, joint decryption via `vclient.PartialDecrypt`/`vagent.FinalizeDecryption`, x² via `vservice.Infer`, Orion C3AE swap via `vservice.NewWithOrion` + manifest source via `protocol.LoadOrionParams`, bench JSON via `internal/bench`, in-process CLI orchestration via `internal/orchestrator` + `cmd/ppiav-cli`).
+- [x] verify Failure-Mode F1 (Ver returns false) is unit-tested in `internal/authenticator` and the orchestrator's tamper case is covered manually. F1 unit coverage lives at `internal/authenticator/authenticator_test.go` `TestVerRejectsTamperedSlot` (line 133, S-slot shifted by 2·ε) and `TestVerRejectsTamperedValueSlot` (line 162, non-S slot shifted by 2·ε). Orchestrator mock-reject is `internal/orchestrator/runner_test.go` `TestRunnerRejectsNegativeLogit` (line 128). End-to-end tamper drill is documented as manual in §Post-Completion of this plan and now also in `README.md` §Failure modes.
+- [x] verify F2 (malformed wire input) is unit-tested where wire types are unmarshalled. F2 is deferred — `internal/protocol/wire_test.go` is t.Skip placeholders pending Phase-3 HTTP transport; Phase-1+2 runs in-process and never marshals wire types. README.md §Failure modes now flags F2 as TODO with a link to DESIGN.md §Failure modes.
+- [x] verify F3 / F4a / F4b are documented as either covered (F4b posture test in `runner_test.go`) or deferred (HTTP-only F4a) — leave a TODO in `README.md` linking to DESIGN.md §`Failure modes` for the deferred ones. README.md gained a Failure modes section enumerating coverage state: F1/F4b covered, F2/F3/F4a deferred to Phase 3.
+- [x] run Go test suite: `go test ./...` — all unit suites green, including the orchestrator's full keygen→infer→verify chain at LogN=14. All 8 packages green with `-count=1`. (Note: `runner_test.go` actually uses LogN=15 not LogN=14 — the 12288-slot image constraint forces it; the plan's LogN=14 claim is wrong in retrospect.)
+- [x] run Python suites: `cd bench && uv run pytest && uv run ruff check . && uv run mypy bench tests` ; same in `models/`. Bench: 9 pytest pass, ruff clean, mypy clean (7 files). Models: 3 pytest pass + 1 xfailed (Orion cross-check intentionally xfail), ruff clean, mypy clean (5 files).
+- [x] run `go vet ./...` and `go build ./...` — confirm no warnings, all binaries compile. Both exit 0 with no output.
+- [x] no snapshot bench commit — that's a manual user action when they decide a run is canonical. Acknowledged; no action taken.
 
 ### Task 17: Update documentation and close out
 

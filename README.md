@@ -70,6 +70,18 @@ go run ./cmd/ppiav-cli e2e \
     --image /tmp/face.bin --n 1
 ```
 
+## Failure modes
+
+Coverage status for the failure-mode taxonomy spelled out in [`docs/DESIGN.md`](docs/DESIGN.md#failure-modes). The Phase-1+2 prototype runs entirely in-process, so anything HTTP-shaped is deferred to Phase 3.
+
+| ID  | Trigger                             | Phase-1+2 coverage                                                                                                                                                                                                                                                                                                                                       |
+| --- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F1  | `Ver` returns false                 | Covered — `internal/authenticator/authenticator_test.go` (`TestVerRejectsTamperedSlot`, `TestVerRejectsTamperedValueSlot`) and orchestrator mock-reject `internal/orchestrator/runner_test.go` (`TestRunnerRejectsNegativeLogit`). Manual end-to-end tamper drill lives in `docs/plans/20260514-phase-1-2-multiparty-ckks-and-c3ae.md` §Post-Completion. |
+| F2  | Malformed wire input                | TODO — deferred to Phase 3. The in-process runner passes wire types by value; no `BinaryMarshaler` path is exercised yet. Round-trip tests under `internal/protocol/wire_test.go` are skipped placeholders.                                                                                                                                              |
+| F3  | Inference error                     | TODO — deferred to Phase 3 (VService is in-process, errors propagate as Go returns; no HTTP transport).                                                                                                                                                                                                                                                  |
+| F4a | VService unreachable, Stage 1 setup | TODO — deferred to Phase 3 (HTTP transport).                                                                                                                                                                                                                                                                                                             |
+| F4b | VService unreachable, Stages 2–3    | Covered — `internal/orchestrator/runner_test.go` (`TestRunnerF4bDenyByDefault`) pins deny-by-default via `rservice.CheckAccess(sid) == VerdictUnknown`.                                                                                                                                                                                                  |
+
 ## Tests
 
 ```sh
