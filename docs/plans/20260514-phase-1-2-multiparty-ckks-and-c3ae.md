@@ -146,11 +146,11 @@ func newSessionCRS(sid SessionID) (*sampling.KeyedPRNG, error) {
 
 Reason this is first: every later task that does crypto work logs samples through `bench.Measure`/`bench.Repeat`. Building it as a leaf with zero dependencies means nothing downstream waits on it.
 
-- [ ] create `internal/bench/bench.go` implementing `Sample`, `Run`, `NewRun`, `(*Run).Append`, `(*Run).WriteJSON`, `Measure`, `MeasureWithSize`, `Repeat`, `RepeatWithWarmup` per DESIGN.md §`internal/bench`. Use `runtime.MemStats` for heap fields, `runtime.GC()` + a steady-state read for stable accounting, `time.Now()` deltas for wall time. Linux-only `VmHWM` parses `/proc/self/status`; non-Linux returns 0.
-- [ ] make `Run.WriteJSON` atomic — write to a `tmp` sibling then rename — so a partially-written file never lands in `results/`.
-- [ ] write table-driven tests for `Measure` (single-shot success + error propagation), `Repeat` (correct `Iter` indexing, propagates errors), `RepeatWithWarmup` (warmup excluded from samples), and `Run.WriteJSON` (round-trips through `encoding/json`).
-- [ ] write a sanity test that `Sample.Wall > 0` for a `time.Sleep(time.Millisecond)` body.
-- [ ] run tests — must pass before Task 2: `go test ./internal/bench/...`
+- [x] create `internal/bench/bench.go` implementing `Sample`, `Run`, `NewRun`, `(*Run).Append`, `(*Run).WriteJSON`, `Measure`, `MeasureWithSize`, `Repeat`, `RepeatWithWarmup` per DESIGN.md §`internal/bench`. Use `runtime.MemStats` for heap fields, `runtime.GC()` + a steady-state read for stable accounting, `time.Now()` deltas for wall time. Linux-only `VmHWM` parses `/proc/self/status`; non-Linux returns 0.
+- [x] make `Run.WriteJSON` atomic — write to a `tmp` sibling then rename — so a partially-written file never lands in `results/`.
+- [x] write table-driven tests for `Measure` (single-shot success + error propagation), `Repeat` (correct `Iter` indexing, propagates errors), `RepeatWithWarmup` (warmup excluded from samples), and `Run.WriteJSON` (round-trips through `encoding/json`).
+- [x] write a sanity test that `Sample.Wall > 0` for a `time.Sleep(time.Millisecond)` body.
+- [x] run tests — must pass before Task 2: `go test ./internal/bench/...`
 
 ### Task 2: `internal/protocol` — domain types, parameter sets, wire messages, CRS
 
