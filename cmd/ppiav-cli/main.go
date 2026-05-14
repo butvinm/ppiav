@@ -25,12 +25,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-)
 
-// imageFloats is the exact image-tensor length consumed by VClient.EncryptImage
-// (3 channels × 64 × 64). The CLI mirrors the constant rather than importing
-// internal/vclient just for one int.
-const imageFloats = 3 * 64 * 64
+	"github.com/butvinm/ppiav/internal/vclient"
+)
 
 // usage prints the top-level help and exits with status 2 (flag convention).
 func usage() {
@@ -125,7 +122,7 @@ func defaultOutPathFor(step, orionDir string) string {
 // internal/vclient.EncryptImage's contract).
 func loadImage(path string) ([]float64, error) {
 	if path == "" {
-		return nil, fmt.Errorf("--image is required (path to a %d-float64 .bin file)", imageFloats)
+		return nil, fmt.Errorf("--image is required (path to a %d-float64 .bin file)", vclient.ImageLen)
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -137,12 +134,12 @@ func loadImage(path string) ([]float64, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stat image %s: %w", path, err)
 	}
-	const wantBytes = imageFloats * 8
+	const wantBytes = vclient.ImageLen * 8
 	if info.Size() != wantBytes {
-		return nil, fmt.Errorf("image %s: size %d bytes, expected %d (%d float64)", path, info.Size(), wantBytes, imageFloats)
+		return nil, fmt.Errorf("image %s: size %d bytes, expected %d (%d float64)", path, info.Size(), wantBytes, vclient.ImageLen)
 	}
 
-	out := make([]float64, imageFloats)
+	out := make([]float64, vclient.ImageLen)
 	if err := binary.Read(f, binary.LittleEndian, out); err != nil {
 		if err == io.EOF || err == io.ErrUnexpectedEOF {
 			return nil, fmt.Errorf("image %s: truncated read", path)

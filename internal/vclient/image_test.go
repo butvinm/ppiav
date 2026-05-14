@@ -14,7 +14,7 @@ import (
 )
 
 // imageParams is the LogN=15 profile used for the image round-trip test:
-// N/2 = 16384 slots ≥ imageLen=12288. The smallParams() LogN=14 profile
+// N/2 = 16384 slots ≥ ImageLen=12288. The smallParams() LogN=14 profile
 // (8192 slots) cannot hold the full image — see docs/DESIGN.md
 // §`internal/vclient`. Length-rejection tests still use smallParams since
 // they bail out before encoding.
@@ -43,8 +43,8 @@ func TestEncryptImageRejectsWrongLength(t *testing.T) {
 	// Even without keygen, length-validation runs first.
 	cases := map[string]int{
 		"empty":     0,
-		"one short": imageLen - 1,
-		"one long":  imageLen + 1,
+		"one short": ImageLen - 1,
+		"one long":  ImageLen + 1,
 	}
 	for name, n := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -59,7 +59,7 @@ func TestEncryptImageRequiresAggregatePK(t *testing.T) {
 	params := smallParams(t)
 	c, err := New(params, protocol.SessionID("img-sid-2"))
 	require.NoError(t, err)
-	input := make([]float64, imageLen)
+	input := make([]float64, ImageLen)
 	// Length is fine but no encryptor is wired yet.
 	_, err = c.EncryptImage(input)
 	require.Error(t, err)
@@ -72,7 +72,7 @@ func TestEncryptImageRoundTripsUnderJointSk(t *testing.T) {
 	stub := newVAgentStub(t, params, protocol.SessionID("img-sid-3"))
 	joint, _, _ := runFullKeygen(t, c, stub)
 
-	input := make([]float64, imageLen)
+	input := make([]float64, ImageLen)
 	for i := range input {
 		input[i] = float64(i%128) / 256.0 // bounded, non-trivial pattern
 	}
@@ -86,11 +86,11 @@ func TestEncryptImageRoundTripsUnderJointSk(t *testing.T) {
 	got := make([]float64, params.CKKS.MaxSlots())
 	require.NoError(t, enc.Decode(dec.DecryptNew(ct), got))
 
-	for i := 0; i < imageLen; i++ {
+	for i := 0; i < ImageLen; i++ {
 		assert.InDelta(t, input[i], got[i], 1e-3, "decrypted slot %d", i)
 	}
 	// Tail must be zero-padded (within CKKS noise tolerance).
-	for i := imageLen; i < params.CKKS.MaxSlots(); i++ {
+	for i := ImageLen; i < params.CKKS.MaxSlots(); i++ {
 		assert.InDelta(t, 0.0, got[i], 1e-3, "padded slot %d", i)
 	}
 }

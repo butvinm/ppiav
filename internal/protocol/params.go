@@ -10,21 +10,32 @@ import (
 	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
 )
 
-// DefaultConfig re-exports the authenticator's defaults so callers building
-// Params manually don't need a second import in the common case.
-func DefaultConfig() authenticator.Config {
-	return authenticator.DefaultConfig()
-}
+// DefaultFloodSigma is the discrete-Gaussian flooding σ applied by VClient
+// during partial decryption (and the value Phase-1 Defaults() / Phase-2
+// LoadOrionParams() both stamp into Params.FloodSigma). See docs/DESIGN.md
+// §`internal/vclient` and `internal/vclient/partial_decrypt.go`.
+var DefaultFloodSigma = math.Exp2(16)
 
 // Params bundles the CKKS parameters, MPD-Auth configuration, and the
 // VClient flooding sigma used during partial decryption.
 //
-// `ExtraRotationIndices` carries rotation labels required by the inference
-// circuit beyond the authenticator's canonical `[1, Lambda)` set. Phase-1
-// callers (`Defaults`) leave it nil; Phase-2 callers (`LoadOrionParams`)
-// populate it from the Orion manifest. `RotationIndices()` returns the
-// sorted union; VClient/VAgent iterate that union when running the
-// collaborative GaloisKeyGen handshake.
+// Rotation labels carry a SIGN: a label `j` (positive or negative) means
+// the keygen handshake must mint a Galois key for element
+// `params.CKKS.GaloisElement(-j)`. The authenticator emits positive labels
+// `j ∈ [1, Lambda)` because Auth's step 4 calls `RotateNew(ct, -j)`
+// (right-rotation by j → `GaloisElement(-j)`). Orion's compiled circuit
+// calls `RotateNew(ct, +k)` for positive `k`, which needs
+// `GaloisElement(+k)`; to make a single keygen path produce that, the
+// Orion loader stores those labels as `-k` so the `GaloisElement(-(-k))`
+// path lands on `GaloisElement(+k)`. Identity (label 0) needs no Galois
+// key — Lattigo short-circuits `Automorphism(galEl=1)` — and is dropped.
+//
+// `ExtraRotationIndices` carries the inference-circuit labels (already in
+// the signed-label convention above) on top of the authenticator's
+// canonical positive set. Phase-1 callers (`Defaults`) leave it nil;
+// Phase-2 callers populate it via `vservice.NewWithOrion`.
+// `RotationIndices()` returns the sorted union; VClient/VAgent iterate
+// that union when running the collaborative GaloisKeyGen handshake.
 //
 // `InputLevel` is the ciphertext level at which `EncryptImage` produces
 // the encrypted input. Phase 1 leaves it zero, which `EncryptImage`
@@ -43,7 +54,8 @@ type Params struct {
 // §`Implementation/Layout`. LogN=16, LogQ=[55]+[40]×15, LogP=[55]×6,
 // LogDefaultScale=40, RingType=Standard. FloodSigma=2^16. No extra
 // rotation indices; `RotationIndices()` returns the canonical
-// `[1, Lambda)` set. InputLevel=0 means "use MaxLevel" downstream.
+// `[1, Lambda)` set. InputLevel=0 makes `EncryptImage` build the
+// plaintext at MaxLevel (no compiled circuit to constrain the budget).
 func Defaults() (Params, error) {
 	logQ := make([]int, 1+15)
 	logQ[0] = 55
@@ -67,14 +79,18 @@ func Defaults() (Params, error) {
 	return Params{
 		CKKS:          params,
 		Authenticator: authenticator.DefaultConfig(),
-		FloodSigma:    math.Exp2(16),
+		FloodSigma:    DefaultFloodSigma,
 	}, nil
 }
 
 // RotationIndices returns the sorted-ascending union of the canonical
 // authenticator rotation set `[1, Lambda)` and any `ExtraRotationIndices`
 // pulled from the inference-circuit manifest. Duplicates are removed.
-// Zero and negative indices are dropped (j=0 is identity / no Galois key).
+// Label 0 (identity) is dropped — Lattigo short-circuits
+// `Automorphism(galEl=1)` so no Galois key is required. Negative labels
+// are kept verbatim: see the `Params` doc for the signed-label convention
+// (Orion stores `-k_orion` so the keygen's `GaloisElement(-label)` lands
+// on `GaloisElement(+k_orion)`).
 //
 // VClient and VAgent iterate this slice in lockstep when running the
 // collaborative GaloisKeyGen handshake; identical inputs guarantee the
@@ -85,7 +101,7 @@ func (p Params) RotationIndices() []int {
 		seen[j] = struct{}{}
 	}
 	for _, j := range p.ExtraRotationIndices {
-		if j <= 0 {
+		if j == 0 {
 			continue
 		}
 		seen[j] = struct{}{}

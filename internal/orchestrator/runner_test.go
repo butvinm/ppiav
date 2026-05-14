@@ -6,6 +6,7 @@ import (
 
 	"github.com/butvinm/ppiav/internal/authenticator"
 	"github.com/butvinm/ppiav/internal/protocol"
+	"github.com/butvinm/ppiav/internal/vclient"
 	"github.com/butvinm/ppiav/internal/vservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -13,11 +14,6 @@ import (
 	"github.com/tuneinsight/lattigo/v6/ring"
 	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
 )
-
-// imageLen mirrors vclient.imageLen (3·64·64). Kept private so the
-// orchestrator tests don't need to import the constant; identical to
-// internal/vclient/image.go.
-const imageLen = 3 * 64 * 64
 
 // testParams builds the orchestrator's unit-test profile.
 //
@@ -51,7 +47,7 @@ func testParams(t *testing.T) protocol.Params {
 // rest zero. Mirrors what models/prepare_samples.py emits, minus the
 // preprocessing pipeline.
 func sampleImage(v float64) []float64 {
-	img := make([]float64, imageLen)
+	img := make([]float64, vclient.ImageLen)
 	img[0] = v
 	return img
 }

@@ -51,7 +51,6 @@ type sessionState struct {
 	// Populated by AggregateGaloisShares — VAgent needs the eval to run
 	// Auth's rotation+sum.
 	rlkAgg *rlwe.RelinearizationKey
-	gks    []*rlwe.GaloisKey
 	eval   *ckks.Evaluator
 
 	// PK protocol stash (between GenPKShare and AggregatePK).

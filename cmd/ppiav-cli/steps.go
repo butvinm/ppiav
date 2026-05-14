@@ -240,7 +240,7 @@ func buildStepSession(params protocol.Params, orionDir string) (*stepSession, er
 // --image flag — what matters there is the protocol mechanics, not the
 // preprocessing pipeline.
 func stepImage() []float64 {
-	img := make([]float64, imageFloats)
+	img := make([]float64, vclient.ImageLen)
 	img[0] = 0.5
 	return img
 }

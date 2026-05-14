@@ -3,7 +3,6 @@ package protocol
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"os"
 
 	"github.com/butvinm/ppiav/internal/authenticator"
@@ -11,32 +10,35 @@ import (
 	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
 )
 
+// orionManifestSchemaVersion is the schema version this loader understands.
+// Bumped together with `orionManifest` when fields are renamed/removed.
+const orionManifestSchemaVersion = 2
+
 // orionManifest mirrors the JSON metadata block Orion emits when it writes
 // a compiled model (see `~/Dev/orion/python/orion-compiler/orion_compiler/
 // compiled_model.py:_build_metadata`). We only decode the fields needed to
-// drive Phase 2 — CKKS parameters, the input level, and the rotation index
-// set. Bootstrap fields and the per-node graph payload are out of scope
-// for `LoadOrionParams`; the Orion Go runtime consumes those at Inference
-// time in Task 14.
+// drive the JSON-fixture loader — CKKS parameters, the input level, and a
+// rotation index set. Bootstrap fields and the per-node graph payload are
+// out of scope here; the production path consumes the `.orion` binary
+// container via `internal/vservice/orion.go::loadOrionModel`, which reads
+// Galois elements directly from `model.ClientParams()` and inverts them.
 //
-// The schema below is a clean subset of Orion's wire format with one
-// deliberate addition: `rotation_indices` carries raw rotation labels
-// (integers in `[1, slots)`), not Galois elements. Orion's manifest stores
-// Galois elements (`5^k mod 2N`); for Task 13 we sidestep the inversion
-// step by having the fixture (and Task 14's loader) materialise raw
-// indices directly. The inversion via
-// `params.SolveDiscreteLogGaloisElement` is a Task-14 concern when reading
-// the actual `.orion` container.
+// The JSON `rotation_indices` field carries raw Orion `k_orion` values —
+// the positive offsets Orion calls `RotateNew(ct, +k_orion)` with. The
+// loader negates them on ingest to fit the signed-label convention
+// documented on `protocol.Params` (so the keygen's `GaloisElement(-label)`
+// lands on `GaloisElement(+k_orion)`).
 type orionManifest struct {
-	Params struct {
+	Version int `json:"version"`
+	Params  struct {
 		LogN            int    `json:"logn"`
 		LogQ            []int  `json:"logq"`
 		LogP            []int  `json:"logp"`
 		LogDefaultScale int    `json:"log_default_scale"`
 		RingType        string `json:"ring_type"`
 	} `json:"params"`
-	InputLevel       int   `json:"input_level"`
-	RotationIndices  []int `json:"rotation_indices"`
+	InputLevel      int   `json:"input_level"`
+	RotationIndices []int `json:"rotation_indices"`
 }
 
 // LoadOrionParams reads an Orion compiled-circuit manifest from disk and
@@ -58,6 +60,12 @@ func LoadOrionParams(manifestPath string) (Params, error) {
 	var m orionManifest
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return Params{}, fmt.Errorf("protocol: parse Orion manifest %q: %w", manifestPath, err)
+	}
+	if m.Version != orionManifestSchemaVersion {
+		return Params{}, fmt.Errorf(
+			"protocol: Orion manifest %q has schema version %d, expected %d",
+			manifestPath, m.Version, orionManifestSchemaVersion,
+		)
 	}
 	if m.Params.LogN <= 0 {
 		return Params{}, fmt.Errorf("protocol: Orion manifest %q has invalid LogN=%d", manifestPath, m.Params.LogN)
@@ -85,21 +93,33 @@ func LoadOrionParams(manifestPath string) (Params, error) {
 		return Params{}, fmt.Errorf("protocol: build CKKS parameters from Orion manifest %q: %w", manifestPath, err)
 	}
 
-	if m.InputLevel < 0 || m.InputLevel > ckksParams.MaxLevel() {
+	if m.InputLevel < 1 || m.InputLevel > ckksParams.MaxLevel() {
+		// InputLevel == 0 would leave the inference circuit with no levels
+		// remaining for multiplication — silently fatal at Forward time.
+		// Phase-1 callers (`Defaults()`) get the "use MaxLevel" behaviour
+		// via the zero-default on the Params struct; an Orion manifest must
+		// commit to a real level.
 		return Params{}, fmt.Errorf(
-			"protocol: Orion manifest %q has InputLevel=%d outside [0, %d]",
+			"protocol: Orion manifest %q has InputLevel=%d outside [1, %d]",
 			manifestPath, m.InputLevel, ckksParams.MaxLevel(),
 		)
 	}
 
-	// Defensive copy so the caller can't mutate the slice we stash on Params.
-	extras := make([]int, len(m.RotationIndices))
-	copy(extras, m.RotationIndices)
+	// Negate raw Orion k values on ingest to fit the signed-label
+	// convention documented on `protocol.Params`. k == 0 (identity) is
+	// dropped — Lattigo short-circuits `Automorphism(galEl=1)`.
+	extras := make([]int, 0, len(m.RotationIndices))
+	for _, k := range m.RotationIndices {
+		if k == 0 {
+			continue
+		}
+		extras = append(extras, -k)
+	}
 
 	return Params{
 		CKKS:                 ckksParams,
 		Authenticator:        authenticator.DefaultConfig(),
-		FloodSigma:           math.Exp2(16),
+		FloodSigma:           DefaultFloodSigma,
 		ExtraRotationIndices: extras,
 		InputLevel:           m.InputLevel,
 	}, nil

@@ -22,8 +22,6 @@ func TestDefaults(t *testing.T) {
 	assert.InDelta(t, math.Exp2(16), params.FloodSigma, 1e-9)
 }
 
-func TestDefaultConfig(t *testing.T) {
-	cfg := DefaultConfig()
-	assert.Equal(t, 128, cfg.Lambda)
-	assert.InDelta(t, math.Exp2(20), cfg.Epsilon, 1e-9)
+func TestDefaultFloodSigma(t *testing.T) {
+	assert.InDelta(t, math.Exp2(16), DefaultFloodSigma, 1e-9)
 }
