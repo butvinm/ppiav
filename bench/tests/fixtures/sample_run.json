@@ -1,6 +1,6 @@
 {
   "name": "e2e",
-  "phase": "phase1",
+  "phase": "phase2",
   "started": "2026-05-14T10:00:00Z",
   "go_version": "go1.23.0",
   "goos": "linux",
@@ -8,7 +8,7 @@
   "num_cpu": 8,
   "metadata": {
     "n": 2,
-    "image": "cmd/ppiav-cli/testdata/synthetic.bin",
+    "image": "./models/out/inputs/sample_0.bin",
     "accepts": 2,
     "rejects": 0,
     "unknowns": 0

@@ -54,10 +54,7 @@ Common flags:
                    (Phase 2; when set, output defaults shift to results/phase2/)
 
 Examples:
-  ppiav-cli e2e --image cmd/ppiav-cli/testdata/synthetic.bin --n 5
-  ppiav-cli e2e --orion ~/Dev/orion/examples/c3ae-demo/out/logn15 \
-                --image ~/Dev/orion/examples/c3ae-demo/out/inputs/sample_test.bin --n 1
-  ppiav-cli keygen --n 5
+  ppiav-cli e2e --orion ./models/out/logn15 --image ./models/out/inputs/sample_0.bin --n 5
 `)
 }
 
