@@ -764,26 +764,36 @@ func New(params protocol.Params) (*Agent, error)
 // Stage 1
 func (a *Agent) OpenSession(sid protocol.SessionID) error
 
-// Stage 2b — pk share exchange
-func (a *Agent) RespondPKShare(
+// Stage 2b — pk share generation + aggregation. Mirrors VClient's
+// GenPKShare / AggregatePK pair; in-process callers (and Phase-3 HTTP
+// handlers) chain Gen → return share to VClient → Aggregate(clientShare).
+func (a *Agent) GenPKShare(sid protocol.SessionID) (multiparty.PublicKeyGenShare, error)
+func (a *Agent) AggregatePK(
     sid protocol.SessionID,
     clientShare multiparty.PublicKeyGenShare,
-) (multiparty.PublicKeyGenShare, error)
+) error
 
-// Stage 2c — rlk share exchange, two rounds
-func (a *Agent) RespondRLKRound1(
+// Stage 2c — rlk share generation + aggregation, two rounds. Round 2's
+// agent share is generated for symmetry but does not cross the wire —
+// VClient does not retain rlk.
+func (a *Agent) GenRLKShareRound1(sid protocol.SessionID) (multiparty.RelinearizationKeyGenShare, error)
+func (a *Agent) AggregateRLKRound1(
     sid protocol.SessionID,
     clientShare multiparty.RelinearizationKeyGenShare,
-) (multiparty.RelinearizationKeyGenShare, error)
-func (a *Agent) RespondRLKRound2(
+) error
+func (a *Agent) GenRLKShareRound2(sid protocol.SessionID) (multiparty.RelinearizationKeyGenShare, error)
+func (a *Agent) AggregateRLKRound2(
     sid protocol.SessionID,
     clientShare multiparty.RelinearizationKeyGenShare,
 ) error
 
-// Stage 2d — Galois-key share exchange and aggregation. Phase 1–3 emits one
-// share per rotation; Phase 4 collapses to a single gks_master share and the
-// return shape switches to lattigohierkeys.MasterKey.
-func (a *Agent) RespondGaloisShares(
+// Stage 2d — Galois-key share generation + aggregation. Phase 1–3 emits
+// one share per rotation; Phase 4 collapses to a single gks_master share
+// and the return shape switches to lattigohierkeys.MasterKey.
+// AggregateGaloisShares finalises rlk + gks and primes the session
+// evaluator, so its return covers both keys that VService needs.
+func (a *Agent) GenGaloisShares(sid protocol.SessionID) ([]multiparty.GaloisKeyGenShare, error)
+func (a *Agent) AggregateGaloisShares(
     sid protocol.SessionID,
     clientShares []multiparty.GaloisKeyGenShare,
 ) (rlk *rlwe.RelinearizationKey, gks *rlwe.GaloisKeySet, err error)
@@ -802,7 +812,7 @@ func (a *Agent) FinalizeDecryption(
 ) (protocol.Verdict, error)
 ```
 
-`OpenSession(sid)` registers the sid that VService allocated, calls `authenticator.KeyGen` to mint the session's `authKey`, and primes the session state for keygen. The pk/rlk/Galois responders all draw fresh shares with the session-scoped CRS, aggregate with the client's, and persist the running aggregates. `BuildAuthenticatedCt` calls `Agent.auth.Auth(authKey, …, result_ct)`. `FinalizeDecryption` combines VClient's `KeySwitchShare` with VAgent's own share (computed from `sk_a` against the authenticated ciphertext), applies the key-switch to recover the plaintext result vector, calls `Agent.auth.Ver(authKey, plaintext)`, and — if it passes — returns `Accept` iff the recovered `m > 0`, else `Reject`. `authKey` single-use is a VAgent-level invariant: the session entry (including `authKey`) is dropped after `FinalizeDecryption` returns.
+`OpenSession(sid)` registers the sid that VService allocated, calls `authenticator.KeyGen` to mint the session's `authKey`, and primes the session state for keygen. The `Gen*Share` methods draw fresh shares with the session-scoped CRS (canonical CRP order per §`internal/protocol`); the matching `Aggregate*` methods fold the client's share into the running aggregate and persist it. `BuildAuthenticatedCt` calls `Agent.auth.Auth(authKey, …, result_ct)`. `FinalizeDecryption` combines VClient's `KeySwitchShare` with VAgent's own share (computed from `sk_a` against the authenticated ciphertext), applies the key-switch to recover the plaintext result vector, calls `Agent.auth.Ver(authKey, plaintext)`, and — if it passes — returns `Accept` iff the recovered `m > 0`, else `Reject`. `authKey` single-use is a VAgent-level invariant: the session entry (including `authKey`) is dropped after `FinalizeDecryption` returns.
 
 #### `internal/rservice`
 
