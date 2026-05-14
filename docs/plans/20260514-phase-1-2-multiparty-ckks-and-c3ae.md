@@ -346,7 +346,7 @@ The orchestrator is the in-process glue that the CLI in Task 9 wraps. Putting it
 
 Phase-1 acceptance (running the CLI end-to-end, inspecting JSON output, comparing bench tables, validating README quick-start) is **manual** — see §`Post-Completion`. Task number kept as a placeholder so downstream forward references ("before Task 12") stay valid; no implementation deliverable.
 
-- [ ] (no automated steps) — proceed directly to Task 12.
+- [x] (no automated steps) — proceed directly to Task 12.
 
 ### Task 12: `models/` Python uv project — image preprocessing only (reuse Orion's C3AE)
 
