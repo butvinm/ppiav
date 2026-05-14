@@ -10,14 +10,14 @@ Companion thesis context lives at `~/Dev/ITMO/thesis/`.
 
 ## Status
 
-Early scaffolding. No code yet. Design captured in `docs/DESIGN.md`.
+Phase 1 (multi-party CKKS + synthetic `x²` + MPD-Auth) and Phase 2 (Orion-compiled C3AE inference) complete. An in-process orchestrator (`internal/orchestrator`) drives the full §3 protocol via `cmd/ppiav-cli`, emitting per-stage benchmark JSON consumed by the Python `bench/` project. Phase 3 (HTTP services + browser SPAs) and Phase 4 (lattigo-hierkeys) are outstanding.
 
 ## Implementation Phases
 
-1. **Phase 1**: Synthetic CKKS circuit (`x²`), CLI + benchmark harness, no model, no Orion. Goal: scaffolding, abstractions, baseline bench numbers.
-2. **Phase 2**: Orion-compiled C3AE inference. `models/` Python pipeline (training + compilation).
-3. **Phase 3**: Verification Service / Verification Agent / Resource Service Go HTTP services + browser SPAs (vanilla JS + WASM, copy of Orion's `js/lattigo`).
-4. **Phase 4**: lattigo-hierkeys for compressed key transmission.
+1. **Phase 1** — done. Synthetic CKKS circuit (`x²`), in-process protocol with collaborative keygen + MPD-Auth + joint decryption, CLI + benchmark harness, no model, no Orion.
+2. **Phase 2** — done. Orion-compiled C3AE inference swaps in for `x²` when the CLI is pointed at an Orion build directory via `--orion`. `models/` Python project owns the image-preprocessing pipeline (training/compilation reused from Orion's reference artifacts).
+3. **Phase 3** — pending. Verification Service / Verification Agent / Resource Service Go HTTP services + browser SPAs (vanilla JS + WASM, copy of Orion's `js/lattigo`).
+4. **Phase 4** — pending. lattigo-hierkeys for compressed key transmission.
 
 ## Code conventions
 

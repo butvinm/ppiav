@@ -438,11 +438,11 @@ This task only validates what the code can verify by itself. End-to-end / Phase-
 
 ### Task 17: Update documentation and close out
 
-- [ ] update `CLAUDE.md` "Status" line to reflect Phase 1+2 completion.
-- [ ] update `CLAUDE.md` Implementation Phases checklist if it tracks phase status.
-- [ ] confirm `README.md` accurately documents what works.
-- [ ] move this plan to `docs/plans/completed/` (run `mkdir -p docs/plans/completed`).
-- [ ] commit the move atomically as a separate commit.
+- [x] update `CLAUDE.md` "Status" line to reflect Phase 1+2 completion.
+- [x] update `CLAUDE.md` Implementation Phases checklist if it tracks phase status.
+- [x] confirm `README.md` accurately documents what works. Fixed three inaccuracies: (a) removed the `go test -tags=integration ./...` block — no integration build tag exists (Task 8 explicitly defers e2e to manual verification); (b) removed the `go test -tags=noise ./internal/protocol/...` block — Phase-5 deferral per DESIGN.md §`ε and σ_flood`; (c) corrected the repo-layout package list from `{protocol, ckks, vclient, vagent, vservice, rservice, bench}` (`internal/ckks` does not exist) to `{protocol, authenticator, vclient, vagent, vservice, rservice, orchestrator, bench}` matching what's actually on disk. Added the `models/` Python suite to the test commands. Re-pointed two plan-file references to the new `docs/plans/completed/` location.
+- [x] move this plan to `docs/plans/completed/` (run `mkdir -p docs/plans/completed`).
+- [x] commit the move atomically as a separate commit.
 
 ---
 

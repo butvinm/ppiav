@@ -31,7 +31,7 @@ cd bench && uv run python -m bench.plot ../results/phase1
 
 ## Quick start — Phase 2 (Orion-compiled C3AE)
 
-Phase 2 requires Orion's compiled C3AE model. The plan references `logn16` as canonical, but only `logn15/model.orion` is materialised on disk today — use `logn15` until a `logn16` build lands. See `docs/plans/20260514-phase-1-2-multiparty-ckks-and-c3ae.md` §Task 14 for the deviation note.
+Phase 2 requires Orion's compiled C3AE model. The plan references `logn16` as canonical, but only `logn15/model.orion` is materialised on disk today — use `logn15` until a `logn16` build lands. See `docs/plans/completed/20260514-phase-1-2-multiparty-ckks-and-c3ae.md` §Task 14 for the deviation note.
 
 ```sh
 # Prerequisite: confirm Orion's compiled model + reference input exist.
@@ -74,31 +74,30 @@ go run ./cmd/ppiav-cli e2e \
 
 Coverage status for the failure-mode taxonomy spelled out in [`docs/DESIGN.md`](docs/DESIGN.md#failure-modes). The Phase-1+2 prototype runs entirely in-process, so anything HTTP-shaped is deferred to Phase 3.
 
-| ID  | Trigger                             | Phase-1+2 coverage                                                                                                                                                                                                                                                                                                                                       |
-| --- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| F1  | `Ver` returns false                 | Covered — `internal/authenticator/authenticator_test.go` (`TestVerRejectsTamperedSlot`, `TestVerRejectsTamperedValueSlot`) and orchestrator mock-reject `internal/orchestrator/runner_test.go` (`TestRunnerRejectsNegativeLogit`). Manual end-to-end tamper drill lives in `docs/plans/20260514-phase-1-2-multiparty-ckks-and-c3ae.md` §Post-Completion. |
-| F2  | Malformed wire input                | TODO — deferred to Phase 3. The in-process runner passes wire types by value; no `BinaryMarshaler` path is exercised yet. Round-trip tests under `internal/protocol/wire_test.go` are skipped placeholders.                                                                                                                                              |
-| F3  | Inference error                     | TODO — deferred to Phase 3 (VService is in-process, errors propagate as Go returns; no HTTP transport).                                                                                                                                                                                                                                                  |
-| F4a | VService unreachable, Stage 1 setup | TODO — deferred to Phase 3 (HTTP transport).                                                                                                                                                                                                                                                                                                             |
-| F4b | VService unreachable, Stages 2–3    | Covered — `internal/orchestrator/runner_test.go` (`TestRunnerF4bDenyByDefault`) pins deny-by-default via `rservice.CheckAccess(sid) == VerdictUnknown`.                                                                                                                                                                                                  |
+| ID  | Trigger                             | Phase-1+2 coverage                                                                                                                                                                                                                                                                                                                                                 |
+| --- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| F1  | `Ver` returns false                 | Covered — `internal/authenticator/authenticator_test.go` (`TestVerRejectsTamperedSlot`, `TestVerRejectsTamperedValueSlot`) and orchestrator mock-reject `internal/orchestrator/runner_test.go` (`TestRunnerRejectsNegativeLogit`). Manual end-to-end tamper drill lives in `docs/plans/completed/20260514-phase-1-2-multiparty-ckks-and-c3ae.md` §Post-Completion. |
+| F2  | Malformed wire input                | TODO — deferred to Phase 3. The in-process runner passes wire types by value; no `BinaryMarshaler` path is exercised yet. Round-trip tests under `internal/protocol/wire_test.go` are skipped placeholders.                                                                                                                                                        |
+| F3  | Inference error                     | TODO — deferred to Phase 3 (VService is in-process, errors propagate as Go returns; no HTTP transport).                                                                                                                                                                                                                                                            |
+| F4a | VService unreachable, Stage 1 setup | TODO — deferred to Phase 3 (HTTP transport).                                                                                                                                                                                                                                                                                                                       |
+| F4b | VService unreachable, Stages 2–3    | Covered — `internal/orchestrator/runner_test.go` (`TestRunnerF4bDenyByDefault`) pins deny-by-default via `rservice.CheckAccess(sid) == VerdictUnknown`.                                                                                                                                                                                                            |
 
 ## Tests
 
 ```sh
-# Default unit suite — fast.
+# Go unit suite — fast. Covers every internal package including the
+# in-process orchestrator's keygen → infer → verify chain.
 go test ./...
 
-# Integration suite — full §3 protocol e2e in one test.
-go test -tags=integration ./...
-
-# Noise-budget validation — slow (~90s, 100 keygens).
-# Load-bearing for DESIGN.md §3.6 forge bound.
-go test -tags=noise ./internal/protocol/...
-
-# Python suite.
+# Python suite — bench/ post-processing.
 cd bench && uv run pytest && uv run ruff check . && uv run mypy bench tests
+
+# Python suite — models/ preprocessing pipeline.
+cd models && uv run pytest && uv run ruff check . && uv run mypy models tests
 ```
+
+End-to-end runs against full `LogN=16` parameters and the Phase-2 Orion path are **manual verification** — see `docs/plans/completed/20260514-phase-1-2-multiparty-ckks-and-c3ae.md` §Post-Completion for the acceptance walkthrough. Noise / σ-calibration is deferred to Phase 5 per `docs/DESIGN.md` §`ε and σ_flood`.
 
 ## Repo layout
 
-See `docs/DESIGN.md` §7. Phase 1 implements `internal/{protocol, ckks, vclient, vagent, vservice, rservice, bench}`, `cmd/ppiav-cli`, and `bench/`. Phases 2–4 are deferred (see `docs/DESIGN.md` §4).
+See `docs/DESIGN.md` §7. Phase 1+2 implement `internal/{protocol, authenticator, vclient, vagent, vservice, rservice, orchestrator, bench}`, `cmd/ppiav-cli`, the Python `bench/` post-processing project, and the Python `models/` preprocessing project. Phases 3–4 are deferred (see `docs/DESIGN.md` §4).
