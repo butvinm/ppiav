@@ -17,14 +17,16 @@ import (
 
 // stepCommonFlags is the flag set shared by all per-step subcommands.
 type stepCommonFlags struct {
-	n   *int
-	out *string
+	n     *int
+	out   *string
+	orion *string
 }
 
 func registerCommonFlags(fs *flag.FlagSet, defaultOut string) stepCommonFlags {
 	return stepCommonFlags{
-		n:   fs.Int("n", 1, "measured iteration count"),
-		out: fs.String("out", "", "output JSON path (default "+defaultOut+")"),
+		n:     fs.Int("n", 1, "measured iteration count"),
+		out:   fs.String("out", "", "output JSON path (default "+defaultOut+")"),
+		orion: fs.String("orion", "", "directory holding a compiled Orion model.orion (Phase 2)"),
 	}
 }
 
@@ -36,30 +38,48 @@ func (f stepCommonFlags) resolveOut(defaultOut string) string {
 	return defaultOut
 }
 
+// phaseTag returns "phase2" when --orion is set, "phase1" otherwise.
+// Used as both the bench-run tag and the output directory selector.
+func (f stepCommonFlags) phaseTag() string {
+	if *f.orion != "" {
+		return "phase2"
+	}
+	return "phase1"
+}
+
 // runKeygen drives only Stage 2 (collaborative keygen) with a FRESH sid per
 // iteration. Each iteration runs Open + Setup against new VClient/VAgent
 // state, so the bench captures the full collaborative-keygen cost.
 func runKeygen(argv []string) error {
 	fs := flag.NewFlagSet("keygen", flag.ContinueOnError)
-	common := registerCommonFlags(fs, defaultOutPath("keygen"))
+	common := registerCommonFlags(fs, defaultOutPathFor("keygen", ""))
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}
 	if *common.n <= 0 {
 		return fmt.Errorf("keygen: --n must be > 0")
 	}
-	out := common.resolveOut(defaultOutPath("keygen"))
+	out := common.resolveOut(defaultOutPathFor("keygen", *common.orion))
 
 	params, err := protocol.Defaults()
 	if err != nil {
 		return fmt.Errorf("keygen: build params: %w", err)
 	}
 
-	run := bench.NewRun("keygen", "phase1")
+	run := bench.NewRun("keygen", common.phaseTag())
 	run.Metadata["n"] = *common.n
+	if *common.orion != "" {
+		run.Metadata["orion"] = *common.orion
+	}
 
 	for iter := 0; iter < *common.n; iter++ {
-		r, err := orchestrator.NewRunner(params)
+		var r *orchestrator.Runner
+		var err error
+		if *common.orion != "" {
+			r, err = orchestrator.NewRunnerWithOrion(params, *common.orion)
+		} else {
+			r, err = orchestrator.NewRunner(params)
+		}
 		if err != nil {
 			return fmt.Errorf("keygen iter %d: new runner: %w", iter, err)
 		}
@@ -109,8 +129,24 @@ type stepSession struct {
 // PK / RLK / Galois handshake symmetrically across VClient and VAgent, and
 // hands the aggregated rlk+gks to VService. The returned stepSession is
 // ready for image encryption, inference, Auth, and joint decryption.
-func buildStepSession(params protocol.Params) (*stepSession, error) {
-	vsvc := vservice.New(params)
+//
+// When `orionDir` is non-empty the VService is built via
+// `vservice.NewWithOrion`, which overrides the CKKS knobs / input level /
+// rotation set on `params` with the values declared by the compiled
+// Orion model. VAgent and VClient are then built against the
+// post-override params so all three agree on the same profile.
+func buildStepSession(params protocol.Params, orionDir string) (*stepSession, error) {
+	var vsvc *vservice.Service
+	if orionDir != "" {
+		var err error
+		vsvc, err = vservice.NewWithOrion(params, orionDir)
+		if err != nil {
+			return nil, fmt.Errorf("build VService with Orion: %w", err)
+		}
+		params = vsvc.Params()
+	} else {
+		vsvc = vservice.New(params)
+	}
 	agent, err := vagent.New(params)
 	if err != nil {
 		return nil, fmt.Errorf("build VAgent: %w", err)
@@ -213,7 +249,7 @@ func stepImage() []float64 {
 // `--n` times on the same image.
 func runEncryptImage(argv []string) error {
 	fs := flag.NewFlagSet("encrypt-image", flag.ContinueOnError)
-	common := registerCommonFlags(fs, defaultOutPath("encrypt-image"))
+	common := registerCommonFlags(fs, defaultOutPathFor("encrypt-image", ""))
 	imagePath := fs.String("image", "", "path to a 12288-float64 .bin image (required)")
 	if err := fs.Parse(argv); err != nil {
 		return err
@@ -221,7 +257,7 @@ func runEncryptImage(argv []string) error {
 	if *common.n <= 0 {
 		return fmt.Errorf("encrypt-image: --n must be > 0")
 	}
-	out := common.resolveOut(defaultOutPath("encrypt-image"))
+	out := common.resolveOut(defaultOutPathFor("encrypt-image", *common.orion))
 
 	image, err := loadImage(*imagePath)
 	if err != nil {
@@ -232,14 +268,17 @@ func runEncryptImage(argv []string) error {
 	if err != nil {
 		return fmt.Errorf("encrypt-image: build params: %w", err)
 	}
-	sess, err := buildStepSession(params)
+	sess, err := buildStepSession(params, *common.orion)
 	if err != nil {
 		return fmt.Errorf("encrypt-image: setup: %w", err)
 	}
 
-	run := bench.NewRun("encrypt-image", "phase1")
+	run := bench.NewRun("encrypt-image", common.phaseTag())
 	run.Metadata["n"] = *common.n
 	run.Metadata["image"] = *imagePath
+	if *common.orion != "" {
+		run.Metadata["orion"] = *common.orion
+	}
 
 	samples, err := bench.Repeat(*common.n, "encrypt-image", func() error {
 		_, e := sess.vclient.EncryptImage(image)
@@ -261,7 +300,7 @@ func runEncryptImage(argv []string) error {
 // `--n` times on the same inputCt.
 func runInfer(argv []string) error {
 	fs := flag.NewFlagSet("infer", flag.ContinueOnError)
-	common := registerCommonFlags(fs, defaultOutPath("infer"))
+	common := registerCommonFlags(fs, defaultOutPathFor("infer", ""))
 	imagePath := fs.String("image", "", "path to a 12288-float64 .bin image (optional; defaults to synthetic)")
 	if err := fs.Parse(argv); err != nil {
 		return err
@@ -269,7 +308,7 @@ func runInfer(argv []string) error {
 	if *common.n <= 0 {
 		return fmt.Errorf("infer: --n must be > 0")
 	}
-	out := common.resolveOut(defaultOutPath("infer"))
+	out := common.resolveOut(defaultOutPathFor("infer", *common.orion))
 
 	var image []float64
 	if *imagePath != "" {
@@ -286,7 +325,7 @@ func runInfer(argv []string) error {
 	if err != nil {
 		return fmt.Errorf("infer: build params: %w", err)
 	}
-	sess, err := buildStepSession(params)
+	sess, err := buildStepSession(params, *common.orion)
 	if err != nil {
 		return fmt.Errorf("infer: setup: %w", err)
 	}
@@ -295,8 +334,11 @@ func runInfer(argv []string) error {
 		return fmt.Errorf("infer: EncryptImage: %w", err)
 	}
 
-	run := bench.NewRun("infer", "phase1")
+	run := bench.NewRun("infer", common.phaseTag())
 	run.Metadata["n"] = *common.n
+	if *common.orion != "" {
+		run.Metadata["orion"] = *common.orion
+	}
 
 	samples, err := bench.Repeat(*common.n, "infer", func() error {
 		_, e := sess.vsvc.Infer(sess.sid, inputCt)
@@ -318,20 +360,20 @@ func runInfer(argv []string) error {
 // VAgent.BuildAuthenticatedCt `--n` times on the same resultCt.
 func runMAC(argv []string) error {
 	fs := flag.NewFlagSet("mac", flag.ContinueOnError)
-	common := registerCommonFlags(fs, defaultOutPath("mac"))
+	common := registerCommonFlags(fs, defaultOutPathFor("mac", ""))
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}
 	if *common.n <= 0 {
 		return fmt.Errorf("mac: --n must be > 0")
 	}
-	out := common.resolveOut(defaultOutPath("mac"))
+	out := common.resolveOut(defaultOutPathFor("mac", *common.orion))
 
 	params, err := protocol.Defaults()
 	if err != nil {
 		return fmt.Errorf("mac: build params: %w", err)
 	}
-	sess, err := buildStepSession(params)
+	sess, err := buildStepSession(params, *common.orion)
 	if err != nil {
 		return fmt.Errorf("mac: setup: %w", err)
 	}
@@ -344,8 +386,11 @@ func runMAC(argv []string) error {
 		return fmt.Errorf("mac: Infer: %w", err)
 	}
 
-	run := bench.NewRun("mac", "phase1")
+	run := bench.NewRun("mac", common.phaseTag())
 	run.Metadata["n"] = *common.n
+	if *common.orion != "" {
+		run.Metadata["orion"] = *common.orion
+	}
 
 	samples, err := bench.Repeat(*common.n, "mac", func() error {
 		_, e := sess.vagent.BuildAuthenticatedCt(sess.sid, resultCt)
@@ -371,28 +416,31 @@ func runMAC(argv []string) error {
 // key-switch + decrypt + Ver cost, not the keygen + Auth setup cost.
 func runDecryptResult(argv []string) error {
 	fs := flag.NewFlagSet("decrypt-result", flag.ContinueOnError)
-	common := registerCommonFlags(fs, defaultOutPath("decrypt-result"))
+	common := registerCommonFlags(fs, defaultOutPathFor("decrypt-result", ""))
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}
 	if *common.n <= 0 {
 		return fmt.Errorf("decrypt-result: --n must be > 0")
 	}
-	out := common.resolveOut(defaultOutPath("decrypt-result"))
+	out := common.resolveOut(defaultOutPathFor("decrypt-result", *common.orion))
 
 	params, err := protocol.Defaults()
 	if err != nil {
 		return fmt.Errorf("decrypt-result: build params: %w", err)
 	}
 
-	run := bench.NewRun("decrypt-result", "phase1")
+	run := bench.NewRun("decrypt-result", common.phaseTag())
 	run.Metadata["n"] = *common.n
+	if *common.orion != "" {
+		run.Metadata["orion"] = *common.orion
+	}
 
 	for iter := 0; iter < *common.n; iter++ {
 		// Outside the measured block: build a fresh authenticated ciphertext
 		// for this iteration. FinalizeDecryption is single-use (drops the
 		// session) so we cannot reuse a single authCt across iterations.
-		sess, err := buildStepSession(params)
+		sess, err := buildStepSession(params, *common.orion)
 		if err != nil {
 			return fmt.Errorf("decrypt-result iter %d: setup: %w", iter, err)
 		}
@@ -437,18 +485,29 @@ func runDecryptResult(argv []string) error {
 // runs Ver `--n` times. Each iteration is a pure CPU step — no FHE.
 func runVerifyMAC(argv []string) error {
 	fs := flag.NewFlagSet("verify-mac", flag.ContinueOnError)
-	common := registerCommonFlags(fs, defaultOutPath("verify-mac"))
+	common := registerCommonFlags(fs, defaultOutPathFor("verify-mac", ""))
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}
 	if *common.n <= 0 {
 		return fmt.Errorf("verify-mac: --n must be > 0")
 	}
-	out := common.resolveOut(defaultOutPath("verify-mac"))
+	out := common.resolveOut(defaultOutPathFor("verify-mac", *common.orion))
 
 	params, err := protocol.Defaults()
 	if err != nil {
 		return fmt.Errorf("verify-mac: build params: %w", err)
+	}
+	// Phase-2 path: load the Orion model so verify-mac runs at the same
+	// CKKS profile (Δ, slot count) that the inference circuit actually
+	// emits. verify-mac is pure CPU, so we discard the model after pulling
+	// its params via VService.Params().
+	if *common.orion != "" {
+		svc, err := vservice.NewWithOrion(params, *common.orion)
+		if err != nil {
+			return fmt.Errorf("verify-mac: load Orion params: %w", err)
+		}
+		params = svc.Params()
 	}
 	auth, err := authenticator.New(params.Authenticator, params.CKKS)
 	if err != nil {
@@ -485,8 +544,11 @@ func runVerifyMAC(argv []string) error {
 		}
 	}
 
-	run := bench.NewRun("verify-mac", "phase1")
+	run := bench.NewRun("verify-mac", common.phaseTag())
 	run.Metadata["n"] = *common.n
+	if *common.orion != "" {
+		run.Metadata["orion"] = *common.orion
+	}
 
 	samples, err := bench.Repeat(*common.n, "verify-mac", func() error {
 		_, ok := auth.Ver(key, plaintext)

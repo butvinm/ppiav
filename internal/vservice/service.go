@@ -13,6 +13,8 @@ import (
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
+
+	orioneval "github.com/butvinm/orion/v2/evaluator"
 )
 
 // sidEntropyBytes is the byte length drawn for each session id. 16 bytes
@@ -20,25 +22,80 @@ import (
 // docs/DESIGN.md §`internal/vservice`).
 const sidEntropyBytes = 16
 
+// sessionState carries per-session evaluator handles. Exactly one of
+// `eval` (Phase-1 x² path) or `orionEval` (Phase-2 Orion path) is non-nil
+// after `StoreEvalKeys`; which one is decided by whether the parent
+// `Service` was built with `New` or `NewWithOrion`.
+//
+// `*ckks.Evaluator` is concurrency-safe (Lattigo v6.2.0). The Orion
+// `*evaluator.Evaluator` is NOT goroutine-safe (Orion doc.go); each
+// session therefore owns its own instance.
 type sessionState struct {
-	eval *ckks.Evaluator
+	eval      *ckks.Evaluator
+	orionEval *orioneval.Evaluator
 }
 
 // Service is the FHE inference engine. The evaluator for each session is
 // built lazily by StoreEvalKeys; OpenSession only reserves the slot.
+//
+// When `orionModel` is non-nil the Service runs in Phase-2 mode: each
+// session builds an `orioneval.Evaluator` from its aggregated rlk+gks and
+// `Infer` calls `Forward` on the shared (goroutine-safe) Model. Otherwise
+// the Service runs the Phase-1 synthetic `x²` circuit against the
+// session's `*ckks.Evaluator`.
 type Service struct {
-	params   protocol.Params
-	sessions map[protocol.SessionID]*sessionState
-	mu       sync.Mutex
+	params     protocol.Params
+	orionModel *orioneval.Model
+	sessions   map[protocol.SessionID]*sessionState
+	mu         sync.Mutex
 }
 
-// New constructs a Service with the given protocol parameters. The
-// session map starts empty.
+// New constructs a Phase-1 Service that runs the synthetic `x²` circuit.
+// The session map starts empty.
 func New(params protocol.Params) *Service {
 	return &Service{
 		params:   params,
 		sessions: map[protocol.SessionID]*sessionState{},
 	}
+}
+
+// NewWithOrion constructs a Phase-2 Service that runs the compiled Orion
+// circuit at `<orionDir>/model.orion`. The model is loaded once at
+// construction; the returned Service overrides `params.CKKS` and
+// `params.InputLevel` with the model's `ClientParams()` so callers
+// downstream (VAgent, VClient) MUST consume `Service.Params()` rather
+// than reusing the params they passed in.
+//
+// `params.Authenticator` and `params.FloodSigma` are kept verbatim — the
+// authenticator config is independent of the inference circuit. The
+// rotation indices declared by the manifest are unioned into
+// `params.ExtraRotationIndices` so the collaborative GaloisKeyGen
+// handshake covers both the authenticator's `[1, Lambda)` set and any
+// rotations the circuit needs.
+func NewWithOrion(params protocol.Params, orionDir string) (*Service, error) {
+	model, ckksParams, inputLevel, rotations, err := loadOrionModel(orionDir)
+	if err != nil {
+		return nil, err
+	}
+
+	merged := params
+	merged.CKKS = ckksParams
+	merged.InputLevel = inputLevel
+	// Defensive copy: appending to merged.ExtraRotationIndices must not
+	// mutate the caller's slice (params is passed by value but the
+	// underlying array is shared).
+	if len(params.ExtraRotationIndices) > 0 || len(rotations) > 0 {
+		combined := make([]int, 0, len(params.ExtraRotationIndices)+len(rotations))
+		combined = append(combined, params.ExtraRotationIndices...)
+		combined = append(combined, rotations...)
+		merged.ExtraRotationIndices = combined
+	}
+
+	return &Service{
+		params:     merged,
+		orionModel: model,
+		sessions:   map[protocol.SessionID]*sessionState{},
+	}, nil
 }
 
 // Params returns the bundled protocol parameters.
@@ -81,6 +138,16 @@ func (s *Service) StoreEvalKeys(
 		return fmt.Errorf("vservice: unknown session id %q", sid)
 	}
 	evk := rlwe.NewMemEvaluationKeySet(rlk, gks...)
+	if s.orionModel != nil {
+		// Phase-2 path: per-session Orion Evaluator. The model is shared.
+		// C3AE does not bootstrap, so btpKeys is nil.
+		oe, err := orioneval.NewEvaluatorFromKeySet(s.params.CKKS, evk, nil)
+		if err != nil {
+			return fmt.Errorf("vservice: build Orion evaluator: %w", err)
+		}
+		sess.orionEval = oe
+		return nil
+	}
 	sess.eval = ckks.NewEvaluator(s.params.CKKS, evk)
 	return nil
 }

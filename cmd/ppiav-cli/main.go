@@ -50,12 +50,16 @@ Subcommands:
 
 Common flags:
   --n int          measured iteration count (default 1)
-  --out string     output JSON path (default results/phase1/<step>.json)
+  --out string     output JSON path (default results/phaseN/<step>.json)
   --image string   path to a 12288-float64 .bin file
                    (required for: e2e, encrypt-image)
+  --orion string   directory containing a compiled Orion model.orion
+                   (Phase 2; when set, output defaults shift to results/phase2/)
 
 Examples:
   ppiav-cli e2e --image cmd/ppiav-cli/testdata/synthetic.bin --n 5
+  ppiav-cli e2e --orion ~/Dev/orion/examples/c3ae-demo/out/logn15 \
+                --image ~/Dev/orion/examples/c3ae-demo/out/inputs/sample_test.bin --n 1
   ppiav-cli keygen --n 5
 `)
 }
@@ -103,6 +107,16 @@ func main() {
 
 // defaultOutPath builds `results/phase1/<step>.json` when --out is empty.
 func defaultOutPath(step string) string {
+	return filepath.Join("results", "phase1", step+".json")
+}
+
+// defaultOutPathFor builds `results/phase{1,2}/<step>.json` depending on
+// whether `--orion` was supplied. Centralising the phase tag keeps the
+// per-step subcommands in lockstep with `e2e`.
+func defaultOutPathFor(step, orionDir string) string {
+	if orionDir != "" {
+		return filepath.Join("results", "phase2", step+".json")
+	}
 	return filepath.Join("results", "phase1", step+".json")
 }
 

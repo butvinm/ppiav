@@ -363,7 +363,7 @@ Phase-1 acceptance (running the CLI end-to-end, inspecting JSON output, comparin
 **Training is out of scope** — the user wants to skip C3AE training and the VPS that would have hosted it. We reuse Orion's already-trained checkpoint and pre-compiled circuit:
 
 - Trained checkpoint: `~/Dev/orion/examples/c3ae-demo/out/weights_fhe.pth`
-- Compiled circuit (LogN=16): `~/Dev/orion/examples/c3ae-demo/out/logn16/`
+- Compiled circuit (LogN=16): `~/Dev/orion/examples/c3ae-demo/out/logn16/` ⚠️ Task 14 finding: on disk this directory currently only holds `compile.json` + `keys/`. The actual `.orion` model the Phase-2 Go path consumes lives at `~/Dev/orion/examples/c3ae-demo/out/logn15/model.orion` (LogN=15). Until a logn16 build is materialised, point `--orion` at the `logn15` directory.
 - Reference input: `~/Dev/orion/examples/c3ae-demo/out/inputs/sample_test.bin`
 - Test images: `~/Dev/orion/examples/c3ae-demo/data/samples/`
 
@@ -402,12 +402,12 @@ The `models/` Python project therefore reduces to **just the image-preprocessing
 - Modify: `cmd/ppiav-cli/e2e.go`
 - Modify: `cmd/ppiav-cli/steps.go`
 
-- [ ] `orion.go`: load the compiled Orion circuit at `Service` construction time via the Orion Go runtime (verify whether the runtime is session-bound or shareable across sessions by reading the Orion Go module before coding). The compiled artifact is reused from `~/Dev/orion/examples/c3ae-demo/out/logn16/` — the user-side path is configurable via the `orionDir` constructor argument.
-- [ ] split `vservice` construction into `New(params)` (Phase-1 `x²` shape) and `NewWithOrion(params, orionDir)` (loads compiled C3AE). Two simple constructors beat a functional-options pattern for one optional knob; revisit if a second option ever appears.
-- [ ] modify `infer.go`: `Infer` dispatches on whether `Service` has an Orion model loaded. Phase-1 path (`x²`) stays for the `keygen`-only and unit-test code paths; Phase-2 path runs the Orion circuit via `model.InferEncrypted(inputCt) → outputCt`.
-- [ ] update `internal/orchestrator.NewRunner` and `NewRunnerWithInferrer` (Task 8) to accept an optional `orionDir string`; when non-empty, use `vservice.NewWithOrion`.
-- [ ] **No automated C3AE inference test.** Asserting "logit has the expected sign" for `positive.bin`/`negative.bin` is end-to-end with a real model — user-driven manual verification. The vservice integration-with-Orion happy path is exercised when the user runs the CLI with `--orion <dir>` (see §`Post-Completion`).
-- [ ] run tests — must pass before Task 15: `go build ./...` plus the existing unit suite stays green.
+- [x] `orion.go`: load the compiled Orion circuit at `Service` construction time via the Orion Go runtime. `Model` is immutable and goroutine-safe per Orion's `evaluator/doc.go`; `Evaluator` is NOT goroutine-safe, so the Service holds one Orion `Model` and builds one Orion `Evaluator` per session inside `StoreEvalKeys`. The user-side path is configurable via the `orionDir` constructor argument. ⚠️ The plan referenced `~/Dev/orion/examples/c3ae-demo/out/logn16/` as canonical, but on disk only `logn15/model.orion` exists today (`logn16/` carries only `compile.json` + `keys/`). The smoke test points at `logn15`; the CLI accepts whatever directory the user passes. When a `logn16/model.orion` is materialised, the plan's `--orion` example commands can be repointed without code changes.
+- [x] split `vservice` construction into `New(params)` (Phase-1 `x²` shape) and `NewWithOrion(params, orionDir)` (loads compiled C3AE). `NewWithOrion` overrides `params.CKKS`, `params.InputLevel`, and unions the manifest's rotation indices (recovered from Galois elements via `ckks.Parameters.SolveDiscreteLogGaloisElement`) into `params.ExtraRotationIndices`; callers MUST consume `Service.Params()` rather than reusing the bundle they passed in.
+- [x] modify `infer.go`: `Infer` dispatches on `s.orionModel != nil`. Phase-1 path (`x²`) stays for the `keygen`-only and unit-test code paths; Phase-2 path calls `orionEval.Forward(model, []*rlwe.Ciphertext{inputCt})` and asserts the result slice has length 1 (C3AE single-output).
+- [x] update `internal/orchestrator` with a parallel `NewRunnerWithOrion(baseParams, orionDir)` constructor that builds the VService via `vservice.NewWithOrion`, then reads the post-override params back via `Service.Params()` to wire VAgent and VClient at the same profile. `NewRunner` and `NewRunnerWithInferrer` stay untouched (the existing API remains the right shape for Phase-1 callers and tests).
+- [x] **No automated C3AE inference test.** A minimal `orion_test.go` smoke covers `loadOrionModel` (skip when `model.orion` is absent so CI without artifacts passes; assert model + CKKS params + rotations are non-empty when the file is present) plus a missing-directory error case. End-to-end "logit has the expected sign" is user-driven manual verification.
+- [x] run tests — `go build ./...`, `go vet ./...`, `go test ./...` all green; the new smoke test passes locally against `logn15/model.orion`.
 
 ### Task 15: CLI Phase-2 driver
 
@@ -461,8 +461,8 @@ _Items requiring manual intervention or external systems — no checkboxes, info
 
 **Phase-2 manual acceptance run**
 
-1. Confirm Orion's reference artifacts exist locally: `ls ~/Dev/orion/examples/c3ae-demo/out/logn16/ ~/Dev/orion/examples/c3ae-demo/out/inputs/sample_test.bin`.
-2. Full protocol with C3AE: `go run ./cmd/ppiav-cli e2e --orion ~/Dev/orion/examples/c3ae-demo/out/logn16 --image ~/Dev/orion/examples/c3ae-demo/out/inputs/sample_test.bin --n 5`. Verify Verdict=Accept (or Reject — depends on whether `sample_test.bin` is above or below the trained age threshold) and that the same verdict comes back consistently across iterations.
+1. Confirm Orion's reference artifacts exist locally: `ls ~/Dev/orion/examples/c3ae-demo/out/logn15/model.orion ~/Dev/orion/examples/c3ae-demo/out/inputs/sample_test.bin`. ⚠️ Use the `logn15` directory until a `logn16/model.orion` is built — see Task 14's note. The CLI `--orion` flag is path-agnostic.
+2. Full protocol with C3AE: `go run ./cmd/ppiav-cli e2e --orion ~/Dev/orion/examples/c3ae-demo/out/logn15 --image ~/Dev/orion/examples/c3ae-demo/out/inputs/sample_test.bin --n 5`. Verify Verdict=Accept (or Reject — depends on whether `sample_test.bin` is above or below the trained age threshold) and that the same verdict comes back consistently across iterations.
 3. Cross-check: run Orion's own `eval.py` against the same checkpoint + input. The recovered logit values should match ours within float-precision tolerance.
 4. Repeat the bench plots/tables pipeline against `results/phase2/`.
 

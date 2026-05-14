@@ -24,8 +24,9 @@ import (
 func runE2E(argv []string) error {
 	fs := flag.NewFlagSet("e2e", flag.ContinueOnError)
 	n := fs.Int("n", 1, "measured iteration count")
-	out := fs.String("out", "", "output JSON path (default results/phase1/e2e.json)")
+	out := fs.String("out", "", "output JSON path (default results/phaseN/e2e.json)")
 	imagePath := fs.String("image", "", "path to a 12288-float64 .bin image (required)")
+	orionDir := fs.String("orion", "", "directory holding a compiled Orion model.orion (Phase 2)")
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}
@@ -33,7 +34,7 @@ func runE2E(argv []string) error {
 		return fmt.Errorf("e2e: --n must be > 0, got %d", *n)
 	}
 	if *out == "" {
-		*out = defaultOutPath("e2e")
+		*out = defaultOutPathFor("e2e", *orionDir)
 	}
 
 	image, err := loadImage(*imagePath)
@@ -46,13 +47,26 @@ func runE2E(argv []string) error {
 		return fmt.Errorf("e2e: build params: %w", err)
 	}
 
-	run := bench.NewRun("e2e", "phase1")
+	phaseTag := "phase1"
+	if *orionDir != "" {
+		phaseTag = "phase2"
+	}
+	run := bench.NewRun("e2e", phaseTag)
 	run.Metadata["n"] = *n
 	run.Metadata["image"] = *imagePath
+	if *orionDir != "" {
+		run.Metadata["orion"] = *orionDir
+	}
 	var accepts, rejects, unknowns int
 
 	for iter := 0; iter < *n; iter++ {
-		r, err := orchestrator.NewRunner(params)
+		var r *orchestrator.Runner
+		var err error
+		if *orionDir != "" {
+			r, err = orchestrator.NewRunnerWithOrion(params, *orionDir)
+		} else {
+			r, err = orchestrator.NewRunner(params)
+		}
 		if err != nil {
 			return fmt.Errorf("e2e iter %d: new runner: %w", iter, err)
 		}

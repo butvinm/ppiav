@@ -86,6 +86,28 @@ func NewRunner(params protocol.Params) (*Runner, error) {
 	return NewRunnerWithInferrer(params, vservice.New(params))
 }
 
+// NewRunnerWithOrion is the Phase-2 constructor: it loads the compiled
+// Orion circuit at `<orionDir>/model.orion`, derives the canonical
+// `protocol.Params` from the model's `ClientParams()` (CKKS knobs +
+// input level + circuit rotation indices), and wires VClient/VAgent
+// against those params so all three agree on the same CKKS profile.
+//
+// The `baseParams` argument supplies the non-CKKS knobs that the Orion
+// manifest doesn't carry — `Authenticator` and `FloodSigma`. Pass
+// `protocol.Defaults()` (or a customised version) here. The CKKS,
+// `InputLevel`, and `ExtraRotationIndices` fields on `baseParams` are
+// ignored; the Orion model is the source of truth.
+func NewRunnerWithOrion(baseParams protocol.Params, orionDir string) (*Runner, error) {
+	svc, err := vservice.NewWithOrion(baseParams, orionDir)
+	if err != nil {
+		return nil, fmt.Errorf("orchestrator: build VService with Orion: %w", err)
+	}
+	// vservice.NewWithOrion overrides CKKS / InputLevel / rotation
+	// indices on the params it stashes; pull that bundle back so VAgent
+	// and VClient share the same source of truth.
+	return NewRunnerWithInferrer(svc.Params(), svc)
+}
+
 // NewRunnerWithInferrer is the test-friendly constructor: the caller
 // supplies the Inferrer (e.g. a real vservice.Service decorated with a
 // negation post-process). VAgent and RService are still the production
