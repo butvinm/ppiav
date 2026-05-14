@@ -281,9 +281,9 @@ Reason this is first: every later task that does crypto work logs samples throug
 - Create: `internal/rservice/service.go`
 - Create: `internal/rservice/service_test.go`
 
-- [ ] `service.go`: `Service{ sessions map[SessionID]Verdict; mu sync.Mutex }`. `New() *Service`, `AcceptVerdict(sid, v) error` (upsert), `CheckAccess(sid) Verdict` (missing → `VerdictUnknown`).
-- [ ] `service_test.go`: missing sid returns `VerdictUnknown`; `AcceptVerdict` then `CheckAccess` returns the upserted verdict; double-upsert returns the latest value; concurrent `AcceptVerdict` from many goroutines doesn't race (`go test -race`).
-- [ ] run tests — must pass before Task 8.
+- [x] `service.go`: `Service{ sessions map[SessionID]Verdict; mu sync.Mutex }`. `New() *Service`, `AcceptVerdict(sid, v) error` (upsert), `CheckAccess(sid) Verdict` (missing → `VerdictUnknown`).
+- [x] `service_test.go`: missing sid returns `VerdictUnknown`; `AcceptVerdict` then `CheckAccess` returns the upserted verdict; double-upsert returns the latest value; concurrent `AcceptVerdict` from many goroutines doesn't race (`go test -race`).
+- [x] run tests — must pass before Task 8.
 
 ### Task 8: in-process orchestrator (unit-tested)
 
