@@ -1,0 +1,113 @@
+@startuml protocol
+skinparam responseMessageBelowArrow true
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 200
+
+actor "Пользователь" as User
+participant "Клиент\nобъекта доступа" as ResourceClient
+participant "Клиент\nверификации" as VerificationClient
+participant "Агент сервиса\nверификации" as VerificationAgent
+participant "Сервис\nверификации" as VerificationService
+participant "Сервис\nобъекта доступа" as ResourceService
+
+activate User
+User -> ResourceClient ++ : Переход на страницу защищенного ресурса
+ResourceClient -> ResourceService ++ : Запрос ресурса
+
+== Инициализация сессии верификации ==
+ResourceService -> VerificationAgent ++ : Запрос на инициализацию сессии
+VerificationAgent -> VerificationService ++ : Запрос на инициализацию сессии
+VerificationService -> VerificationService : Создание записи сессии
+VerificationService --> VerificationAgent -- : sid
+VerificationAgent -> VerificationAgent : Создание записи сессии
+VerificationAgent --> ResourceService -- : sid
+ResourceService --> ResourceClient -- : Ответ с sid и URL клиента верификации
+
+== Перенаправление пользователя на клиент верификации ==
+ResourceClient --> User -- : Перенаправление с sid
+User -> VerificationClient ++ : Запрос на верификацию с sid
+
+== Получение параметров протокола ==
+VerificationClient -> VerificationAgent ++ : Запрос параметров протокола
+VerificationAgent -> VerificationService ++ : Запрос параметров протокола
+VerificationService --> VerificationAgent -- : Параметры протокола
+VerificationAgent -> VerificationAgent : Сохранение параметров протокола
+VerificationAgent --> VerificationClient -- : Параметры протокола
+
+== Генерация открытого ключа ==
+VerificationClient -> VerificationClient : Генерация долей <latex>\mathit{sk}_c, \mathit{pk}_c</latex>
+VerificationClient -> VerificationAgent ++ : Передача <latex>\mathit{pk}_c</latex>
+VerificationAgent -> VerificationAgent : Генерация долей <latex>\mathit{sk}_a, \mathit{pk}_a</latex>
+VerificationAgent -> VerificationAgent : Объединение <latex>\mathit{pk}</latex>
+VerificationAgent --> VerificationClient -- : Передача <latex>\mathit{pk}_a</latex>
+VerificationClient -> VerificationClient : Объединение <latex>\mathit{pk}</latex>
+
+== Генерация ключа релинеаризации (раунд 1) ==
+VerificationClient -> VerificationClient : Генерация <latex>\mathit{ephSk}_c, \mathit{rlk}^{(1)}_c</latex>
+VerificationClient -> VerificationAgent ++ : Передача <latex>\mathit{rlk}^{(1)}_c</latex>
+VerificationAgent -> VerificationAgent : Генерация <latex>\mathit{ephSk}_a, \mathit{rlk}^{(1)}_a</latex>
+VerificationAgent -> VerificationAgent : Объединение <latex>\mathit{rlk}^{(1)}_{\mathit{agg}}</latex>
+VerificationAgent --> VerificationClient -- : Передача <latex>\mathit{rlk}^{(1)}_a</latex>
+VerificationClient -> VerificationClient : Объединение <latex>\mathit{rlk}^{(1)}_{\mathit{agg}}</latex>
+
+== Генерация ключа релинеаризации (раунд 2) ==
+VerificationClient -> VerificationClient : Генерация <latex>\mathit{rlk}^{(2)}_c</latex>
+VerificationClient -> VerificationAgent ++ : Передача <latex>\mathit{rlk}^{(2)}_c</latex>
+VerificationAgent -> VerificationAgent : Генерация <latex>\mathit{rlk}^{(2)}_a</latex>
+VerificationAgent -> VerificationAgent : Объединение <latex>\mathit{rlk}</latex>
+VerificationAgent --> VerificationClient -- : Подтверждение генерации <latex>\mathit{rlk}</latex>
+
+== Генерация ключей вращения ==
+VerificationClient -> VerificationClient : Генерация <latex>\mathit{gks}^{\mathit{master}}_c</latex>
+VerificationClient -> VerificationAgent ++ : Передача <latex>\mathit{gks}^{\mathit{master}}_c</latex>
+VerificationAgent -> VerificationAgent : Генерация <latex>\mathit{gks}^{\mathit{master}}_a</latex>
+VerificationAgent -> VerificationAgent : Объединение <latex>\mathit{gks}^{\mathit{master}}</latex>
+VerificationAgent -> VerificationAgent : Иерархический вывод <latex>\mathit{gks}^{\mathit{auth}}</latex>
+VerificationAgent -> VerificationService ++ : Передача <latex>\mathit{rlk}, \mathit{gks}^{\mathit{master}}</latex>
+VerificationService -> VerificationService : Иерархический вывод <latex>\mathit{gks}^{\mathit{infer}}</latex>
+VerificationService --> VerificationAgent -- : Подтверждение установки ключей
+VerificationAgent --> VerificationClient -- : Подтверждение генерации <latex>\mathit{gks}</latex>
+
+== Захват и шифрование изображения ==
+User -> VerificationClient : Предоставление изображения
+VerificationClient -> VerificationClient : Шифрование изображения
+
+== Инференс ==
+VerificationClient -> VerificationAgent ++ : Шифротекст изображения
+VerificationAgent -> VerificationService ++ : Шифротекст изображения
+VerificationService -> VerificationService : Инференс на зашифрованных данных
+VerificationService --> VerificationAgent -- : Шифротекст результата
+
+== Проверяемая расшифровка результата ==
+VerificationAgent -> VerificationAgent : Генерация проверочных значений
+VerificationAgent -> VerificationAgent : Создание аутентифицированного шифротекста
+VerificationAgent --> VerificationClient : Аутентифицированный шифротекст
+VerificationClient -> VerificationClient : Частичная расшифровка (<latex>\mathit{sk}_c</latex>)
+VerificationClient -> VerificationClient : Noise flooding
+VerificationClient -> VerificationAgent ++ : Частично расшифрованный шифротекст
+VerificationAgent -> VerificationAgent : Окончательная расшифровка (<latex>\mathit{sk}_a</latex>)
+VerificationAgent -> VerificationAgent : Проверка аутентичности
+VerificationAgent -> VerificationAgent : Вычисление вердикта верификации
+
+== Передача результата верификации ==
+VerificationAgent -> ResourceService ++ : Результат проверки и вердикт верификации
+ResourceService -> ResourceService : Сохранение результата верификации
+ResourceService --> VerificationAgent -- : Подтверждение
+VerificationAgent --> VerificationClient -- : Подтверждение завершения верификации
+VerificationClient --> User -- : Перенаправление на страницу ресурса
+User -> ResourceClient ++ : Возврат на страницу ресурса
+
+== Повторный запрос ресурса ==
+ResourceClient -> ResourceService ++ : Запрос ресурса
+alt Положительный вердикт верификации
+    ResourceService --> ResourceClient : Предоставление ресурса
+    ResourceClient --> User : Отображение ресурса
+else Отрицательный вердикт верификации
+    ResourceService --> ResourceClient : Отказ в доступе
+    ResourceClient --> User : Сообщение об отказе в доступе
+end
+deactivate ResourceService
+deactivate ResourceClient
+deactivate User
+
+@enduml

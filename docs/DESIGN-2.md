@@ -11,7 +11,7 @@ This document is the single source of truth for the architecture. Any deviation 
 Companion materials live alongside this repo and inform the design.
 
 - **Thesis** — `~/Dev/ITMO/thesis/`. ITMO bachelor's thesis (Russian). The assignment is at `task/TASK.md`.
-- **Thesis text** — `~/Dev/ITMO/thesis/thesis/` (Typst sources: `thesis.typ`, `protocol.typ`, `refs.bib`, etc.). Authoritative narrative for the protocol, threat model, and quantitative analysis. The protocol diagram in this repo (`docs/protocol.mermaid`) is synced from `~/Dev/ITMO/thesis/thesis/protocol.mermaid`; when they disagree, the thesis text wins.
+- **Thesis text** — `~/Dev/ITMO/thesis/thesis/` (Typst sources: `thesis.typ`, `protocol.typ`, `refs.bib`, etc.). Authoritative narrative for the protocol, threat model, and quantitative analysis. The protocol diagram in this repo (`docs/protocol.puml`) is synced from `~/Dev/ITMO/thesis/thesis/protocol.puml`; when they disagree, the thesis text wins.
 
 Reference repositories — read for understanding, do **not** copy code from them or from the thesis experiments (`~/Dev/ITMO/thesis/experiments/`). Write fresh idiomatic Go.
 
@@ -67,7 +67,7 @@ Implementation tech (Go HTTP services, browser SPA, WASM, Docker) is described p
 
 ## Protocol
 
-The canonical sequence diagram lives in `docs/protocol.mermaid` (synced from the thesis). The Mermaid below is the same flow with concise English labels and HTTP-route hints for the implementation. When they disagree, the thesis file wins; resync this one.
+The canonical sequence diagram lives in `docs/protocol.puml` (PlantUML, synced from `~/Dev/ITMO/thesis/thesis/protocol.puml`). The Mermaid below is the same flow re-rendered in concise English with HTTP-route hints for the implementation; we keep it inline because it survives Markdown rendering anywhere (GitHub, IDE preview) without a PlantUML pipeline. When the two disagree, the thesis PUML wins; resync this one.
 
 ```mermaid
 sequenceDiagram
