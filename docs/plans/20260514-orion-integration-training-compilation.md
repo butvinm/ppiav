@@ -235,15 +235,15 @@ re-measured at 55–56 GB peak RSS.
 
 **Steps:**
 
-- [ ] Add to `[project] dependencies`:
+- [x] Add to `[project] dependencies`:
       `    "orion-v2-compiler",
 "torch>=2.2",
 "kagglehub",`
       (Existing `numpy>=2.0` and `pillow>=10.0` stay.)
-- [ ] In `[dependency-groups] dev`, drop `pytest>=8.0` (no tests remain).
-- [ ] Do **not** add a `[tool.uv.sources]` block. All deps resolve from
+- [x] In `[dependency-groups] dev`, drop `pytest>=8.0` (no tests remain).
+- [x] Do **not** add a `[tool.uv.sources]` block. All deps resolve from
       PyPI.
-- [ ] `cd /home/butvinm/Dev/ppiav/models && uv sync` — must succeed.
+- [x] `cd /home/butvinm/Dev/ppiav/models && uv sync` — must succeed.
 
 #### Task 3: Delete `synthetic.bin` + generator
 

@@ -6,11 +6,13 @@ requires-python = ">=3.12"
 dependencies = [
     "numpy>=2.0",
     "pillow>=10.0",
+    "orion-v2-compiler",
+    "torch>=2.2",
+    "kagglehub",
 ]
 
 [dependency-groups]
 dev = [
-    "pytest>=8.0",
     "ruff>=0.6",
     "mypy>=1.11",
 ]
