@@ -51,8 +51,13 @@ type Service struct {
 }
 
 // New constructs a Phase-1 Service that runs the synthetic `x²` circuit.
-// The session map starts empty.
+// The session map starts empty. Panics on a zero-valued `params.CKKS`
+// (LogN == 0) — misconfiguration should fail close to the bug rather
+// than at the first session.
 func New(params protocol.Params) *Service {
+	if params.CKKS.LogN() <= 0 {
+		panic("vservice: params.CKKS is zero-valued (LogN <= 0); pass a configured protocol.Params")
+	}
 	return &Service{
 		params:   params,
 		sessions: map[protocol.SessionID]*sessionState{},

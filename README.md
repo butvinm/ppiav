@@ -96,7 +96,7 @@ cd bench && uv run pytest && uv run ruff check . && uv run mypy bench tests
 cd models && uv run pytest && uv run ruff check . && uv run mypy models tests
 ```
 
-End-to-end runs against full `LogN=16` parameters and the Phase-2 Orion path are **manual verification** — see `docs/plans/completed/20260514-phase-1-2-multiparty-ckks-and-c3ae.md` §Post-Completion for the acceptance walkthrough. Noise / σ-calibration is deferred to Phase 5 per `docs/DESIGN.md` §`ε and σ_flood`.
+End-to-end runs against full `LogN=16` parameters and the Phase-2 Orion path are **manual verification** — see `docs/plans/completed/20260514-phase-1-2-multiparty-ckks-and-c3ae.md` §Post-Completion for the acceptance walkthrough. Noise / σ-calibration is a post-Phase-4 follow-up per `docs/DESIGN.md` §`ε and σ_flood`.
 
 ## Repo layout
 

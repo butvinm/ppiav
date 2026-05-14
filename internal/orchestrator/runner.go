@@ -15,7 +15,6 @@ import (
 	"github.com/butvinm/ppiav/internal/vclient"
 	"github.com/butvinm/ppiav/internal/vservice"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
-	"github.com/tuneinsight/lattigo/v6/multiparty"
 )
 
 // Inferrer is the minimal surface Runner needs from the inference engine.
@@ -70,13 +69,7 @@ type Runner struct {
 	// vclient.New takes the sid.
 	vclient *vclient.Client
 
-	sid             protocol.SessionID
-	inputCt         *rlwe.Ciphertext
-	resultCt        *rlwe.Ciphertext
-	authenticatedCt *rlwe.Ciphertext
-	clientShare     multiparty.KeySwitchShare
-	verdict         protocol.Verdict
-
+	sid    protocol.SessionID
 	cursor stage
 }
 
@@ -256,8 +249,6 @@ func (r *Runner) Infer(image []float64) (*rlwe.Ciphertext, error) {
 	if err != nil {
 		return nil, fmt.Errorf("orchestrator: VService.Infer: %w", err)
 	}
-	r.inputCt = inputCt
-	r.resultCt = resultCt
 	r.cursor = stageInferred
 	return resultCt, nil
 }
@@ -275,13 +266,11 @@ func (r *Runner) Verify(resultCt *rlwe.Ciphertext) (protocol.Verdict, error) {
 	if err != nil {
 		return protocol.VerdictUnknown, fmt.Errorf("orchestrator: VAgent.BuildAuthenticatedCt: %w", err)
 	}
-	r.authenticatedCt = authCt
 
 	clientShare, err := r.vclient.PartialDecrypt(authCt)
 	if err != nil {
 		return protocol.VerdictUnknown, fmt.Errorf("orchestrator: VClient.PartialDecrypt: %w", err)
 	}
-	r.clientShare = clientShare
 
 	verdict, err := r.vagent.FinalizeDecryption(r.sid, authCt, clientShare)
 	if err != nil {
@@ -292,7 +281,6 @@ func (r *Runner) Verify(resultCt *rlwe.Ciphertext) (protocol.Verdict, error) {
 		return protocol.VerdictUnknown, fmt.Errorf("orchestrator: RService.AcceptVerdict: %w", err)
 	}
 
-	r.verdict = verdict
 	r.cursor = stageVerified
 	return verdict, nil
 }

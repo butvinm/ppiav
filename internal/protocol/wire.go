@@ -6,7 +6,10 @@ import (
 )
 
 // Wire messages exchanged by VClient, VAgent, VService and RService.
-// Direction is implicit in the HTTP route; payload names are nouns.
+// Payload names are nouns; direction is documented on each message via
+// its stage label. Phase 1–2 pass these types in-process (no marshaling);
+// Phase 3 will serialise them across HTTP routes — at that point the
+// route name will carry direction explicitly.
 // See docs/DESIGN.md §`internal/protocol`.
 
 // Stage 1: session open.

@@ -9,21 +9,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// orionTestDir is the locally-built compiled model that the user has on
-// disk. The plan documents `logn16` as the canonical path; the only
-// committed-to-disk artifact today is `logn15` (the `logn16` directory
-// contains compile.json + keys/ but no model.orion). We point the smoke
-// test at `logn15` and skip when the file is missing so CI without
-// Orion artifacts still passes.
-//
-// ⚠️ When a `logn16/model.orion` becomes available, update both this
-// constant and the plan's task-14 ⚠️ note.
-const orionTestDir = "/home/butvinm/Dev/orion/examples/c3ae-demo/out/logn15"
+// orionTestDirEnv is the env var that points at a built Orion model
+// directory containing `model.orion`. Empty/unset → the smoke test skips
+// so CI without Orion artifacts still passes. Local dev points it at
+// e.g. `/home/butvinm/Dev/orion/examples/c3ae-demo/out/logn15`.
+const orionTestDirEnv = "PPIAV_ORION_DIR"
 
 func TestLoadOrionModelSmoke(t *testing.T) {
+	orionTestDir := os.Getenv(orionTestDirEnv)
+	if orionTestDir == "" {
+		t.Skipf("%s not set; skipping Orion smoke test (point it at a directory containing model.orion to run)", orionTestDirEnv)
+	}
 	modelPath := filepath.Join(orionTestDir, "model.orion")
 	if _, err := os.Stat(modelPath); err != nil {
-		t.Skipf("Orion model not found at %s; skipping smoke test (set up the Orion fork's c3ae-demo to run it)", modelPath)
+		t.Skipf("Orion model not found at %s; skipping smoke test", modelPath)
 	}
 
 	model, ckksParams, inputLevel, rotations, err := loadOrionModel(orionTestDir)

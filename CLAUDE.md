@@ -32,7 +32,7 @@ Phase 1 (multi-party CKKS + synthetic `x²` + MPD-Auth) and Phase 2 (Orion-compi
 ppiav/
 ├── cmd/                  # Go binary entry points
 ├── internal/             # Go packages (private to this module)
-├── web/                  # Browser SPAs + ppiav-crypto WASM module
+├── web/                  # Browser SPAs + ppiav-crypto WASM module (Phase 3+)
 ├── models/               # Python ML pipeline (Phase 2+)
 ├── bench/                # Plotting & analysis scripts
 ├── docs/                 # Design & decisions

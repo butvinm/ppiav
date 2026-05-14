@@ -30,8 +30,10 @@ func TestLoadOrionParams(t *testing.T) {
 	// InputLevel pulled from the manifest verbatim.
 	assert.Equal(t, 15, params.InputLevel)
 
-	// Extras stashed for RotationIndices() to union later.
-	assert.Equal(t, []int{1, 4, 16, 64, 128, 256, 512, 1024}, params.ExtraRotationIndices)
+	// Extras stashed for RotationIndices() to union later. The fixture
+	// stores raw Orion k_orion values; LoadOrionParams negates them on
+	// ingest (signed-label convention — see protocol.Params doc).
+	assert.Equal(t, []int{-1, -4, -16, -64, -128, -256, -512, -1024}, params.ExtraRotationIndices)
 }
 
 func TestLoadOrionParams_MissingFile(t *testing.T) {
@@ -68,7 +70,9 @@ func TestParams_RotationIndices_UnionWithExtras(t *testing.T) {
 	// Sorted ascending.
 	assert.True(t, sort.IntsAreSorted(got), "rotation indices must be ascending: %v", got)
 
-	// Deduplicated — `1` appears in both canonical and the manifest extras.
+	// Deduplicated — labels are unique even when canonical [1, λ) and the
+	// negated Orion extras coincidentally overlap (the fixture has no
+	// overlap after negation, but the contract is still "unique").
 	seen := map[int]int{}
 	for _, j := range got {
 		seen[j]++
@@ -92,8 +96,8 @@ func TestParams_RotationIndices_UnionWithExtras(t *testing.T) {
 		assert.Truef(t, ok, "canonical index %d missing from result", j)
 	}
 
-	// Manifest extras above the canonical range are present too.
-	for _, j := range []int{128, 256, 512, 1024} {
+	// Manifest extras are stored negated (signed-label convention).
+	for _, j := range []int{-128, -256, -512, -1024} {
 		_, ok := resultSet[j]
 		assert.Truef(t, ok, "manifest extra %d missing from result", j)
 	}
@@ -108,24 +112,34 @@ func TestParams_RotationIndices_RoundTrip(t *testing.T) {
 	assert.Equal(t, first, second, "RotationIndices must be deterministic across calls")
 }
 
-func TestParams_RotationIndices_DropsNonPositive(t *testing.T) {
+func TestParams_RotationIndices_DropsZeroKeepsNegative(t *testing.T) {
 	params, err := Defaults()
 	require.NoError(t, err)
-	// Inject some bogus values; method must drop them.
+	// Inject a mix: identity (must be dropped), a negative (kept as-is —
+	// signed-label convention), a positive above canonical, and a positive
+	// already inside [1, λ) (must dedupe).
 	params.ExtraRotationIndices = []int{0, -1, 200, 5}
 
 	got := params.RotationIndices()
 	for _, j := range got {
-		assert.Greaterf(t, j, 0, "rotation index %d must be positive", j)
+		assert.NotEqualf(t, 0, j, "label 0 (identity) must be dropped")
 	}
-	// `5` is already in canonical [1..127], so it should appear exactly once;
-	// `200` is a new addition above canonical and must be present.
 	resultSet := map[int]struct{}{}
 	for _, j := range got {
 		resultSet[j] = struct{}{}
 	}
+	_, hasNeg1 := resultSet[-1]
 	_, has200 := resultSet[200]
 	_, has5 := resultSet[5]
+	assert.True(t, hasNeg1, "-1 (signed Orion label) must be in union")
 	assert.True(t, has200, "200 must be in union")
 	assert.True(t, has5, "5 (canonical) must be in union")
+	// `5` must appear exactly once even though it is both canonical and extra.
+	count := 0
+	for _, j := range got {
+		if j == 5 {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count, "duplicate `5` must be deduped")
 }
