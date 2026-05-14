@@ -25,7 +25,7 @@ Reference repositories — read for understanding, do **not** copy code from the
 
 Three parties; each has a distinct adversarial profile.
 
-- **Subject (client) — covert adversary.** May deviate from the protocol to bypass verification, but avoids being detected. Defense: multi-party CKKS. The secret key is additively split into `sk_c` (held by VClient) and `sk_a` (held by VAgent); neither party alone can decrypt. After inference VAgent folds secret verification values into the result ciphertext (authenticated ciphertext) and the two parties run a joint decryption: VClient produces a partial decryption under `sk_c` (with noise flooding to hide its share), VAgent finalises with `sk_a` and recovers the plaintext. Because the verification values are unknown to the client, any deviation from honest partial decryption corrupts them and is detected. The client never sees the plaintext result — VAgent does.
+- **Subject (client) — covert adversary.** May deviate from the protocol to bypass verification, but avoids being detected. Defense: multi-party CKKS. The secret key is additively split into `sk_c` (held by VClient) and `sk_a` (held by VAgent); neither party alone can decrypt. After inference VAgent folds secret verification values into the result ciphertext (authenticated ciphertext) and the two parties run a joint decryption: VClient produces a partial decryption under `sk_c` (with noise flooding so the share leaks no information about `sk_c`), VAgent finalises with `sk_a` and recovers the plaintext. Because the verification values are unknown to the client, any deviation from honest partial decryption corrupts them and is detected. The client never sees the plaintext result — VAgent does.
 - **Verifier (VService) — semi-honest.** Follows the protocol but tries to extract information from observed data. Defense: FHE — VService only ever sees ciphertexts (image, eval keys, result) and never holds any secret share.
 - **Resource Owner (VAgent, RService) — semi-honest.** Follows the protocol but tries to extract information from observed data. Defense: VAgent observes only the decrypted result vector (model output, not the input image) plus the resulting verdict. The result vector itself does leak something beyond the binary verdict; that quantitative leakage analysis lives in the thesis, not here. RService receives the verdict; never receives personal data.
 
@@ -68,6 +68,8 @@ Implementation tech (Go HTTP services, browser SPA, WASM, Docker) is described p
 ## Protocol
 
 The canonical sequence diagram lives in `docs/protocol.puml` (PlantUML, synced from `~/Dev/ITMO/thesis/thesis/protocol.puml`). The Mermaid below is the same flow re-rendered in concise English with HTTP-route hints for the implementation; we keep it inline because it survives Markdown rendering anywhere (GitHub, IDE preview) without a PlantUML pipeline. When the two disagree, the thesis PUML wins; resync this one.
+
+**Both diagrams describe the final (Phase 4) protocol state.** Phases 1–3 may deviate where called out in the prose — notably Stage 2d's Galois-key transport, where Phase 1–3 emits one share per rotation and ships the full assembled `gks` set, while Phase 4 collapses the wire payload to `gks_master` and both VAgent and VService hierarchically derive their own per-rotation keys (`gks_auth` and `gks_infer` respectively).
 
 ```mermaid
 sequenceDiagram
@@ -119,8 +121,9 @@ sequenceDiagram
     VC->>VC: Keygen gks_master_c
     VC->>VA: POST /sessions/:sid/gks-master (VClientGaloisKeyShare)
     VA->>VA: Keygen gks_master_a, aggregate gks_master
+    VA->>VA: derive gks_auth from gks_master (hierkeys)
     VA->>VS: POST /sessions/:sid/eval-keys (InferEvalKeys)
-    VS->>VS: hierarchical derivation of gks from gks_master
+    VS->>VS: derive gks_infer from gks_master (hierkeys)
     VS-->>VA: 200
     VA-->>VC: 200 (setup complete)
 
@@ -165,10 +168,10 @@ sequenceDiagram
 
 The session-specific CKKS keys are generated jointly by VClient and VAgent. The secret key is additively shared (`sk = sk_c + sk_a`) and **never reconstructed in any single place**. The aggregated public components (pk, rlk, Galois keys) are what gets shipped to VService for inference.
 
-1. **Parameters.** VClient fetches the protocol parameters (ring degree, modulus chain, scale, authenticator configuration) from VAgent, which sources them from VService. VAgent persists its copy under the sid. The CRS that both parties feed to the multi-party keygen protocols is **derived deterministically from the sid** — no extra seed material crosses the wire (see §CRS below for the construction).
+1. **Parameters.** VClient fetches the protocol parameters (ring degree, modulus chain, scale, authenticator configuration) from VAgent, which sources them from VService. VAgent persists its copy under the sid. The CRS that both parties feed to the multi-party keygen protocols is **derived deterministically from the sid** — no extra seed material crosses the wire (see the CRS construction under §`internal/protocol` below).
 2. **Public key (one round).** VClient generates `sk_c, pk_c` and sends `pk_c` to VAgent. VAgent generates its own `sk_a, pk_a`, aggregates `pk = pk_c + pk_a`, and returns `pk_a` to VClient so it can compute the same aggregate locally.
 3. **Relinearization key (two rounds).** Both rounds follow the same client-share-then-agent-share pattern. Round 1: VClient generates an ephemeral secret `ephSk_c` and its first-round share `rlk_c⁽¹⁾`; VAgent generates its own `ephSk_a, rlk_a⁽¹⁾`; both sides aggregate `rlk⁽¹⁾_agg`. Round 2: VClient generates `rlk_c⁽²⁾`, VAgent generates `rlk_a⁽²⁾`, both aggregate the final `rlk`. The two-round structure follows the standard multi-party CKKS relinearization protocol.
-4. **Rotation keys.** Both parties contribute matching `multiparty.GaloisKeyGenShare` shares for the rotations the compiled circuit needs, and the aggregated bundle (`rlk` + Galois keys) is forwarded to VService as `InferEvalKeys`. The canonical (Phase 4) form, shown in the diagram, collapses the per-rotation shares into a single `gks_master` pair (`gks_master_c`, `gks_master_a` → `gks_master`) that VService hierarchically expands into the full `gks` set via lattigo-hierkeys — this is purely a transport-and-storage optimisation. Phase 1–3 skip the master/derive step: VClient and VAgent emit one share per rotation, aggregate the assembled `gks` directly, and ship the full set to VService. The multi-party protocol is identical; only the wire shape differs.
+4. **Rotation keys.** Both parties contribute matching `multiparty.GaloisKeyGenShare` shares for the rotations the compiled circuit and `Auth` need. The canonical (Phase 4) form, shown in the diagram, collapses the per-rotation shares into a single `gks_master` pair (`gks_master_c`, `gks_master_a` → `gks_master`). VAgent forwards `rlk` and `gks_master` to VService as `InferEvalKeys`; VAgent and VService then independently expand `gks_master` into the per-rotation keys each side actually uses — `gks_auth` at VAgent (for `Auth`'s rotation-and-sum), `gks_infer` at VService (for the inference circuit) — via lattigo-hierkeys. This is purely a transport-and-storage optimisation. Phase 1–3 skip the master/derive step: VClient and VAgent emit one share per rotation, aggregate the assembled `gks` directly, and ship the full set to VService (VAgent uses the same assembled set locally). The multi-party protocol is identical; only the wire shape differs.
 5. **Result channel.** VClient opens a server-sent-events connection to VAgent for the eventual authenticated result. Opening it before submitting the image avoids a race.
 
 ### Stage 3: Image submission and inference
@@ -189,7 +192,7 @@ The session-specific CKKS keys are generated jointly by VClient and VAgent. The 
 
 ## Failure modes
 
-The happy path runs Stages 1–4 to a `Verdict = Accept` or `Verdict = Reject`. Everything that's not the happy path collapses into `Verdict = Reject` delivered through the standard Stage 4 callback — same wire shape, same RService 403, same UX for the user. No `Verdict = Error` variant.
+The happy path runs Stages 1–4 to a `Verdict = Accept` or `Verdict = Reject`. **Once a session is opened**, every non-happy-path outcome collapses into `Verdict = Reject` delivered through the standard Stage 4 callback — same wire shape, same RService 403, same UX for the user. No `Verdict = Error` variant. The one exception is F4a below: if VService is unreachable during Stage 1, no sid is ever issued, so there is no session to deliver a verdict against — the failure surfaces only as a 5xx to the user from RService.
 
 | ID  | Trigger                             | Where                | Resolution                                                                                                                                      |
 | --- | ----------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -225,18 +228,18 @@ We deliberately avoid the term **verifiable decryption** because it has a precis
 
 `λ` and `ε` live in `authenticator.Config`; `σ_flood` lives in `protocol.Params` because it's a VClient-side knob (the authenticator itself never floods). `|S|` is derived (not configured).
 
-| Param     | Default           | Lives in               | Role                                                                                                                                                        |
-| --------- | ----------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `λ`       | 128               | `authenticator.Config` | Security parameter; total authentication slots used.                                                                                                        |
-| `\|S\|`   | `λ/2 = 64`        | _derived_              | Number of verification (random-pattern) slots; the remaining `λ - \|S\|` slots replicate the inference message `m`. Always `λ/2` — not a configurable knob. |
-| `Q_0`     | level-0 modulus   | `ckks.Parameters`      | The largest/special prime `q_0` of the CKKS modulus chain (~51–60 bits); bounds the verification-value distribution. See note below on chain notation.      |
-| `ε`       | `2^20`            | `authenticator.Config` | Approximate-equality tolerance for `Ver`, expressed in **scaled-message space** (i.e., before the decoder divides by Δ).                                    |
-| `σ_flood` | `2^16`            | `protocol.Params`      | Std of the discrete-Gaussian flooding noise VClient adds during partial decryption. Constant, independent of `ε` and the circuit (see §Noise for the why).  |
-| `F`       | session-fresh PRG | _session-local_        | Deterministic from a session-fresh seed; samples uniformly from `(-Q_0/2, Q_0/2)`.                                                                          |
+| Param     | Default           | Lives in               | Role                                                                                                                                                                                             |
+| --------- | ----------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `λ`       | 128               | `authenticator.Config` | Security parameter; total authentication slots used.                                                                                                                                             |
+| `\|S\|`   | `λ/2 = 64`        | _derived_              | Number of verification (random-pattern) slots; the remaining `λ - \|S\|` slots replicate the inference message `m`. Always `λ/2` — not a configurable knob.                                      |
+| `Q_0`     | level-0 modulus   | `ckks.Parameters`      | The base prime `q_0` of the CKKS modulus chain — the largest single prime in `LogQ` (55 bits at Phase 1 defaults). Bounds the verification-value distribution. See note below on chain notation. |
+| `ε`       | `2^20`            | `authenticator.Config` | Approximate-equality tolerance for `Ver`, expressed in **scaled-message space** (i.e., before the decoder divides by Δ).                                                                         |
+| `σ_flood` | `2^16`            | `protocol.Params`      | Std of the discrete-Gaussian flooding noise VClient adds during partial decryption. Constant, independent of `ε` and the circuit (see §Noise for the why).                                       |
+| `F`       | session-fresh PRG | _session-local_        | Deterministic from a session-fresh seed; samples uniformly from `(-Q_0/2, Q_0/2)`.                                                                                                               |
 
 VAgent owns `S`, the seed of `F`, and (consequently) the verification vector `v`. VClient learns `λ`, `ε`, and `σ_flood` via the params fetch (`|S|` follows from `λ`). All authentication secrets stay on the VAgent side.
 
-**Note on chain notation.** We use the convention `Q_chain = [q_0, q_1, ..., q_L]`, where `q_0` is the special/base prime (~51–60 bits in our params) and `q_1..q_L` are the rescaling primes each ≈ `log2(Δ)` bits (~40 bits in Phase 1). At fresh encryption the ciphertext is at level `L` with modulus `Q_L = q_0 · q_1 · … · q_L`; each rescaling drops the top prime; what survives at level 0 is `Q_0 = q_0`. So `Q_0` here refers to the same prime that's largest in absolute size and is the one left after all rescalings — _not_ a small "leftover" prime.
+**Note on chain notation.** We use the convention `Q_chain = [q_0, q_1, ..., q_L]`, where `q_0` is the base prime (55 bits at Phase 1 defaults) and `q_1..q_L` are the rescaling primes each ≈ `log2(Δ)` bits (~40 bits in Phase 1). At fresh encryption the ciphertext is at level `L` with modulus `Q_L = q_0 · q_1 · … · q_L`; each rescaling drops the top prime; what survives at level 0 is `Q_0 = q_0`. So `Q_0` here refers to the same prime that's largest in absolute size and is the one left after all rescalings — _not_ a small "leftover" prime. (Note: the `LogP` "special primes" used for keyswitching are a separate set and are not part of `Q_chain`.)
 
 Assumption on the inference circuit: the message `m` (the prediction) lives in slot 0 of `result_ct`. Other slots are _not_ assumed to be zero — the circuit may leave arbitrary garbage there. `Auth`'s first step explicitly masks them out so the rotation-and-sum that follows produces a clean replicated-`m` pattern.
 
@@ -283,11 +286,9 @@ Accept iff **both**:
 
 If both pass, the recovered message is `m_recovered = P[j*]` — the binary-classifier logit. VAgent emits `Accept` iff `m_recovered > 0`. (Edge case: if `|m_recovered| < ε` after a passing `Ver`, the verdict is whichever side of zero the noise lands on. The thesis quantifies the probability mass of that ambiguous region; we do not add a special "abstain" verdict at the prototype level.)
 
-### Why it works
+### Security analysis
 
-- **Unforgeability against a covert client.** A client wanting the joint decryption to recover an arbitrary `m' ≠ m` must inject a structured offset into its partial-decryption share. The client knows neither `S` nor `v`, and the verification values are uniform over a `~Q₀`-bit range while `ε` is only ~20 bits — so a random tampered share passes any one verification slot with probability `≤ 2ε / Q₀ ≈ 2²¹⁻⁵¹ = 2⁻³⁰`. Independence of the `|S| = 64` slots compounds this to a forgery probability well below `2⁻⁶⁴`. The value-slot agreement check (2) closes the alternative attack where the client randomises everything but somehow hits the right verification pattern: with check (2) the client must also keep the value slots consistent, which requires knowing the partition `S ↔ [λ]\S`.
-- **Soundness under noise flooding.** VClient applies flooding noise of sigma matched to `ε` during partial decryption. Honest decryption thus stays within `ε` of every slot's expected value, so honest behavior passes; dishonest behavior cannot hide under `ε` because the verification values are spaced ≫ ε apart in expectation.
-- **No leakage to VClient.** VClient observes only `ct_M`, a fresh CKKS ciphertext under the joint `pk` whose semantic security is what CKKS already provides. The client never holds `S`, the seed of `F`, `v`, or any other authentication state.
+Out of scope for this document. Unforgeability bounds, soundness-under-flooding, and the no-leakage-to-VClient argument live in the thesis (`~/Dev/ITMO/thesis/thesis/protocol.typ`). This document specifies the construction; concrete bounds and proofs are not duplicated here.
 
 ### Implementation notes
 
@@ -357,14 +358,14 @@ Both are fixed constants for the prototype:
 | `ε`       | `2²⁰` | `Ver`'s tolerance: accept iff `abs(P[i]·Δ − v[i]·Δ) < ε` (and likewise for the value-slot pairwise checks `abs(P[i]·Δ − P[j*]·Δ) < ε`). |
 | `σ_flood` | `2¹⁶` | Std of the discrete-Gaussian flooding noise added by VClient during partial decryption.                                                 |
 
-The pair has to satisfy two informal constraints:
+The pair has to satisfy two informal engineering constraints (the formal analysis lives in the thesis):
 
-1. **Unforgeability:** `σ_flood ≫ σ_B` so flooding dominates intrinsic noise and a covert client can't recover information about `sk_c` from observing the partial-decryption share.
-2. **Honest-Ver-passes:** `ε > c · σ_total` for a comfortable Gaussian-tail confidence `c`, where `σ_total ≈ √(σ_B² + σ_flood²)`.
+1. **Flooding dominance:** `σ_flood ≫ σ_B` so the flooding noise dominates the intrinsic ops noise.
+2. **Honest-`Ver`-passes:** `ε > c · σ_total` for a comfortable Gaussian-tail confidence `c`, where `σ_total ≈ √(σ_B² + σ_flood²)`.
 
-At Phase-1 estimates (`σ_B ≈ 2¹⁴`, see §Noise contributors above), `σ_flood = 2¹⁶` sits at ~4× σ_B and `ε = 2²⁰` is ~16× σ_flood — both constraints comfortably satisfied for the synthetic `x²` circuit.
+At Phase-1 defaults `σ_flood = 2¹⁶` and `ε = 2²⁰`, both constraints are expected to hold against the Phase-1 `σ_B` once bench numbers land. Calibration against measured `σ_B` is deferred — see the paragraph below.
 
-A proper statistical calibration — measuring `σ_B` across all four phases' params and circuits, deriving `σ_flood` and `ε` from those measurements with an explicit confidence bound — is **deferred until after all four phases land**. Until then both values stay constant; if a deeper Phase-2/3 circuit pushes `σ_B` close enough to `σ_flood` to make the unforgeability margin uncomfortable, we'll catch it in bench output and bump the constants by hand. The level budget is independent and remains fixed by the params regardless.
+A proper statistical calibration — measuring `σ_B` across all four phases' params and circuits, deriving `σ_flood` and `ε` from those measurements with an explicit confidence bound — is **deferred until after all four phases land**. Until then both values stay constant; if a deeper Phase-2/3 circuit pushes `σ_B` close enough to `σ_flood` to shrink the flooding-dominance margin, we'll catch it in bench output and bump the constants by hand. The level budget is independent and remains fixed by the params regardless.
 
 ---
 
