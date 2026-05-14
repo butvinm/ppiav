@@ -1,0 +1,57 @@
+{
+  "name": "e2e",
+  "phase": "phase1",
+  "started": "2026-05-14T10:00:00Z",
+  "go_version": "go1.23.0",
+  "goos": "linux",
+  "goarch": "amd64",
+  "num_cpu": 8,
+  "metadata": {
+    "n": 2,
+    "image": "cmd/ppiav-cli/testdata/synthetic.bin",
+    "accepts": 2,
+    "rejects": 0,
+    "unknowns": 0
+  },
+  "samples": [
+    {
+      "name": "open",
+      "iter": 0,
+      "wall": 1500000,
+      "heap_alloc": 12345678,
+      "heap_inuse": 16777216,
+      "sys": 67108864,
+      "alloc_delta": 8192,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "vm_hwm": 134217728,
+      "bytes": 0
+    },
+    {
+      "name": "setup",
+      "iter": 0,
+      "wall": 9500000000,
+      "heap_alloc": 234567890,
+      "heap_inuse": 268435456,
+      "sys": 536870912,
+      "alloc_delta": 1073741824,
+      "num_gc": 12,
+      "pause_ns": 4500000,
+      "vm_hwm": 805306368,
+      "bytes": 0
+    },
+    {
+      "name": "setup",
+      "iter": 1,
+      "wall": 9300000000,
+      "heap_alloc": 230000000,
+      "heap_inuse": 270000000,
+      "sys": 540000000,
+      "alloc_delta": 1070000000,
+      "num_gc": 11,
+      "pause_ns": 4300000,
+      "vm_hwm": 810000000,
+      "bytes": 0
+    }
+  ]
+}

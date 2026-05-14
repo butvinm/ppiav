@@ -334,13 +334,13 @@ The orchestrator is the in-process glue that the CLI in Task 9 wraps. Putting it
 - Create: `bench/tests/test_tables.py`
 - Create: `bench/README.md` (≤ 30 lines)
 
-- [ ] `pyproject.toml`: `uv`-managed project. Deps: `numpy`, `pandas`, `matplotlib`. Dev deps: `pytest`, `ruff`, `mypy`. Strict mypy config. Pin Python ≥ 3.12.
-- [ ] `load.py`: `load_run(path: Path) -> Run` and `load_dir(dir: Path) -> list[Run]`. Use `pydantic` (or vanilla dataclasses + `json.loads` — pick dataclasses to stay dep-light) to parse the JSON shape emitted by `internal/bench`. Validate samples non-empty.
-- [ ] `tables.py`: `python -m bench.tables <dir>` prints a Markdown table per stage with columns: stage, n, mean wall ms, p50, p95, mean heap delta MiB. Round numbers sensibly.
-- [ ] `plot.py`: `python -m bench.plot <dir>` writes per-stage PNG bar plots (one PNG per stage, x = sample index, y = wall ms) into `<dir>/plots/`.
-- [ ] tests: `test_load.py` round-trips a fixture JSON; `test_tables.py` asserts table output contains every stage name. Fixtures committed under `bench/tests/fixtures/`.
-- [ ] lint/type/test gate: `cd bench && uv run pytest && uv run ruff check . && uv run mypy bench tests` — all green before Task 11.
-- [ ] run tests — must pass before Task 11.
+- [x] `pyproject.toml`: `uv`-managed project. Deps: `numpy`, `pandas`, `matplotlib`. Dev deps: `pytest`, `ruff`, `mypy`. Strict mypy config. Pin Python ≥ 3.12.
+- [x] `load.py`: `load_run(path: Path) -> Run` and `load_dir(dir: Path) -> list[Run]`. Use `pydantic` (or vanilla dataclasses + `json.loads` — pick dataclasses to stay dep-light) to parse the JSON shape emitted by `internal/bench`. Validate samples non-empty.
+- [x] `tables.py`: `python -m bench.tables <dir>` prints a Markdown table per stage with columns: stage, n, mean wall ms, p50, p95, mean heap delta MiB. Round numbers sensibly.
+- [x] `plot.py`: `python -m bench.plot <dir>` writes per-stage PNG bar plots (one PNG per stage, x = sample index, y = wall ms) into `<dir>/plots/`.
+- [x] tests: `test_load.py` round-trips a fixture JSON; `test_tables.py` asserts table output contains every stage name. Fixtures committed under `bench/tests/fixtures/`.
+- [x] lint/type/test gate: `cd bench && uv run pytest && uv run ruff check . && uv run mypy bench tests` — all green before Task 11.
+- [x] run tests — must pass before Task 11.
 
 ### Task 11: [REMOVED — manual verification]
 
