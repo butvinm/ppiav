@@ -1,0 +1,41 @@
+[project]
+name = "ppiav-models"
+version = "0.1.0"
+description = "Image preprocessing for ppiav: the 5-step pipeline that turns an image into a 12288-float64 .bin consumed by internal/vclient."
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.0",
+    "pillow>=10.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["models"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_configs = true
+warn_unreachable = true
+disallow_any_unimported = false
+disallow_any_expr = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

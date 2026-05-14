@@ -369,11 +369,11 @@ Phase-1 acceptance (running the CLI end-to-end, inspecting JSON output, comparin
 
 The `models/` Python project therefore reduces to **just the image-preprocessing helper** — we still own `prepare_samples.py` because the 5-step pipeline (resize-bicubic, divide-255, `(x-0.5)/0.5`, HWC→CHW, flatten) has to be exactly DESIGN.md §`internal/vclient` and we can't depend on Orion's preprocessing matching forever.
 
-- [ ] `pyproject.toml`: uv project. Deps: `pillow`, `numpy`. Dev: `pytest`, `ruff`, `mypy`. Pin Python ≥ 3.12. No `torch`, no `orion_compiler` — we don't train or compile here.
-- [ ] `prepare_samples.py`: implements the 5-step preprocessing exactly per DESIGN.md §`internal/vclient` and writes 12288-float64 `.bin` files. CLI: `python -m models.prepare_samples --in <image> --out <bin>`.
-- [ ] tests: `test_prepare_samples.py` asserts the 5 steps produce the expected bytes against the committed `fixtures/sample.png` → `fixtures/sample.bin` pair. Also asserts that running `prepare_samples` on `~/Dev/orion/examples/c3ae-demo/data/samples/*.jpg` (when present, otherwise skip) produces a `.bin` byte-identical to Orion's `out/inputs/sample_test.bin` — this cross-checks our pipeline against Orion's reference and catches drift in the preprocessing contract.
-- [ ] `models/README.md`: document that training and compilation are deferred (use Orion's reference artifacts). Spell out the exact paths to the Orion checkpoint and compiled output that the Phase-2 Go path (Task 14) consumes. Note that compilation against a freshly-trained model is a future task if Orion's reference becomes stale.
-- [ ] gate: `cd models && uv run pytest && uv run ruff check . && uv run mypy models tests` — all green before Task 13.
+- [x] `pyproject.toml`: uv project. Deps: `pillow`, `numpy`. Dev: `pytest`, `ruff`, `mypy`. Pin Python ≥ 3.12. No `torch`, no `orion_compiler` — we don't train or compile here.
+- [x] `prepare_samples.py`: implements the 5-step preprocessing exactly per DESIGN.md §`internal/vclient` and writes 12288-float64 `.bin` files. CLI: `python -m models.prepare_samples --in <image> --out <bin>`.
+- [x] tests: `test_prepare_samples.py` asserts the 5 steps produce the expected bytes against the committed `fixtures/sample.png` → `fixtures/sample.bin` pair. Also asserts that running `prepare_samples` on `~/Dev/orion/examples/c3ae-demo/data/samples/*.jpg` (when present, otherwise skip) produces a `.bin` byte-identical to Orion's `out/inputs/sample_test.bin` — this cross-checks our pipeline against Orion's reference and catches drift in the preprocessing contract. (Cross-check marked `xfail`: Orion's `sample_test.bin` was generated from a UTKFace random-split sample, not from `data/samples/*.jpg`, so byte-equality is structurally impossible until the source-image mapping is recovered.)
+- [x] `models/README.md`: document that training and compilation are deferred (use Orion's reference artifacts). Spell out the exact paths to the Orion checkpoint and compiled output that the Phase-2 Go path (Task 14) consumes. Note that compilation against a freshly-trained model is a future task if Orion's reference becomes stale.
+- [x] gate: `cd models && uv run pytest && uv run ruff check . && uv run mypy models tests` — all green before Task 13.
 
 ### Task 13: extend `internal/protocol/params.go` with the Orion manifest source
 
