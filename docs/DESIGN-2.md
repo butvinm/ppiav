@@ -165,7 +165,7 @@ sequenceDiagram
 
 The session-specific CKKS keys are generated jointly by VClient and VAgent. The secret key is additively shared (`sk = sk_c + sk_a`) and **never reconstructed in any single place**. The aggregated public components (pk, rlk, Galois keys) are what gets shipped to VService for inference.
 
-1. **Parameters.** VClient fetches the protocol parameters (ring degree, modulus chain, scale, verification configuration) from VAgent, which sources them from VService. VAgent persists its copy under the sid. The CRS that both parties feed to the multi-party keygen protocols is **derived deterministically from the sid** — no extra seed material crosses the wire (see §CRS below for the construction).
+1. **Parameters.** VClient fetches the protocol parameters (ring degree, modulus chain, scale, authenticator configuration) from VAgent, which sources them from VService. VAgent persists its copy under the sid. The CRS that both parties feed to the multi-party keygen protocols is **derived deterministically from the sid** — no extra seed material crosses the wire (see §CRS below for the construction).
 2. **Public key (one round).** VClient generates `sk_c, pk_c` and sends `pk_c` to VAgent. VAgent generates its own `sk_a, pk_a`, aggregates `pk = pk_c + pk_a`, and returns `pk_a` to VClient so it can compute the same aggregate locally.
 3. **Relinearization key (two rounds).** Both rounds follow the same client-share-then-agent-share pattern. Round 1: VClient generates an ephemeral secret `ephSk_c` and its first-round share `rlk_c⁽¹⁾`; VAgent generates its own `ephSk_a, rlk_a⁽¹⁾`; both sides aggregate `rlk⁽¹⁾_agg`. Round 2: VClient generates `rlk_c⁽²⁾`, VAgent generates `rlk_a⁽²⁾`, both aggregate the final `rlk`. The two-round structure follows the standard multi-party CKKS relinearization protocol.
 4. **Rotation keys.** Both parties contribute matching `multiparty.GaloisKeyGenShare` shares for the rotations the compiled circuit needs, and the aggregated Galois keys are forwarded to VService. The canonical (Phase 4) form, shown in the diagram, collapses the per-rotation shares into a single `gks_master` pair (`gks_master_c`, `gks_master_a` → `gks_master`) that VService hierarchically expands into the full `gks` set via lattigo-hierkeys — this is purely a transport-and-storage optimisation. Phase 1–3 skip the master/derive step: VClient and VAgent emit one share per rotation, aggregate the assembled `gks` directly, and ship the full set to VService. The multi-party protocol is identical; only the wire shape differs.
@@ -223,18 +223,18 @@ We deliberately avoid the term **verifiable decryption** because it has a precis
 
 ### Parameters
 
-All configurable in `verification.Config`. Defaults set in this section; can be overridden per-session.
+`λ` and `ε` live in `authenticator.Config`; `σ_flood` lives in `protocol.Params` because it's a VClient-side knob (the authenticator itself never floods). `|S|` is derived (not configured).
 
-| Param     | Default           | Role                                                                                                                                                       |
-| --------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `λ`       | 128               | Security parameter; total authentication slots used.                                                                                                       |
-| `\|S\|`   | `λ/2 = 64`        | Number of verification (random-pattern) slots; the remaining `λ - \|S\|` slots replicate the inference message `m`.                                        |
-| `Q_0`     | level-0 modulus   | The largest/special prime `q_0` of the CKKS modulus chain (~51–60 bits); bounds the verification-value distribution. See note below on chain notation.     |
-| `ε`       | `2^20`            | Approximate-equality tolerance for `Ver`, expressed in **scaled-message space** (i.e., before the decoder divides by Δ).                                   |
-| `σ_flood` | `2^16`            | Std of the discrete-Gaussian flooding noise VClient adds during partial decryption. Constant, independent of `ε` and the circuit (see §Noise for the why). |
-| `F`       | session-fresh PRG | Deterministic from a session-fresh seed; samples uniformly from `(-Q_0/2, Q_0/2)`.                                                                         |
+| Param     | Default           | Lives in               | Role                                                                                                                                                        |
+| --------- | ----------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `λ`       | 128               | `authenticator.Config` | Security parameter; total authentication slots used.                                                                                                        |
+| `\|S\|`   | `λ/2 = 64`        | _derived_              | Number of verification (random-pattern) slots; the remaining `λ - \|S\|` slots replicate the inference message `m`. Always `λ/2` — not a configurable knob. |
+| `Q_0`     | level-0 modulus   | `ckks.Parameters`      | The largest/special prime `q_0` of the CKKS modulus chain (~51–60 bits); bounds the verification-value distribution. See note below on chain notation.      |
+| `ε`       | `2^20`            | `authenticator.Config` | Approximate-equality tolerance for `Ver`, expressed in **scaled-message space** (i.e., before the decoder divides by Δ).                                    |
+| `σ_flood` | `2^16`            | `protocol.Params`      | Std of the discrete-Gaussian flooding noise VClient adds during partial decryption. Constant, independent of `ε` and the circuit (see §Noise for the why).  |
+| `F`       | session-fresh PRG | _session-local_        | Deterministic from a session-fresh seed; samples uniformly from `(-Q_0/2, Q_0/2)`.                                                                          |
 
-VAgent owns `S`, the seed of `F`, and (consequently) the verification vector `v`. VClient is told `λ`, `|S|`, `ε`, and `σ_flood`. All authentication secrets stay on the VAgent side.
+VAgent owns `S`, the seed of `F`, and (consequently) the verification vector `v`. VClient learns `λ`, `ε`, and `σ_flood` via the params fetch (`|S|` follows from `λ`). All authentication secrets stay on the VAgent side.
 
 **Note on chain notation.** We use the convention `Q_chain = [q_0, q_1, ..., q_L]`, where `q_0` is the special/base prime (~51–60 bits in our params) and `q_1..q_L` are the rescaling primes each ≈ `log2(Δ)` bits (~40 bits in Phase 1). At fresh encryption the ciphertext is at level `L` with modulus `Q_L = q_0 · q_1 · … · q_L`; each rescaling drops the top prime; what survives at level 0 is `Q_0 = q_0`. So `Q_0` here refers to the same prime that's largest in absolute size and is the one left after all rescalings — _not_ a small "leftover" prime.
 
@@ -293,7 +293,7 @@ If both pass, the recovered message is `m_recovered = P[j*]` — the binary-clas
 
 - **Rotations are needed from Phase 1.** `Auth` step 4 calls `Rot(ct_m, j)` for `j ∈ [0, λ) \ S`. Even the Phase-1 synthetic `x²` inference circuit therefore exercises rotation keys: the collaborative `multiparty.GaloisKeyGen` handshake produces Galois keys for indices `1..λ-1` so that `Auth` can run.
 - **Rotation count.** Naïve `Auth` does one ct × pt mask multiplication and `λ - |S| = 64` rotations followed by an addition tree. `Evaluator.InnerSum`-style tree reductions can cut the rotation count to `O(log λ)` with appropriate Galois-key selection — a Phase-2 optimisation once bench numbers show the cost.
-- **The mask plaintext is reusable.** `pt_one_hot = [1, 0, ..., 0]` at scale 1 is session-independent: encode it once per `verification.Config` (when params are loaded) and reuse across every session's `Auth`.
+- **The mask plaintext is reusable.** `pt_one_hot = [1, 0, ..., 0]` at scale 1 is session-independent: encode it once per `authenticator.Config` (when params are loaded) and reuse across every session's `Auth`.
 - **Phase 4 rotation composition.** Both VAgent (for `Auth`'s rotation-and-sum step) and VService (for the inference circuit, when the model uses rotations) need rotation keys. In Phases 1–3, both parties receive the full assembled Galois key set, so a rotation by any `j` is one ciphertext op. In Phase 4, the wire payload collapses to the small `gks_master` atom set (e.g., `{1, 2, 4, 8, 16, 32, 64}` for `Base = 4`). Each party then independently picks how to use it:
   - **Expand** `gks_master` into the full `gks` set locally via lattigo-hierkeys' hierarchical derivation — large in-memory key set, single-op rotations.
   - **Keep** only the master set in memory and **decompose** each target rotation into an atom chain — small memory footprint, multiple ciphertext rotations per logical rotation. Example: 69 = 64 + 4 + 1 becomes `Rot(·, 64) → Rot(·, 4) → Rot(·, 1)`.
@@ -391,8 +391,8 @@ ppiav/
 │   ├── ppiav-vagent/                  # Phase 3+
 │   └── ppiav-rservice/                # Phase 3+
 ├── internal/
-│   ├── protocol/                      # Domain types, wire messages, parameter sets (CKKS, verification, Orion)
-│   ├── verification/                  # Per-session verification values + authenticated-ct construction (used by vagent)
+│   ├── protocol/                      # Domain types, wire messages, parameter sets (CKKS, authenticator, Orion)
+│   ├── authenticator/                 # Per-session MPD-Auth state + ct_M construction + Ver check (used by vagent)
 │   ├── vclient/                       # Subject-side crypto (sk_c share, partial decryption)
 │   ├── vservice/                      # FHE inference; sid issuer (Phase 4: gks derivation from gks_master)
 │   ├── vagent/                        # Protocol mediator; sk_a share; final decryption; logit→verdict binarisation
@@ -437,12 +437,13 @@ const (
 )
 ```
 
-Parameters — defaults grow over phases (CKKS + verification config now; Orion params arrive in Phase 2):
+Parameters — defaults grow over phases (CKKS + authenticator config now; Orion params arrive in Phase 2):
 
 ```go
 type Params struct {
-    CKKS         ckks.Parameters
-    Verification verification.Config // see §Multiparty decryption with authentication
+    CKKS          ckks.Parameters
+    Authenticator authenticator.Config // see §Multiparty decryption with authentication
+    FloodSigma    float64              // VClient partial-decryption flooding sigma; default 2^16. Lives here (not in authenticator.Config) because VClient is the consumer — VAgent's Auth/Ver never touch flooding.
 }
 
 func Defaults() (Params, error)
@@ -534,12 +535,12 @@ The seed is `"ppiav-crs/v1|" || sid`. The domain prefix is hygiene against ever 
 
 VAgent and VClient iterate the same list of rotation indices (derived from `λ` for MPD-Auth plus whatever the inference circuit declares from Phase 2 onward) so the per-rotation CRPs line up.
 
-#### `internal/verification`
+#### `internal/authenticator`
 
-Per-session MPD-Auth state and the `Auth` / `Ver` operations. Used by VAgent immediately after inference (`Auth` builds `ct_M`) and again after the final joint decryption (`Ver` checks the recovered plaintext). The algorithm, parameter meanings, and ε bound live in §Multiparty decryption with authentication.
+MPD-Auth as three pieces: a config-bundle `Authenticator`, a serializable per-session `Key`, and a standalone `KeyGen` that produces fresh keys. `Auth` and `Ver` are methods on `Authenticator` that take a `Key` argument — callers (i.e., VAgent) generate keys with `KeyGen`, persist them wherever fits the session-state design, and pass them into `Auth` / `Ver` later. The algorithm, parameter meanings, and ε bound live in §Multiparty decryption with authentication.
 
 ```go
-package verification
+package authenticator
 
 import (
     "io"
@@ -549,42 +550,61 @@ import (
 )
 
 type Config struct {
-    Lambda     int     // λ; default 128
-    SetSize    int     // |S|; default Lambda / 2
-    Epsilon    float64 // Ver tolerance in scaled-message space; default 2^20
-    FloodSigma float64 // VClient partial-decryption flooding sigma; default 2^16
-    // Q0 is read from ckks.Parameters at session creation; not configured here.
+    Lambda  int     // λ; default 128. |S| is always λ/2 (not configurable).
+    Epsilon float64 // Ver tolerance in scaled-message space; default 2^20
+    // Q0 is read from ckks.Parameters at the call site; not configured here.
+    // FloodSigma lives in protocol.Params — VClient knob, not an authenticator knob.
 }
 
 func DefaultConfig() Config
 
-// Session holds the per-session authentication secret: the index set S, the
-// PRG seed for F, and the scale used when encoding v. Single-use: Check
-// zeroizes the state.
-type Session struct{ /* opaque — S, seedF, scale */ }
+// Authenticator bundles config and any reusable, session-independent
+// resources (e.g., the cached pt_one_hot plaintext for masking). Cheap to
+// construct; one instance per VAgent is the natural lifecycle.
+type Authenticator struct{ /* cfg + cached pt_one_hot */ }
 
-func NewSession(cfg Config, params ckks.Parameters, rand io.Reader) (*Session, error)
+func New(cfg Config, params ckks.Parameters) (*Authenticator, error)
 
-// Auth builds ct_M from result_ct per §MPD-Auth/Auth. Requires session-bound
-// primitives: encoder, encryptor under the aggregated pk, evaluator wired
-// with the aggregated rlk and Galois keys for rotations 1..Lambda-1.
-func (s *Session) Auth(
+// Key is the per-authentication secret: the verification-slot index set S
+// (|S| = cfg.Lambda/2) and the PRG seed for F. Serializable so callers can
+// persist or transport it independently of the Authenticator's lifecycle.
+type Key struct{ /* opaque — S, SeedF */ }
+
+func (k Key) MarshalBinary() ([]byte, error)
+func (k *Key) UnmarshalBinary(data []byte) error
+
+// KeyGen samples a fresh Key — top-level (not a method) to emphasize that
+// keys are independent values: generate, store wherever, hand back to
+// Auth/Ver later. rand seeds both S (sampled without replacement from
+// [0, Lambda)) and SeedF.
+func KeyGen(cfg Config, rand io.Reader) (Key, error)
+
+// Auth runs §MPD-Auth/Auth: masks slot 0 with the cached pt_one_hot,
+// rotates+sums into ct_m^Rep, encrypts v deterministically from key.SeedF,
+// adds, returns ct_M. Requires the session-bound crypto primitives:
+// encoder, encryptor under the aggregated pk, evaluator wired with the
+// aggregated rlk and Galois keys for rotations 1..Lambda-1.
+func (a *Authenticator) Auth(
+    key Key,
     enc *ckks.Encoder,
     encryptor *rlwe.Encryptor,
     eval *ckks.Evaluator,
     resultCt *rlwe.Ciphertext,
 ) (ctM *rlwe.Ciphertext, err error)
 
-// Ver runs the post-decryption check per §MPD-Auth/Ver. Returns the recovered
-// message m (taken from a value slot) and ok = true iff both the
-// verification-slot and value-slot checks pass within Config.Epsilon.
-// State is zeroized before return.
-func (s *Session) Ver(plaintext []float64) (m float64, ok bool)
-
-// Check tests the recovered plaintext against the per-session verification
-// values within ε. Returns false if the client deviated from the joint
-// decryption protocol.
-func (s Secret) Check(cfg Config, decrypted []float64) bool
+// Ver runs §MPD-Auth/Ver against the decrypted plaintext slot vector.
+// Returns the recovered message m (from a value slot) and ok = true iff
+// both the verification-slot match and the value-slot pairwise-agreement
+// checks pass within cfg.Epsilon.
+//
+// Pure function: no state mutation, no Key zeroization. Single-use of a
+// Key is a protocol-layer invariant (a covert client given two Auth runs
+// against the same Key could correlate them), enforced by VAgent — not
+// this package.
+func (a *Authenticator) Ver(
+    key Key,
+    plaintext []float64,
+) (m float64, ok bool)
 ```
 
 #### `internal/vclient`
@@ -702,19 +722,20 @@ package vagent
 type Agent struct {
     params   protocol.Params
     encoder  *ckks.Encoder
+    auth     *authenticator.Authenticator // shared across sessions; cfg + cached pt_one_hot
     sessions map[protocol.SessionID]*sessionState
     mu       sync.Mutex
 }
 
 type sessionState struct {
-    skShare   *rlwe.SecretKey                 // sk_a
+    skShare   *rlwe.SecretKey            // sk_a
     pkAgg     *rlwe.PublicKey
     rlkAgg    *rlwe.RelinearizationKey
-    gksAgg    *rlwe.GaloisKeySet              // Phase 4: replaced by lattigohierkeys.MasterKey
+    gksAgg    *rlwe.GaloisKeySet         // Phase 4: replaced by lattigohierkeys.MasterKey
 
-    encryptor *rlwe.Encryptor                 // built from pkAgg
-    eval      *ckks.Evaluator                 // built from rlkAgg
-    verif     *verification.Session           // per-session MPD-Auth state
+    encryptor *rlwe.Encryptor            // built from pkAgg
+    eval      *ckks.Evaluator            // built from rlkAgg
+    authKey   authenticator.Key          // per-session MPD-Auth key (S, seedF)
 }
 
 func New(params protocol.Params) (*Agent, error)
@@ -760,7 +781,7 @@ func (a *Agent) FinalizeDecryption(
 ) (protocol.Verdict, error)
 ```
 
-`OpenSession(sid)` registers the sid that VService allocated and primes the session state for keygen. The pk/rlk/Galois responders all draw fresh shares with the session-scoped CRS, aggregate with the client's, and persist the running aggregates. `BuildAuthenticatedCt` calls `verification.Session.Auth` on `result_ct`. `FinalizeDecryption` combines VClient's `KeySwitchShare` with VAgent's own share (computed from `sk_a` against the authenticated ciphertext), applies the key-switch to recover the plaintext result vector, runs `verification.Session.Ver`, and — if it passes — returns `Accept` iff the recovered `m > 0`, else `Reject`. The MPD-Auth state is single-use: `Ver` zeroizes the session.
+`OpenSession(sid)` registers the sid that VService allocated, calls `authenticator.KeyGen` to mint the session's `authKey`, and primes the session state for keygen. The pk/rlk/Galois responders all draw fresh shares with the session-scoped CRS, aggregate with the client's, and persist the running aggregates. `BuildAuthenticatedCt` calls `Agent.auth.Auth(authKey, …, result_ct)`. `FinalizeDecryption` combines VClient's `KeySwitchShare` with VAgent's own share (computed from `sk_a` against the authenticated ciphertext), applies the key-switch to recover the plaintext result vector, calls `Agent.auth.Ver(authKey, plaintext)`, and — if it passes — returns `Accept` iff the recovered `m > 0`, else `Reject`. `authKey` single-use is a VAgent-level invariant: the session entry (including `authKey`) is dropped after `FinalizeDecryption` returns.
 
 #### `internal/rservice`
 
