@@ -4,31 +4,22 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/butvinm/ppiav/internal/authenticator"
 	"github.com/tuneinsight/lattigo/v6/ring"
 	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
 )
 
-// Config is a stub of internal/authenticator's configuration.
-// TODO(task 3): move to internal/authenticator and import here.
-type Config struct {
-	Lambda  int
-	Epsilon float64
-}
-
-// DefaultConfig returns the Phase-1 authenticator defaults.
-// TODO(task 3): move to internal/authenticator.
-func DefaultConfig() Config {
-	return Config{
-		Lambda:  128,
-		Epsilon: math.Exp2(20),
-	}
+// DefaultConfig re-exports the authenticator's defaults so callers building
+// Params manually don't need a second import in the common case.
+func DefaultConfig() authenticator.Config {
+	return authenticator.DefaultConfig()
 }
 
 // Params bundles the CKKS parameters, MPD-Auth configuration, and the
 // VClient flooding sigma used during partial decryption.
 type Params struct {
 	CKKS          ckks.Parameters
-	Authenticator Config
+	Authenticator authenticator.Config
 	FloodSigma    float64
 }
 
@@ -57,7 +48,7 @@ func Defaults() (Params, error) {
 	}
 	return Params{
 		CKKS:          params,
-		Authenticator: DefaultConfig(),
+		Authenticator: authenticator.DefaultConfig(),
 		FloodSigma:    math.Exp2(16),
 	}, nil
 }
