@@ -407,7 +407,7 @@ ppiav/
 ├── deploy/                            # Phase 3+ Dockerfiles
 ├── results/                           # JSON + plots (selectively committed snapshots)
 ├── docs/
-│   └── DESIGN-2.md
+│   └── DESIGN.md
 ├── go.mod
 └── README.md
 ```
