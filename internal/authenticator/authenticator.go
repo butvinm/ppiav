@@ -309,6 +309,27 @@ func (p *deterministicPRG) sampleBoundedSigned(span, limit, q0Half *big.Int, byt
 	return nil, fmt.Errorf("authenticator: rejection sampler exhausted retries")
 }
 
+// VRawValues exposes the deterministic verification values v[i] (in
+// scaled-message space — not divided by Δ) for benchmarking and test
+// harnesses that need to synthesize the exact plaintext Ver expects
+// without driving a full FHE protocol round. Returns one entry per
+// i ∈ key.S. Honest joint decryption produces P[i] = v[i]/Δ in S slots,
+// so a caller can rebuild a Ver-accepting plaintext as:
+//
+//	for i ∈ key.S:           plaintext[i] = vRaw[i] / a.params.DefaultScale().Float64()
+//	for i ∈ [0, Λ) \ key.S:  plaintext[i] = m (the chosen message)
+//
+// See cmd/ppiav-cli/steps.go for the `verify-mac` subcommand's usage.
+func (a *Authenticator) VRawValues(key Key) (map[int]float64, error) {
+	if err := a.cfg.validate(); err != nil {
+		return nil, err
+	}
+	if len(key.S) != a.cfg.Lambda/2 {
+		return nil, fmt.Errorf("authenticator: Key.S size=%d does not match Lambda/2=%d", len(key.S), a.cfg.Lambda/2)
+	}
+	return vRawValues(key.SeedF, a.cfg.Lambda, key.S, a.q0Half)
+}
+
 // vRawValuesForVerification re-derives the raw (scaled-space) v[i] values
 // from the seed; used by Ver to compare against P[i]·Δ. It returns the
 // untyped float64 v[i] (i.e. NOT divided by Δ), one entry per i ∈ S.

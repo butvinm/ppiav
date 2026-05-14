@@ -264,6 +264,60 @@ func TestDeriveVDeterministic(t *testing.T) {
 	}
 }
 
+func TestVRawValuesExposesHelperForBench(t *testing.T) {
+	// VRawValues is the public hook used by cmd/ppiav-cli's verify-mac
+	// subcommand to synthesize a Ver-accepting plaintext without driving a
+	// full FHE round-trip. The values it returns must equal the internal
+	// vRawValues call byte-for-byte so the synthetic plaintext fed to Ver
+	// matches what joint decryption would produce.
+	const lambda = 16
+	p := testParams(t)
+	cfg := Config{Lambda: lambda, Epsilon: math.Exp2(20)}
+	a, err := New(cfg, p)
+	require.NoError(t, err)
+	key, err := KeyGen(cfg, rand.Reader)
+	require.NoError(t, err)
+
+	got, err := a.VRawValues(key)
+	require.NoError(t, err)
+	want, err := vRawValues(key.SeedF, lambda, key.S, a.q0Half)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+
+	// Synthesize the Ver-accepting plaintext from VRawValues + a chosen m.
+	inS := sInSet(key.S, lambda)
+	plaintext := make([]float64, p.MaxSlots())
+	const m = 0.5
+	for i := 0; i < lambda; i++ {
+		if inS[i] {
+			plaintext[i] = got[i] / a.deltaF64
+		} else {
+			plaintext[i] = m
+		}
+	}
+	recovered, ok := a.Ver(key, plaintext)
+	require.True(t, ok, "synthesized plaintext must pass Ver")
+	assert.InDelta(t, m, recovered, 1e-12)
+}
+
+// VRawValues rejects bad input: wrong-sized S, or a stale Authenticator
+// with an invalid config (defensive — the constructor refuses such
+// configs, but we still guard the method).
+func TestVRawValuesValidates(t *testing.T) {
+	const lambda = 16
+	p := testParams(t)
+	cfg := Config{Lambda: lambda, Epsilon: math.Exp2(20)}
+	a, err := New(cfg, p)
+	require.NoError(t, err)
+	key, err := KeyGen(cfg, rand.Reader)
+	require.NoError(t, err)
+
+	bad := key
+	bad.S = key.S[:len(key.S)-1] // drop one element → |S| != lambda/2
+	_, err = a.VRawValues(bad)
+	require.Error(t, err)
+}
+
 func TestNewCachesOneHotMask(t *testing.T) {
 	p := testParams(t)
 	a, err := New(DefaultConfig(), p)
