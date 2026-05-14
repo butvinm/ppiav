@@ -208,15 +208,15 @@ Reason this is first: every later task that does crypto work logs samples throug
 - Create: `internal/vservice/service_test.go`
 - Create: `internal/vservice/infer_test.go`
 
-- [ ] `service.go`: `Service` struct with `params protocol.Params`, `sessions map[SessionID]*sessionState`, `mu sync.Mutex`. `sessionState` holds the per-session `*ckks.Evaluator`. `New(params)` constructor.
-- [ ] `OpenSession() (SessionID, error)`: draw ≥128 bits from `crypto/rand`, hex-encode, allocate the session slot. Return `SessionID`. Error if random read fails. **Do not** generate the evaluator yet — `StoreEvalKeys` does that.
-- [ ] `Params() protocol.Params`: return `s.params`.
-- [ ] `StoreEvalKeys(sid, rlk *rlwe.RelinearizationKey, gks *rlwe.GaloisKeySet) error`: under `s.mu`, look up the session, build a `ckks.NewEvaluator(params.CKKS, rlwe.NewMemEvaluationKeySet(rlk, gks.GetKeys()...))`. Error if sid unknown. (Phase 4 will swap the `gks` argument for a hierkeys master key.)
-- [ ] `infer.go`: `Infer(sid, inputCt) (*rlwe.Ciphertext, error)` — Phase 1 implements `x²`. Under `s.mu` (or after copying the evaluator pointer out) call `eval.MulRelinNew(inputCt, inputCt)` then `eval.RescaleNew`. Error if sid unknown.
-- [ ] tests:
+- [x] `service.go`: `Service` struct with `params protocol.Params`, `sessions map[SessionID]*sessionState`, `mu sync.Mutex`. `sessionState` holds the per-session `*ckks.Evaluator`. `New(params)` constructor.
+- [x] `OpenSession() (SessionID, error)`: draw ≥128 bits from `crypto/rand`, hex-encode, allocate the session slot. Return `SessionID`. Error if random read fails. **Do not** generate the evaluator yet — `StoreEvalKeys` does that.
+- [x] `Params() protocol.Params`: return `s.params`.
+- [x] `StoreEvalKeys(sid, rlk *rlwe.RelinearizationKey, gks *rlwe.GaloisKeySet) error`: under `s.mu`, look up the session, build a `ckks.NewEvaluator(params.CKKS, rlwe.NewMemEvaluationKeySet(rlk, gks.GetKeys()...))`. Error if sid unknown. (Phase 4 will swap the `gks` argument for a hierkeys master key.)
+- [x] `infer.go`: `Infer(sid, inputCt) (*rlwe.Ciphertext, error)` — Phase 1 implements `x²`. Under `s.mu` (or after copying the evaluator pointer out) call `eval.MulRelinNew(inputCt, inputCt)` then `eval.RescaleNew`. Error if sid unknown.
+- [x] tests:
   - `service_test.go`: `OpenSession` returns distinct sids on consecutive calls; `StoreEvalKeys` errors on unknown sid; `Params` returns the original params.
   - `infer_test.go`: end-to-end x² test using single-party Lattigo keys (skip the multi-party handshake here — it's tested in Task 8). Encrypt `m=0.3`, infer, decrypt, assert `|m' − 0.09| < 1e-4`. Also assert level drops by exactly 1 after `Infer`. Use `LogN=14` parameters here for speed; do not depend on `protocol.Defaults()`.
-- [ ] run tests — must pass before Task 5.
+- [x] run tests — must pass before Task 5.
 
 ### Task 5: `internal/vclient` — client-side shares, partial decryption, image encryption
 
