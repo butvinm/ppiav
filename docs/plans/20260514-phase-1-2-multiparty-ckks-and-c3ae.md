@@ -35,8 +35,8 @@ Phases 3 (HTTP transport + browser SPAs) and 4 (lattigo-hierkeys) are explicitly
 ## Testing Strategy
 
 - **Unit tests** (required per task): Go `*_test.go` next to each source file. Use `testify/assert` and `testify/require`. Phase-1 tests run with a smaller `LogN` set (e.g. `LogN=14`) where it doesn't break the protocol so the unit suite stays fast — full-`LogN` runs go through the CLI or the integration build tag.
-- **Integration test** (Task 11, build-tagged `//go:build integration`): one end-to-end test exercising the full §3 protocol in-process with the production `LogN=16` params. Drives every package together. Run with `go test -tags=integration ./...`.
-- **Noise / parameter validation** (build-tagged `//go:build noise`): one slow test (~minutes, dozens of fresh keygens) that empirically measures the post-decryption noise distribution and asserts the §`ε and σ_flood` margin holds. Justifies the constants in DESIGN.md.
+- **Integration test** (Task 8, build-tagged `//go:build integration`): one end-to-end test exercising the full §3 protocol in-process with the production `LogN=16` params. Drives every package together. Run with `go test -tags=integration ./...`.
+- **No noise / σ-calibration tests in this plan.** DESIGN.md `§ε and σ_flood` defers proper statistical calibration "until after all four phases land"; the prototype takes ε=2²⁰ and σ_flood=2¹⁶ as given. Empirical σ measurement is a Phase-5 (post-Phase-4) follow-up plan.
 - **Python suite** (Phase 2 only): `pytest`, `ruff check`, `mypy --strict` for the `bench/` and `models/` uv projects. Pytest covers the image-preprocessing pipeline against fixed test vectors so it can be cross-validated against the JS browser pipeline in a later phase.
 - **No e2e UI tests** — Phase 3 work, out of scope here.
 
@@ -298,8 +298,12 @@ The orchestrator is the in-process glue that the CLI in Task 9 wraps. Putting it
 - [ ] `runner.go`: `Runner` struct bundles `vclient.Client`, `vagent.Agent`, `vservice.Service`, `rservice.Service`. `NewRunner(params)` constructs them. `Open()` runs Stage 1 (`vservice.OpenSession` → `vagent.OpenSession` → returns sid). `Setup(ctx)` drives Stages 2a–d (params handshake, pk handshake, two rlk rounds, Galois handshake, `vservice.StoreEvalKeys`). `Infer(image []float64) → *rlwe.Ciphertext` runs Stage 3. `Verify(resultCt) → Verdict` runs Stage 4 and submits to RService.
 - [ ] each `Runner` method is a stripped-down wrapper around the underlying call — no business logic — but each one is a natural `bench.Measure` boundary, so they return error-only and the CLI wraps them.
 - [ ] `runner_test.go`: unit tests against a smaller `LogN=14`, `λ=8` profile. Drive `Open` → `Setup` → encrypt `m=0.5` → `Infer` → `Verify`. Assert `Verdict.Accept` (squared positive logit ⇒ `m'=0.25 > 0`). Also assert each method advances state in the right order (calling `Verify` before `Setup` is an error).
-- [ ] `integration_test.go` (build tag `//go:build integration`): full DESIGN.md `LogN=16` defaults, end-to-end. Provide an image vector that's all 0.5 (so encrypted `m=0.5`, `x²` produces `0.25` at every slot, `Ver` accepts, `Verdict = Accept`). Provide a second case with image of all `-0.3` (still positive squared, still Accept — there is no negative `m` after `x²`, so we instead drive Reject via a `ForceReject` test hook on `Runner` that swaps in a `m=-0.5` plaintext after inference — document this is a test-only path).
-- [ ] also include a tamper test in `integration_test.go`: between `Infer` and `Verify`, replace the `result_ct` with `result_ct + ct_one` (encrypt `1` under the aggregated pk and add) — `Ver` should reject because the verification-slot values won't match.
+- [ ] `runner.go`: `Runner` takes its `vservice` dependency through a small interface (e.g. `type Inferrer interface { OpenSession() (SessionID, error); StoreEvalKeys(SessionID, *rlwe.RelinearizationKey, *rlwe.GaloisKeySet) error; Infer(SessionID, *rlwe.Ciphertext) (*rlwe.Ciphertext, error); Params() Params }`) — `NewRunner(params)` builds it from the real `vservice.New(params)` by default; a sibling `NewRunnerWithInferrer(params, Inferrer)` lets tests inject a mock. No `ForceReject` flag or other test-only fields on the production struct.
+- [ ] `integration_test.go` (build tag `//go:build integration`): full DESIGN.md `LogN=16` defaults, end-to-end. Three cases:
+  - **Accept**: image vector all 0.5 → `x²` produces 0.25 at every slot → `Verdict = Accept`.
+  - **Reject via inverted logit**: inject a mock `Inferrer` that returns a ciphertext encrypting `m=-0.5` at slot 0 (rest garbage). After Ver passes, the binarisation step turns this into `Verdict = Reject`. The mock is `NewRunnerWithInferrer`-injected; no test hook on `Runner`.
+  - **Reject via tamper**: between `Infer` and `Verify`, replace `result_ct` with `result_ct + Encrypt(1)` under the aggregated pk. Ver rejects because the verification-slot values won't match.
+- [ ] **F4b posture test** in `integration_test.go`: open a session via `Runner.Open()`, run `Setup()`, then **do not** call `Infer`/`Verify`. Assert `rservice.CheckAccess(sid) == VerdictUnknown` — pins the deny-by-default contract from `docs/DESIGN.md §Failure modes`.
 - [ ] run tests — must pass before Task 9: `go test ./... && go test -tags=integration ./internal/orchestrator/...`
 
 ### Task 9: `cmd/ppiav-cli` — CLI entry points and JSON bench output
@@ -314,9 +318,10 @@ The orchestrator is the in-process glue that the CLI in Task 9 wraps. Putting it
 - [ ] `main.go`: subcommand dispatcher using stdlib `flag` (no `cobra` — keep deps tight; the design says simple/idiomatic Go). Subcommands `e2e`, `keygen`, `encrypt-image`, `infer`, `mac` (Auth), `decrypt-result` (joint decryption), `verify-mac` (Ver). Common `--n int` flag (default 1) and `--out string` flag (default `results/phase1/<step>.json`).
 - [ ] `e2e.go`: runs the full §3 protocol via `internal/orchestrator.Runner`, wrapping each method in `bench.Measure` and emitting one `bench.Run` per command invocation. README claims `go run ./cmd/ppiav-cli e2e --n 5` works — implement to match.
 - [ ] `steps.go`: each per-step subcommand isolates one operation in a hot loop after a one-time setup. `keygen` drives only Stage 2 with fresh sids; `encrypt-image` reuses a single Stage-2 setup and re-encrypts a fixed image `--n` times; etc.
-- [ ] image input: `e2e` and `encrypt-image` accept `--image path/to/sample.bin` (12288 little-endian float64). For Phase 1 (before `models/` exists), the CLI generates a deterministic synthetic image (e.g. `sin` over `[0, 1]` scaled into `[-1, 1]`) when `--image` is empty, and writes it as a `.bin` fixture under `results/phase1/inputs/` so reruns are reproducible.
-- [ ] `main_test.go`: smoke test — run `e2e` with `--n 1` inside a `testing.T` (via direct function call, not `exec.Command`), capture the JSON output, assert the sample count matches and `Wall > 0` per stage.
-- [ ] `gitignore`: append `results/phase1/inputs/` and `results/phase1/*.json` to `.gitignore` so generated JSON isn't committed by accident. Snapshot commits stay manual.
+- [ ] image input: `e2e` and `encrypt-image` **require** `--image path/to/sample.bin` (12288 little-endian float64). No runtime synthesis — DESIGN.md §`internal/vclient` (Phase 1) is explicit that `.bin` inputs come from `models/prepare_samples.py`; having Go re-implement preprocessing creates a second source of truth that will silently diverge.
+- [ ] commit a hand-built Phase-1 fixture at `cmd/ppiav-cli/testdata/synthetic.bin` — 12288 float64s, content irrelevant for `x²` correctness (e.g. all 0.5, written from a `go run` snippet documented in a sibling `cmd/ppiav-cli/testdata/synthetic.gen.go` build-tagged `//go:build ignore`). Once Task 12 lands, regenerate via `prepare_samples.py` and replace the fixture; the path stays the same.
+- [ ] `main_test.go`: smoke test — run `e2e --image testdata/synthetic.bin --n 1` inside a `testing.T` (via direct function call, not `exec.Command`), capture the JSON output, assert the sample count matches and `Wall > 0` per stage.
+- [ ] `.gitignore`: append `results/phase1/*.json` so generated JSON isn't committed by accident. Snapshot commits stay manual. The fixture under `testdata/` **is** committed (it's a checked-in test input, not generated output).
 - [ ] run tests — must pass before Task 10.
 
 ### Task 10: Python `bench/` uv project — tables + plots
@@ -340,20 +345,20 @@ The orchestrator is the in-process glue that the CLI in Task 9 wraps. Putting it
 - [ ] lint/type/test gate: `cd bench && uv run pytest && uv run ruff check . && uv run mypy bench tests` — all green before Task 11.
 - [ ] run tests — must pass before Task 11.
 
-### Task 11: Phase 1 noise validation (build-tagged) and phase-1 acceptance run
+### Task 11: Phase-1 acceptance run
 
 **Files:**
 
-- Create: `internal/protocol/noise_test.go`
-- Create: `results/phase1/.gitkeep` (already exists; verify)
+- Verify: `results/phase1/.gitkeep` (already exists)
 - Modify: `README.md` (update phase-1 status section to match reality if it drifted)
 
-- [ ] `noise_test.go` (build tag `//go:build noise`): run 100 fresh keygen + encrypt + `x²` + auth + joint-decrypt cycles; compute the empirical std of `P[i]·Δ − v[i]` across all `S` slots, and of `P[i]·Δ − P[j*]·Δ` across all non-`S` slot pairs. Assert both stds are `< ε / 3` (Gaussian-tail safety margin from §`ε and σ_flood`). Asserts that the documented constants hold against the implemented stack.
-- [ ] run `go run ./cmd/ppiav-cli e2e --n 5` and the per-step commands per README. Verify JSON files materialise in `results/phase1/`.
+ε=2²⁰ and σ_flood=2¹⁶ are taken as correct; statistical calibration is a Phase-5 follow-up (see DESIGN.md §`ε and σ_flood`). This task is just the acceptance pass through everything the README claims works.
+
+- [ ] run `go run ./cmd/ppiav-cli e2e --image cmd/ppiav-cli/testdata/synthetic.bin --n 5` and the per-step commands per README. Verify JSON files materialise in `results/phase1/`.
 - [ ] run `cd bench && uv run python -m bench.tables ../results/phase1` and visually inspect the table.
 - [ ] run `cd bench && uv run python -m bench.plot ../results/phase1` and visually inspect the plots.
 - [ ] update `README.md` quick-start commands if any drifted (e.g. flag names, paths).
-- [ ] run full Go test suite incl. integration + noise tag: `go test ./... && go test -tags=integration ./... && go test -tags=noise ./internal/protocol/...`
+- [ ] run full Go test suite incl. integration: `go test ./... && go test -tags=integration ./...`
 - [ ] run tests — Phase 1 must be green before Task 12 (Phase 2 begins).
 
 ### Task 12: `models/` Python uv project — C3AE training pipeline
@@ -372,8 +377,7 @@ The orchestrator is the in-process glue that the CLI in Task 9 wraps. Putting it
 
 The model code is a clean rewrite — DESIGN.md is explicit that we do **not** copy from `~/Dev/orion/examples/c3ae-demo/` or thesis experiments. Reference them for shape only.
 
-- [ ] `pyproject.toml`: uv project. Deps include `torch` (or `tensorflow` — pick whichever Orion's compiler accepts as input; verify by reading the Orion frontend before locking the choice), `pillow`, `numpy`. Dev: `pytest`, `ruff`, `mypy`.
-- [ ] ⚠️ open question to resolve at start of this task: confirm the framework Orion's `c3ae-demo` consumes (PyTorch ONNX export vs. native). Read `~/Dev/orion/examples/c3ae-demo/models/` for the answer; do not copy code. Record the answer in `models/README.md`.
+- [ ] `pyproject.toml`: uv project. Deps: `torch`, `torch.nn`, `pillow`, `numpy`, plus the `orion-compiler` Python package (resolved against the local `~/Dev/orion` checkout via path dependency or editable install). Dev: `pytest`, `ruff`, `mypy`. Frontend choice was resolved by inspecting `~/Dev/orion/examples/c3ae-demo/models/c3ae.py` and `compile.py`: **PyTorch with `orion_compiler.Compiler` as the compilation entry point** (no ONNX export step).
 - [ ] `data.py`: UTKFace loader — accepts an unpacked UTKFace dataset path, yields `(image, age)`. No download logic (manual prep documented in `models/README.md`). Binarise age at the trained threshold to produce a `±1` label.
 - [ ] `train.py`: C3AE binary-classifier training script. CLI: `python -m models.train --data <path> --threshold 25 --epochs N --out <ckpt>`. The threshold goes into the head and is baked into the trained model.
 - [ ] `compile.py`: `python -m models.compile --ckpt <ckpt> --out <orion-out-dir>` — invokes the Orion compiler frontend on the trained checkpoint, producing the compiled circuit + manifest. Wraps Orion's Python entry point; don't reimplement compilation.
@@ -402,15 +406,22 @@ The model code is a clean rewrite — DESIGN.md is explicit that we do **not** c
 
 **Files:**
 
+- Modify: `internal/vservice/service.go` (constructor split)
 - Modify: `internal/vservice/infer.go`
 - Create: `internal/vservice/orion.go`
 - Create: `internal/vservice/orion_test.go`
+- Modify: `internal/orchestrator/runner.go` (thread Orion path through)
+- Modify: `internal/orchestrator/integration_test.go` (Phase-2 variant)
+- Modify: `cmd/ppiav-cli/main.go` (`--orion` flag)
+- Modify: `cmd/ppiav-cli/e2e.go`
+- Modify: `cmd/ppiav-cli/steps.go`
 
-- [ ] `orion.go`: load the compiled Orion circuit at `Service` construction time via the Orion Go runtime (or per-session if Orion's runtime requires session-tied state; verify before coding). `Service` gains an `*orion.Model` field built from the manifest path passed to `New(params, orionDir)`. `New(params)` becomes `New(params, opts ...Option)` with a functional-options pattern so Phase-1 callers (CLI test path) can omit Orion.
+- [ ] `orion.go`: load the compiled Orion circuit at `Service` construction time via the Orion Go runtime (verify whether the runtime is session-bound or shareable across sessions by reading the Orion Go module before coding).
+- [ ] split `vservice` construction into `New(params)` (Phase-1 `x²` shape) and `NewWithOrion(params, orionDir)` (loads compiled C3AE). Two simple constructors beat a functional-options pattern for one optional knob; revisit if a second option ever appears.
 - [ ] modify `infer.go`: `Infer` dispatches on whether `Service` has an Orion model loaded. Phase-1 path (`x²`) stays for the `keygen`-only and unit-test code paths; Phase-2 path runs the Orion circuit via `model.InferEncrypted(inputCt) → outputCt`.
 - [ ] `orion_test.go`: requires the Task-12 artifacts. Load a fixed `positive.bin`, encrypt under multi-party pk, run `Infer`, decrypt with `sk_c + sk_a`, assert the recovered logit has the expected sign. Same for `negative.bin`. Use a build tag `//go:build orion` so the unit suite stays runnable without model artifacts.
-- [ ] update `internal/orchestrator.NewRunner` to accept an `OrionPath` option; CLI `e2e` flag `--orion <dir>` plumbs through.
-- [ ] update `internal/orchestrator/integration_test.go` to gain a Phase-2 variant (build tag `//go:build integration && orion`) running the full protocol against the C3AE artifact.
+- [ ] update `internal/orchestrator.NewRunner` and `NewRunnerWithInferrer` (Task 8) to accept an optional `orionDir string`; when non-empty, use `vservice.NewWithOrion`. CLI `e2e` flag `--orion <dir>` plumbs through.
+- [ ] update `internal/orchestrator/integration_test.go` to gain a Phase-2 variant (build tag `//go:build integration && orion`) running the full protocol against the C3AE artifact, plus an F4b Unknown-posture variant matching the Phase-1 one.
 - [ ] run tests — must pass before Task 15.
 
 ### Task 15: CLI Phase-2 driver + bench numbers
@@ -435,7 +446,7 @@ The model code is a clean rewrite — DESIGN.md is explicit that we do **not** c
 - [ ] verify Failure-Mode F1 (Ver returns false) and F2 (malformed input) tests exist and pass.
 - [ ] verify Failure-Mode F3 (inference error) by injecting a deliberate error in `vservice.Infer` from a test and asserting `Reject` propagates.
 - [ ] verify F4a/F4b are documented as deferred (HTTP-only) — leave a TODO in `README.md` linking to DESIGN.md §`Failure modes`.
-- [ ] run full Go test suite incl. integration + noise + orion tags: `go test ./... && go test -tags=integration ./... && go test -tags=noise ./internal/protocol/... && go test -tags=integration,orion ./internal/orchestrator/... && go test -tags=orion ./internal/vservice/...`
+- [ ] run full Go test suite incl. integration + orion tags: `go test ./... && go test -tags=integration ./... && go test -tags=integration,orion ./internal/orchestrator/... && go test -tags=orion ./internal/vservice/...`
 - [ ] run Python suites: `cd bench && uv run pytest && uv run ruff check . && uv run mypy bench tests` ; same in `models/`.
 - [ ] run `go vet ./...` and confirm no warnings.
 - [ ] verify all README quick-start commands work copy-paste.
@@ -458,7 +469,6 @@ _Items requiring manual intervention or external systems — no checkboxes, info
 **Manual verification**
 
 - visually inspect the bench plots and Markdown tables for outliers — pre-warmup transients or GC spikes that should be excluded.
-- cross-check the noise-test empirical σ values against the §`Noise magnitude` analytic predictions; if they diverge significantly, file a follow-up to recalibrate `ε`/`σ_flood`.
 - sanity-check the C3AE compiled output by running Orion's own demo against the same checkpoint and confirming the logit values match within float-precision tolerance.
 
 **External system updates**
@@ -467,6 +477,6 @@ _Items requiring manual intervention or external systems — no checkboxes, info
 
 **Follow-up plans (not part of this plan, but to file once this lands)**
 
-- Phase 3: HTTP services + browser SPAs + WASM bridge (`web/ppiav`).
-- Phase 4: lattigo-hierkeys integration (`gks_master` wire format).
-- Noise-calibration replan: deferred per DESIGN.md until all four phases have landed; replan after Phase 4 with `σ_B` measurements from every phase.
+- **Phase 3**: HTTP services + browser SPAs + WASM bridge (`web/ppiav`).
+- **Phase 4**: lattigo-hierkeys integration (`gks_master` wire format).
+- **Phase 5 — noise calibration**: deferred per DESIGN.md until all four protocol phases have landed. Replan after Phase 4 to empirically measure σ_B across each phase's params and circuits, derive σ_flood and ε from those measurements with an explicit confidence bound, and either confirm or adjust the 2¹⁶/2²⁰ constants the prototype uses on faith.
