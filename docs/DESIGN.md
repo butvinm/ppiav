@@ -82,14 +82,14 @@ sequenceDiagram
     RS->>VA: POST /sessions (SessionOpen)
     VA->>VS: POST /sessions (SessionOpen)
     VS->>VS: allocate sid
-    VS-->>VA: 200 SessionOpened{sid}
+    VS-->>VA: VerificationSession
     VA->>VA: register sid
-    VA-->>RS: 200 SessionOpened{sid}
-    RS-->>RC: 302 → VClient /verify?sid (Set-Cookie sid)
+    VA-->>RS: VerificationSession
+    RS-->>RC: 302 to VClient /verify?sid (Set-Cookie sid)
     RC->>VC: GET /verify?sid (loads SPA)
 
     %% Stage 2a — protocol parameters
-    VC->>VA: GET /sessions/{sid}/params
+    VC->>VA: GET /sessions/:sid/params
     VA->>VS: GET /params
     VS-->>VA: Params
     VA->>VA: persist params
@@ -97,57 +97,57 @@ sequenceDiagram
 
     %% Stage 2b — public key (one round)
     VC->>VC: Keygen sk_c, pk_c
-    VC->>VA: POST /sessions/{sid}/pk-share {pk_c}
-    VA->>VA: Keygen sk_a, pk_a; aggregate pk
-    VA-->>VC: 200 {pk_a}
+    VC->>VA: POST /sessions/:sid/pk-share (VClientPKShare)
+    VA->>VA: Keygen sk_a, pk_a, aggregate pk
+    VA-->>VC: VAgentPKShare
     VC->>VC: aggregate pk
 
     %% Stage 2c — relinearization key (round 1)
-    VC->>VC: Keygen ephSk_c, rlk_c⁽¹⁾
-    VC->>VA: POST /sessions/{sid}/rlk/round1 {rlk_c⁽¹⁾}
-    VA->>VA: Keygen ephSk_a, rlk_a⁽¹⁾; aggregate rlk⁽¹⁾_agg
-    VA-->>VC: 200 {rlk_a⁽¹⁾}
-    VC->>VC: aggregate rlk⁽¹⁾_agg
+    VC->>VC: Keygen ephSk_c, rlk_c r1
+    VC->>VA: POST /sessions/:sid/rlk/round1 (VClientRLKRound1)
+    VA->>VA: Keygen ephSk_a, rlk_a r1, aggregate rlk_agg r1
+    VA-->>VC: VAgentRLKRound1
+    VC->>VC: aggregate rlk_agg r1
 
     %% Stage 2c — relinearization key (round 2)
-    VC->>VC: Keygen rlk_c⁽²⁾
-    VC->>VA: POST /sessions/{sid}/rlk/round2 {rlk_c⁽²⁾}
-    VA->>VA: Keygen rlk_a⁽²⁾; aggregate rlk
+    VC->>VC: Keygen rlk_c r2
+    VC->>VA: POST /sessions/:sid/rlk/round2 (VClientRLKRound2)
+    VA->>VA: Keygen rlk_a r2, aggregate rlk
     VA-->>VC: 200 (rlk complete)
 
     %% Stage 2d — rotation keys (gks_master + hierarchical derivation)
     VC->>VC: Keygen gks_master_c
-    VC->>VA: POST /sessions/{sid}/gks-master {gks_master_c}
-    VA->>VA: Keygen gks_master_a; aggregate gks_master
-    VA->>VS: POST /sessions/{sid}/eval-keys {rlk, gks_master}
+    VC->>VA: POST /sessions/:sid/gks-master (VClientGaloisKeyShare)
+    VA->>VA: Keygen gks_master_a, aggregate gks_master
+    VA->>VS: POST /sessions/:sid/eval-keys (InferEvalKeys)
     VS->>VS: hierarchical derivation of gks from gks_master
     VS-->>VA: 200
     VA-->>VC: 200 (setup complete)
 
     %% Stage 2e — SSE channel for the eventual authenticated result
-    VC->>VA: GET /sessions/{sid}/result (open SSE)
+    VC->>VA: GET /sessions/:sid/result (open SSE)
     VA-->>VC: 200 (event-stream)
 
     %% Stage 3 — image submission and inference
     VC->>VC: EncryptImage
-    VC->>VA: POST /sessions/{sid}/image (EncryptedImage)
-    VA->>VS: POST /sessions/{sid}/image (EncryptedImage)
+    VC->>VA: POST /sessions/:sid/image (EncryptedImage)
+    VA->>VS: POST /sessions/:sid/image (EncryptedImage)
     activate VS
     VS->>VS: Infer
-    VS-->>VA: 200 result_ct
+    VS-->>VA: result_ct
     deactivate VS
 
     %% Stage 4a — MPD-Auth joint decryption
-    VA->>VA: pick verification values; build authenticated_ct
-    VA-->>VC: SSE event AuthenticatedResult{authenticated_ct}
+    VA->>VA: pick verification values, build authenticated_ct
+    VA-->>VC: AuthenticatedResult (SSE event)
     VC->>VC: PartialDecrypt (sk_c, noise flooding)
-    VC->>VA: POST /sessions/{sid}/partial-decryption (partial_ct)
-    VA->>VA: FinalDecrypt (sk_a); authenticity check; verdict = sign(logit)
+    VC->>VA: POST /sessions/:sid/partial-decryption (PartialDecryption)
+    VA->>VA: FinalDecrypt (sk_a), authenticity check, verdict = sign(logit)
 
     %% Stage 4b — verdict callback and resource access
     VA->>RS: POST /api/callback (VerdictNotification)
     RS-->>VA: 200
-    VA-->>VC: 302 → RClient (verification complete)
+    VA-->>VC: 302 to RClient (verification complete)
     RC->>RS: GET /protected (with sid cookie)
     RS-->>RC: 200 (content) or 403 (denied)
 ```
@@ -168,7 +168,7 @@ The session-specific CKKS keys are generated jointly by VClient and VAgent. The 
 1. **Parameters.** VClient fetches the protocol parameters (ring degree, modulus chain, scale, authenticator configuration) from VAgent, which sources them from VService. VAgent persists its copy under the sid. The CRS that both parties feed to the multi-party keygen protocols is **derived deterministically from the sid** — no extra seed material crosses the wire (see §CRS below for the construction).
 2. **Public key (one round).** VClient generates `sk_c, pk_c` and sends `pk_c` to VAgent. VAgent generates its own `sk_a, pk_a`, aggregates `pk = pk_c + pk_a`, and returns `pk_a` to VClient so it can compute the same aggregate locally.
 3. **Relinearization key (two rounds).** Both rounds follow the same client-share-then-agent-share pattern. Round 1: VClient generates an ephemeral secret `ephSk_c` and its first-round share `rlk_c⁽¹⁾`; VAgent generates its own `ephSk_a, rlk_a⁽¹⁾`; both sides aggregate `rlk⁽¹⁾_agg`. Round 2: VClient generates `rlk_c⁽²⁾`, VAgent generates `rlk_a⁽²⁾`, both aggregate the final `rlk`. The two-round structure follows the standard multi-party CKKS relinearization protocol.
-4. **Rotation keys.** Both parties contribute matching `multiparty.GaloisKeyGenShare` shares for the rotations the compiled circuit needs, and the aggregated Galois keys are forwarded to VService. The canonical (Phase 4) form, shown in the diagram, collapses the per-rotation shares into a single `gks_master` pair (`gks_master_c`, `gks_master_a` → `gks_master`) that VService hierarchically expands into the full `gks` set via lattigo-hierkeys — this is purely a transport-and-storage optimisation. Phase 1–3 skip the master/derive step: VClient and VAgent emit one share per rotation, aggregate the assembled `gks` directly, and ship the full set to VService. The multi-party protocol is identical; only the wire shape differs.
+4. **Rotation keys.** Both parties contribute matching `multiparty.GaloisKeyGenShare` shares for the rotations the compiled circuit needs, and the aggregated bundle (`rlk` + Galois keys) is forwarded to VService as `InferEvalKeys`. The canonical (Phase 4) form, shown in the diagram, collapses the per-rotation shares into a single `gks_master` pair (`gks_master_c`, `gks_master_a` → `gks_master`) that VService hierarchically expands into the full `gks` set via lattigo-hierkeys — this is purely a transport-and-storage optimisation. Phase 1–3 skip the master/derive step: VClient and VAgent emit one share per rotation, aggregate the assembled `gks` directly, and ship the full set to VService. The multi-party protocol is identical; only the wire shape differs.
 5. **Result channel.** VClient opens a server-sent-events connection to VAgent for the eventual authenticated result. Opening it before submitting the image avoids a race.
 
 ### Stage 3: Image submission and inference
@@ -195,9 +195,9 @@ The happy path runs Stages 1–4 to a `Verdict = Accept` or `Verdict = Reject`. 
 | --- | ----------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | F1  | `Ver` returns false                 | Stage 4, VAgent      | `Verdict = Reject` to RService. Session torn down.                                                                                              |
 | F2  | Malformed wire input                | Any stage            | HTTP 400 to the offending party (Phase 3) / Go error return (Phase 1) **plus** `Verdict = Reject` to RService. Session torn down.               |
-| F4  | Inference error                     | Stage 3, VService    | VS returns error to VAgent; VAgent surfaces `Verdict = Reject` to RService. Session torn down.                                                  |
-| F5a | VService unreachable, Stage 1 setup | Stage 1, VAgent      | No sid is issued; VAgent returns an error to RService; RService returns its own 5xx to the user. No session is opened, so nothing to tear down. |
-| F5b | VService unreachable, Stages 2–3    | Stage 2 or 3, VAgent | After retry budget exhausted, VAgent emits `Verdict = Reject` to RService. Session torn down.                                                   |
+| F3  | Inference error                     | Stage 3, VService    | VS returns error to VAgent; VAgent surfaces `Verdict = Reject` to RService. Session torn down.                                                  |
+| F4a | VService unreachable, Stage 1 setup | Stage 1, VAgent      | No sid is issued; VAgent returns an error to RService; RService returns its own 5xx to the user. No session is opened, so nothing to tear down. |
+| F4b | VService unreachable, Stages 2–3    | Stage 2 or 3, VAgent | After retry budget exhausted, VAgent emits `Verdict = Reject` to RService. Session torn down.                                                   |
 
 ### F1: forgery vs. noise are indistinguishable on purpose
 
@@ -294,11 +294,11 @@ If both pass, the recovered message is `m_recovered = P[j*]` — the binary-clas
 - **Rotations are needed from Phase 1.** `Auth` step 4 calls `Rot(ct_m, j)` for `j ∈ [0, λ) \ S`. Even the Phase-1 synthetic `x²` inference circuit therefore exercises rotation keys: the collaborative `multiparty.GaloisKeyGen` handshake produces Galois keys for indices `1..λ-1` so that `Auth` can run.
 - **Rotation count.** Naïve `Auth` does one ct × pt mask multiplication and `λ - |S| = 64` rotations followed by an addition tree. `Evaluator.InnerSum`-style tree reductions can cut the rotation count to `O(log λ)` with appropriate Galois-key selection — a Phase-2 optimisation once bench numbers show the cost.
 - **The mask plaintext is reusable.** `pt_one_hot = [1, 0, ..., 0]` at scale 1 is session-independent: encode it once per `authenticator.Config` (when params are loaded) and reuse across every session's `Auth`.
-- **Phase 4 rotation composition.** Both VAgent (for `Auth`'s rotation-and-sum step) and VService (for the inference circuit, when the model uses rotations) need rotation keys. In Phases 1–3, both parties receive the full assembled Galois key set, so a rotation by any `j` is one ciphertext op. In Phase 4, the wire payload collapses to the small `gks_master` atom set (e.g., `{1, 2, 4, 8, 16, 32, 64}` for `Base = 4`). Each party then independently picks how to use it:
-  - **Expand** `gks_master` into the full `gks` set locally via lattigo-hierkeys' hierarchical derivation — large in-memory key set, single-op rotations.
-  - **Keep** only the master set in memory and **decompose** each target rotation into an atom chain — small memory footprint, multiple ciphertext rotations per logical rotation. Example: 69 = 64 + 4 + 1 becomes `Rot(·, 64) → Rot(·, 4) → Rot(·, 1)`.
+- **Phase 4 rotation composition.** Both VAgent (for `Auth`'s rotation-and-sum step) and VService (for the inference circuit, when the model uses rotations) need rotation keys. `gks_master` is **not** directly applicable to ciphertexts — every rotation has to go through a `GaloisKey` derived hierarchically from the master. In Phases 1–3, both parties receive the full assembled Galois key set, so a rotation by any `j` is one ciphertext op. In Phase 4, the wire payload collapses to the small `gks_master` atom set (e.g., `{1, 2, 4, 8, 16, 32, 64}` for `Base = 4`). Each party then independently picks how to expand it:
+  - **Expand fully.** Derive a `GaloisKey` for every rotation index the local circuit will ever use, store the resulting full `gks` set — large in-memory key set, single-op rotations.
+  - **Decompose at use.** Derive only the atom-level `GaloisKey`s (one per master atom) and rotate by composing them: each logical rotation becomes a chain of atom-rotations. Example: 69 = 64 + 4 + 1 becomes `Rot(·, 64) → Rot(·, 4) → Rot(·, 1)`. Small memory footprint, multiple ciphertext rotations per logical rotation.
 
-  VAgent has at most `λ - |S| = 64` rotations per `Auth`, so the memory-light "keep master, decompose at use" route is the natural default — `vagent.sessionState` stores the master directly. VService's choice is bench-driven: deep inference circuits with many rotations may favour the expanded form to keep per-op cost down. Bench impact for both is tracked from Phase 4 onward.
+  Either route still does hierarchical derivation — "decompose at use" derives only the `len(gks_master)` atom keys instead of the full `gks` set. VAgent has at most `λ - |S| = 64` rotations per `Auth`, so the memory-light decompose-at-use route is the natural default — `vagent.sessionState` stores `gks_master` plus the small set of derived atom-level keys. VService's choice is bench-driven: deep inference circuits with many rotations may favour the fully-expanded form to keep per-op cost down. Bench impact for both is tracked from Phase 4 onward.
 
 - **VAgent's own partial-decryption share** is computed from `sk_a` against the same `ct_M` it generated. The two `KeySwitchShare`s aggregate; the key-switch then recovers `P`.
 
@@ -352,10 +352,10 @@ The dominant Phase-1 contributor is the rotation sum. Phase 2's circuit-noise ec
 
 Both are fixed constants for the prototype:
 
-| Quantity  | Value | Role                                                                                    |
-| --------- | ----- | --------------------------------------------------------------------------------------- | --------------- | --------------------------------------------------- |
-| `ε`       | `2²⁰` | `Ver`'s tolerance: accept iff `                                                         | P[i]·Δ − v[i]·Δ | < ε` (and likewise for value-slot pairwise checks). |
-| `σ_flood` | `2¹⁶` | Std of the discrete-Gaussian flooding noise added by VClient during partial decryption. |
+| Quantity  | Value | Role                                                                                                                                    |
+| --------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `ε`       | `2²⁰` | `Ver`'s tolerance: accept iff `abs(P[i]·Δ − v[i]·Δ) < ε` (and likewise for the value-slot pairwise checks `abs(P[i]·Δ − P[j*]·Δ) < ε`). |
+| `σ_flood` | `2¹⁶` | Std of the discrete-Gaussian flooding noise added by VClient during partial decryption.                                                 |
 
 The pair has to satisfy two informal constraints:
 
@@ -471,24 +471,24 @@ Wire messages — payload nouns; direction is implicit in the HTTP route.
 
 ```go
 type SessionOpen           struct{}
-type SessionOpened         struct { SessionID SessionID }
+type VerificationSession         struct { SessionID SessionID }
 
 // Stage 2b: pk share exchange (VClient ↔ VAgent)
-type PKShareUpload         struct { Share multiparty.PublicKeyGenShare } // VClient → VAgent
-type PKShareReply          struct { Share multiparty.PublicKeyGenShare } // VAgent → VClient
+type VClientPKShare         struct { Share multiparty.PublicKeyGenShare } // VClient → VAgent
+type VAgentPKShare          struct { Share multiparty.PublicKeyGenShare } // VAgent → VClient
 
 // Stage 2c: rlk share exchange, two rounds (VClient ↔ VAgent)
-type RLKRound1Upload       struct { Share multiparty.RelinearizationKeyGenShare }
-type RLKRound1Reply        struct { Share multiparty.RelinearizationKeyGenShare }
-type RLKRound2Upload       struct { Share multiparty.RelinearizationKeyGenShare }
+type VClientRLKRound1       struct { Share multiparty.RelinearizationKeyGenShare }
+type VAgentRLKRound1        struct { Share multiparty.RelinearizationKeyGenShare }
+type VClientRLKRound2       struct { Share multiparty.RelinearizationKeyGenShare }
 // no round-2 reply share — round 2 just acks completion
 
 // Stage 2d: Galois-key share exchange (VClient → VAgent) and forward to VService.
 // Phase 1–3 emits one share per rotation; Phase 4 collapses these into a single
 // gks_master share via lattigo-hierkeys.
-type GaloisKeyShareUpload struct { Shares []multiparty.GaloisKeyGenShare } // VClient → VAgent
+type VClientGaloisKeyShare struct { Shares []multiparty.GaloisKeyGenShare } // VClient → VAgent
 // after aggregation:
-type EvalKeysUpload struct { // VAgent → VService
+type InferEvalKeys struct { // VAgent → VService
     RLK *rlwe.RelinearizationKey
     GKS *rlwe.GaloisKeySet // Phase 1–3: full assembled set
     // Phase 4: replaced by GKSMaster (lattigo-hierkeys; exact type pinned with that API)
@@ -507,7 +507,7 @@ type PartialDecryption struct { Share multiparty.KeySwitchShare }
 type VerdictNotification struct { Verdict Verdict }
 ```
 
-`SessionOpened` carries the sid that VService allocated; subsequent routes carry sid in the URL path. VService never sees `PublicKeyGenShare` or `pk` directly — only the aggregated `rlk` and aggregated Galois keys arrive over `EvalKeysUpload`. In Phase 4 the Galois payload becomes `gks_master` and VService runs the hierarchical derivation in `StoreEvalKeys`.
+`VerificationSession` carries the sid that VService allocated; subsequent routes carry sid in the URL path. VService never sees `PublicKeyGenShare` or `pk` directly — only the aggregated `rlk` and aggregated Galois keys arrive over `InferEvalKeys`. In Phase 4 the Galois payload becomes `gks_master` and VService runs the hierarchical derivation in `StoreEvalKeys`.
 
 **CRS.** Lattigo's `multiparty.CRS` is just a `sampling.PRNG` whose byte output both parties must agree on. We use `sampling.NewKeyedPRNG(seed)` with a session-scoped, sid-derived seed — no CRS material crosses the wire.
 
@@ -582,8 +582,27 @@ func KeyGen(cfg Config, rand io.Reader) (Key, error)
 // Auth runs §MPD-Auth/Auth: masks slot 0 with the cached pt_one_hot,
 // rotates+sums into ct_m^Rep, encrypts v deterministically from key.SeedF,
 // adds, returns ct_M. Requires the session-bound crypto primitives:
-// encoder, encryptor under the aggregated pk, evaluator wired with the
-// aggregated rlk and Galois keys for rotations 1..Lambda-1.
+// encoder, encryptor under the aggregated pk, and an evaluator carrying
+// Galois keys for the rotations Auth needs (see below). Auth does *not*
+// perform any ciphertext × ciphertext multiplication, so the evaluator's
+// relinearization key is unused — callers may pass the same evaluator
+// used for inference or a Galois-only one; Auth's correctness does not
+// depend on rlk presence.
+//
+// Required rotation indices: Auth rotates by every j ∈ [1, Lambda) \ S
+// (j = 0 is identity and needs no key). Since S is sampled fresh per Key,
+// the evaluator must hold the union — Galois keys for 1..Lambda-1 — so
+// any S can be supported. To check this from the evaluator at runtime:
+//
+//   galEls := eval.EvaluationKeySet.GetGaloisKeysList()
+//   for _, galEl := range galEls {
+//       k := params.SolveDiscreteLogGaloisElement(galEl) // int rotation index
+//       …
+//   }
+//
+// `SolveDiscreteLogGaloisElement` (rlwe.Parameters) inverts the GaloisGen^k
+// encoding `GaloisElement(k)` uses. Auth validates the set covers
+// [1, Lambda) up front and returns an error otherwise.
 func (a *Authenticator) Auth(
     key Key,
     enc *ckks.Encoder,
@@ -728,6 +747,7 @@ type Agent struct {
 }
 
 type sessionState struct {
+    params    protocol.Params            // fetched from VService at session open; persisted under sid
     skShare   *rlwe.SecretKey            // sk_a
     pkAgg     *rlwe.PublicKey
     rlkAgg    *rlwe.RelinearizationKey
@@ -872,7 +892,7 @@ Single-page app served by VAgent at `/verify?sid=…`. TypeScript, transpiled wi
 
 **SSE via native `EventSource`.** Opens `GET /sessions/{sid}/result` and listens for the `AuthenticatedResult` event. The matching server side is ~15 lines of Go using `http.Flusher.Flush()`.
 
-**Wire formats.** JSON for control messages (`SessionOpened`, `VerdictNotification`); `application/octet-stream` for share- and ciphertext-bearing endpoints (`/pk-share`, `/rlk/round1`, `/rlk/round2`, `/galois-shares`, `/image`, `/partial-decryption`). No base64 inflation on the hot path. (Phase 4 renames `/galois-shares` to `/gks-master` as the payload shape changes.)
+**Wire formats.** JSON for control messages (`VerificationSession`, `VerdictNotification`); `application/octet-stream` for share- and ciphertext-bearing endpoints (`/pk-share`, `/rlk/round1`, `/rlk/round2`, `/galois-shares`, `/image`, `/partial-decryption`). No base64 inflation on the hot path. (Phase 4 renames `/galois-shares` to `/gks-master` as the payload shape changes.)
 
 **Sid from URL.** SPA reads `?sid=…` at load time and threads it through every subsequent request. No JS-side cookie reading.
 
