@@ -24,7 +24,6 @@ Phase 1 (multi-party CKKS + synthetic `x²` + MPD-Auth) and Phase 2 (Orion-compi
 - **Go**: simple, idiomatic, minimal comments. Comments only where the _why_ is non-obvious. No multi-paragraph docstrings.
 - **Python**: uv for environments — always activate the venv before any pip/python command. Never install deps to system Python. ruff format + lint, mypy strict.
 - **Atomic commits**: stage specific files (`git add path/to/file`), never `git add .`. Clear, concrete commit messages.
-- **No copying** from `~/Dev/orion/examples/` or thesis experiments (`~/Dev/ITMO/thesis/experiments/`). Reference only — write fresh idiomatic code.
 
 ## Repo layout
 
