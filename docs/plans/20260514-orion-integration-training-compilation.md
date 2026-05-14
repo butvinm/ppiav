@@ -214,18 +214,18 @@ re-measured at 55–56 GB peak RSS.
 
 **Steps:**
 
-- [ ] `git rm models/models/prepare_samples.py && git rm -r models/tests/`.
-- [ ] Copy the seven source files from
+- [x] `git rm models/models/prepare_samples.py && git rm -r models/tests/`.
+- [x] Copy the seven source files from
       `~/Dev/orion/examples/c3ae-demo/models/` into
       `/home/butvinm/Dev/ppiav/models/models/` with the same names.
-- [ ] In `train.py`: drop the ReLU variant. Remove `from models.c3ae import C3AE as C3AE_ReLU`,
+- [x] In `train.py`: drop the ReLU variant. Remove `from models.c3ae import C3AE as C3AE_ReLU`,
       remove `"relu"` from `--variant` choices, simplify `VARIANTS` and
       `load_variant` to FHE-only.
-- [ ] In every copied file: trim multi-paragraph module docstrings to one
+- [x] In every copied file: trim multi-paragraph module docstrings to one
       sentence; remove "Adapted from `examples/c3ae-demo/...`" pointers.
       Keep the why-non-obvious comments (e.g. the two-memory-fields rationale
       in `compile.py`, the `sorted()` load-bearing note in `utkface.py`).
-- [ ] `cd /home/butvinm/Dev/ppiav/models && uv run ruff format . && uv run ruff check . && uv run mypy .` — clean. Fix whatever strict mypy / ruff flags.
+- [ ] `cd /home/butvinm/Dev/ppiav/models && uv run ruff format . && uv run ruff check . && uv run mypy .` — clean. Fix whatever strict mypy / ruff flags. (Deferred - requires orion-v2-compiler dependencies from Task 2)
 
 #### Task 2: Update `models/pyproject.toml`
 
