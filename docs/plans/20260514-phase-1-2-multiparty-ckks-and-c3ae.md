@@ -258,21 +258,21 @@ Reason this is first: every later task that does crypto work logs samples throug
 - Create: `internal/vagent/authenticate_test.go`
 - Create: `internal/vagent/finalize_test.go`
 
-- [ ] `agent.go`: `Agent`, `sessionState`, `New(params)`, `OpenSession(sid)` per DESIGN.md §`internal/vagent`. `OpenSession` registers the sid, mints `sk_a`, calls `authenticator.KeyGen(params.Authenticator, crypto/rand.Reader)` for the session's `authKey`, builds the CRS the same way VClient does.
-- [ ] `keygen.go`: mirrors `internal/vclient/keygen.go` with a `Gen*Share` / `Aggregate*` split on each step (symmetric to VClient's API):
+- [x] `agent.go`: `Agent`, `sessionState`, `New(params)`, `OpenSession(sid)` per DESIGN.md §`internal/vagent`. `OpenSession` registers the sid, mints `sk_a`, calls `authenticator.KeyGen(params.Authenticator, crypto/rand.Reader)` for the session's `authKey`, builds the CRS the same way VClient does.
+- [x] `keygen.go`: mirrors `internal/vclient/keygen.go` with a `Gen*Share` / `Aggregate*` split on each step (symmetric to VClient's API):
   - `GenPKShare(sid) → agentShare`: draw the CRP (first in canonical order), generate `pk_a` share. Return for delivery to VClient.
   - `AggregatePK(sid, clientShare)`: combine with the stashed agent share, build `pkAgg` + `encryptor`, persist on session state.
   - `GenRLKShareRound1(sid) → agentShare`, `AggregateRLKRound1(sid, clientShare)`: same pattern; RLK CRP is drawn once in Round 1 and **reused** in Round 2 (cache it on session state).
   - `GenRLKShareRound2(sid) → agentShare`, `AggregateRLKRound2(sid, clientShare)`: agent's round-2 share does not go over the wire to VClient (VClient does not retain rlk) but the method exists for in-process symmetry; `AggregateRLKRound2` finalises `rlkAgg`.
-  - `GenGaloisShares(sid) → []agentShares`: iterate `params.RotationIndices()` (see Task 13; in Phase 1 this is `[1, λ)`), drawing one CRP per index in ascending order. Return the slice.
-  - `AggregateGaloisShares(sid, clientShares) → (rlk, gks, err)`: validate `len(clientShares) == len(params.RotationIndices())`; combine pairwise per index to assemble `*rlwe.GaloisKeySet`; build `eval` from `rlkAgg + gksAgg`. Return `(rlkAgg, gksAgg)` so the caller (CLI) hands them to `vservice.StoreEvalKeys`.
-- [ ] `authenticate.go`: `BuildAuthenticatedCt(sid, resultCt) → *rlwe.Ciphertext`: look up session, call `a.auth.Auth(sess.authKey, encoder, encryptor, eval, resultCt)`. Return the result.
-- [ ] `finalize.go`: `FinalizeDecryption(sid, authenticatedCt, clientShare) → Verdict`. Compute VAgent's `KeySwitchShare` via `multiparty.NewKeySwitchProtocol(params.CKKS, ring.DiscreteGaussian{Sigma: 0, Bound: 0})` — VAgent does **not** smudge. The IND-CPA^D vulnerability that motivates VClient's smudging requires the counterparty to see both `(share, plaintext)`; VClient sees neither VAgent's share nor the plaintext, so VAgent's share has no exposure to mitigate. The `eFresh` noise added automatically by `GenShare` (RLWE-foundational, not opt-in) is sufficient. Verify at code time that Lattigo accepts `Sigma: 0` at `keyswitch_sk.go:57`; if the sampler init trips, fall back to a smallest-non-zero σ — it doesn't matter for security because `eFresh` dominates either way. Aggregate shares, apply key-switch + decryption to recover the plaintext. Decode to slot vector. Call `a.auth.Ver(authKey, plaintext)`. If `!ok` → `VerdictReject`. Else `m > 0` → `Accept`, else `Reject`. Drop the session entry (single-use `authKey`).
-- [ ] tests:
-  - `keygen_test.go`: same handshake-stub pattern as Task 5 but with the VClient role faked. Asserts aggregated pk/rlk/gks are bit-identical to VClient's view.
-  - `authenticate_test.go`: feed a known `result_ct` (encrypted `m=0.7` at slot 0, garbage elsewhere), call `BuildAuthenticatedCt`, decrypt with `sk_c + sk_a`, assert the §`Auth` layout (`m` in non-`S` slots, `v[i] / Δ` in `S` slots).
-  - `finalize_test.go`: full joint-decryption happy path with `m=0.7` → `Accept`; with `m=-0.3` → `Reject`. Tamper-case: VClient submits a `KeySwitchShare` from a wrong sk → `Reject`. Run with `λ=16` for speed.
-- [ ] run tests — must pass before Task 7.
+  - `GenGaloisShares(sid) → ([]agentShares, []labels, err)`: iterate canonical rotation indices `[1, λ)` (Task 13 will swap for `params.RotationIndices()`), drawing one CRP per index in ascending order. Return shares + labels.
+  - `AggregateGaloisShares(sid, clientShares, clientLabels) → (rlk, gks, err)`: validate len + labels parity, combine pairwise per index to assemble `[]*rlwe.GaloisKey` (Lattigo v6.2.0 has no `GaloisKeySet` type); build `eval` from `rlkAgg + gks`. Return `(rlkAgg, gks)` so the caller hands them to `vservice.StoreEvalKeys`.
+- [x] `authenticate.go`: `BuildAuthenticatedCt(sid, resultCt) → *rlwe.Ciphertext`: look up session, call `a.auth.Auth(sess.authKey, sess.encryptor, sess.eval, resultCt)`. Return the result.
+- [x] `finalize.go`: `FinalizeDecryption(sid, authenticatedCt, clientShare) → Verdict`. Computes VAgent's `KeySwitchShare` via `multiparty.NewKeySwitchProtocol(params.CKKS, ring.DiscreteGaussian{Sigma: 0, Bound: 0})` — VAgent does **not** smudge. Verified Lattigo accepts `Sigma: 0` (`NoiseFreshSK` is folded in, eSigma = sqrt(eFresh² + 0) > 0). Aggregates shares, applies key-switch + decryption under zero sk, decodes to slot vector, calls `a.auth.Ver(authKey, plaintext)`. Verdict logic: `!ok` → `VerdictReject`; else `m > 0` → `Accept`, else `Reject`. Drops the session entry on the success path (single-use `authKey`).
+- [x] tests:
+  - `keygen_test.go`: handshake-stub pattern (VClient role faked). Asserts aggregated pk encrypts/decrypts under joint sk, aggregated rlk enables `MulRelinNew`, aggregated Galois keys enable left-rotation. Also exercises label-mismatch rejection + unknown-sid errors.
+  - `authenticate_test.go`: encrypts `m=0.7` at slot 0 under `pkAgg`, calls `BuildAuthenticatedCt`, decrypts with joint `sk_c + sk_a`, asserts the §`Auth` layout (`m` in non-`S` slots, `v[i] / Δ` in `S` slots). The expected PRG output is recomputed via a test-local replica of `authenticator.vRawValues`.
+  - `finalize_test.go`: full joint-decryption happy path with `m=0.7` → `Accept`; `m=-0.3` → `Reject`. Tamper-case: VClient's share generated from a wrong `sk_c` → `Reject`. Also asserts the session entry is dropped on the success path.
+- [x] run tests — must pass before Task 7.
 
 ### Task 7: `internal/rservice` — verdict gating
 
