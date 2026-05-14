@@ -85,7 +85,7 @@ func runFullKeygen(t *testing.T, a *Agent, sid protocol.SessionID, stub *vclient
 	// Stage 2d — Galois keys.
 	agentGalShares, agentLabels, err := a.GenGaloisShares(sid)
 	require.NoError(t, err)
-	require.Equal(t, len(protocol.CanonicalRotationIndices(params.Authenticator.Lambda)), len(agentGalShares))
+	require.Equal(t, len(params.RotationIndices()), len(agentGalShares))
 
 	// Drive VClient's side of GaloisKeyGen in lockstep (CRP draws come out
 	// of `stub.crs` in the same canonical order the Agent consumed them).

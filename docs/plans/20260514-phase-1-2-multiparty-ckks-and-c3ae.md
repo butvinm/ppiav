@@ -383,12 +383,12 @@ The `models/` Python project therefore reduces to **just the image-preprocessing
 - Create: `internal/protocol/orion_params.go`
 - Create: `internal/protocol/orion_params_test.go`
 
-- [ ] `orion_params.go`: `LoadOrionParams(manifestPath string) (Params, error)`. Read the manifest JSON shipped under `~/Dev/orion/examples/c3ae-demo/out/logn16/` (or wherever the user points at), extract `LogN`, `LogQ`, `LogP`, `LogDefaultScale`, `RingType`, plus the per-circuit `InputLevel` and rotation index set. Build `Params` with the same `Authenticator.Lambda` defaults but with the union of rotation indices `[1..λ) ∪ orion_rotations` exposed via a `RotationIndices()` method.
-- [ ] modify `internal/protocol/params.go` `Defaults()` to remain Phase-1 callable; do not break callers from Task 2.
-- [ ] tests: `orion_params_test.go` parses a committed fixture manifest under `internal/protocol/testdata/orion_manifest.json` and asserts the loaded `Params` matches the documented C3AE shape (`LogN=16`, `LogQ` length 16, etc.). Round-trip the `RotationIndices` and assert `[1..127]` is a subset.
-- [ ] update `CanonicalRotationIndices` (Task 2) to a `Params.RotationIndices() []int` method that returns the full union.
-- [ ] propagate the change: VClient (`GenGaloisShares`) and VAgent (`GenGaloisShares` + `AggregateGaloisShares`) iterate `params.RotationIndices()` instead of `CanonicalRotationIndices(lambda)`. Update Task-5 and Task-6 tests accordingly.
-- [ ] run tests — must pass before Task 14: `go test ./...`
+- [x] `orion_params.go`: `LoadOrionParams(manifestPath string) (Params, error)`. Read the manifest JSON shipped under `~/Dev/orion/examples/c3ae-demo/out/logn16/` (or wherever the user points at), extract `LogN`, `LogQ`, `LogP`, `LogDefaultScale`, `RingType`, plus the per-circuit `InputLevel` and rotation index set. Build `Params` with the same `Authenticator.Lambda` defaults but with the union of rotation indices `[1..λ) ∪ orion_rotations` exposed via a `RotationIndices()` method. Manifest schema mirrors Orion's `_build_metadata` output (`params.{logn,logq,logp,log_default_scale,ring_type}`, `input_level`); raw `rotation_indices` are read directly — Galois-element inversion of the actual `.orion` payload is deferred to Task 14.
+- [x] modify `internal/protocol/params.go` `Defaults()` to remain Phase-1 callable; do not break callers from Task 2. Added `ExtraRotationIndices []int` and `InputLevel int` fields to `Params`. `Defaults()` leaves both zero-valued — `RotationIndices()` then falls back to canonical `[1, Lambda)` and `InputLevel=0` is the EncryptImage "use MaxLevel" sentinel.
+- [x] tests: `orion_params_test.go` parses a committed fixture manifest under `internal/protocol/testdata/orion_manifest.json` and asserts the loaded `Params` matches the documented C3AE shape (`LogN=16`, `LogQ` length 16, etc.). Round-trip the `RotationIndices` and assert `[1..127]` is a subset. Also covers missing-file, invalid-JSON, deterministic round-trip, and non-positive-index filtering.
+- [x] update `CanonicalRotationIndices` (Task 2) to a `Params.RotationIndices() []int` method that returns the full union. Kept the standalone `CanonicalRotationIndices(lambda int)` helper in `crs.go` for tests that explicitly want the canonical-only set.
+- [x] propagate the change: VClient (`GenGaloisShares`) and VAgent (`GenGaloisShares` + `AggregateGaloisShares`) iterate `params.RotationIndices()` instead of `CanonicalRotationIndices(lambda)`. Updated Task-5 and Task-6 tests to mirror the production call.
+- [x] run tests — must pass before Task 14: `go test ./...`
 
 ### Task 14: `internal/vservice/infer.go` — swap `x²` for Orion C3AE
 

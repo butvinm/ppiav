@@ -136,9 +136,10 @@ func (a *Agent) AggregateRLKRound2(sid protocol.SessionID, clientShare multipart
 }
 
 // GenGaloisShares produces one share per rotation label in
-// `protocol.CanonicalRotationIndices(lambda)` (i.e., [1, lambda)) in
-// ascending order. The CRPs are drawn from sess.crs in label order — the
-// THIRD-and-onward draws.
+// `a.params.RotationIndices()` (canonical `[1, lambda)` unioned with any
+// inference-circuit extras from the Orion manifest) in ascending order.
+// The CRPs are drawn from sess.crs in label order — the THIRD-and-onward
+// draws.
 //
 // Galois-element mapping mirrors VClient: per docs/DESIGN.md
 // §`Implementation notes`, Auth uses `eval.RotateNew(ct, -j)` to place
@@ -154,7 +155,7 @@ func (a *Agent) GenGaloisShares(sid protocol.SessionID) ([]multiparty.GaloisKeyG
 	if err != nil {
 		return nil, nil, err
 	}
-	labels := protocol.CanonicalRotationIndices(a.params.Authenticator.Lambda)
+	labels := a.params.RotationIndices()
 	if len(labels) == 0 {
 		sess.galLabels = nil
 		sess.galShares = nil

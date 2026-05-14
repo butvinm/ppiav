@@ -95,7 +95,7 @@ func runFullKeygen(t *testing.T, c *Client, stub *vagentStub) (
 	// Stage 2d — Galois keys.
 	clientGalShares, labels, err := c.GenGaloisShares()
 	require.NoError(t, err)
-	require.Equal(t, len(protocol.CanonicalRotationIndices(params.Authenticator.Lambda)), len(clientGalShares))
+	require.Equal(t, len(params.RotationIndices()), len(clientGalShares))
 
 	gkg := multiparty.NewGaloisKeyGenProtocol(params.CKKS)
 	gks := make([]*rlwe.GaloisKey, len(labels))

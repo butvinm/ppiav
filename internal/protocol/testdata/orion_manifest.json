@@ -1,0 +1,12 @@
+{
+  "_comment": "Phase-2 C3AE fixture manifest. Mirrors ~/Dev/orion/examples/c3ae-demo/models/params.py:51 (logn16 profile). Rotation indices are a representative subset of what the compiled C3AE circuit declares — the full list runs into the hundreds; for unit-test purposes we exercise a few canonical ([1..127]) overlaps plus a handful of extras above lambda=128 so RotationIndices() has something non-trivial to union.",
+  "params": {
+    "logn": 16,
+    "logq": [55, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40],
+    "logp": [55, 55, 55, 55, 55, 55],
+    "log_default_scale": 40,
+    "ring_type": "standard"
+  },
+  "input_level": 15,
+  "rotation_indices": [1, 4, 16, 64, 128, 256, 512, 1024]
+}

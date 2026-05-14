@@ -3,7 +3,6 @@ package vclient
 import (
 	"fmt"
 
-	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 	"github.com/tuneinsight/lattigo/v6/multiparty"
 )
@@ -77,9 +76,10 @@ func (c *Client) GenRLKShareRound2() (multiparty.RelinearizationKeyGenShare, err
 }
 
 // GenGaloisShares produces one share per rotation label in
-// `protocol.CanonicalRotationIndices(lambda)` (i.e., [1, lambda)) in
-// ascending order. The CRPs are drawn from c.crs in label order — the
-// THIRD-and-onward draws.
+// `c.params.RotationIndices()` (canonical `[1, lambda)` unioned with any
+// inference-circuit extras from the Orion manifest) in ascending order.
+// The CRPs are drawn from c.crs in label order — the THIRD-and-onward
+// draws.
 //
 // Galois-element mapping: docs/DESIGN.md §`Implementation notes` and
 // internal/authenticator/authenticator.go validateGaloisKeys document that
@@ -92,7 +92,7 @@ func (c *Client) GenRLKShareRound2() (multiparty.RelinearizationKeyGenShare, err
 // share for rotation label labels[k]. VAgent uses these labels when
 // aggregating and when binding each finalised GaloisKey to its element.
 func (c *Client) GenGaloisShares() ([]multiparty.GaloisKeyGenShare, []int, error) {
-	labels := protocol.CanonicalRotationIndices(c.params.Authenticator.Lambda)
+	labels := c.params.RotationIndices()
 	if len(labels) == 0 {
 		return nil, nil, nil
 	}
