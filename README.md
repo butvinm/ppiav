@@ -6,22 +6,68 @@ See [`docs/DESIGN.md`](docs/DESIGN.md) for the full architecture.
 
 **Phase 1 status:** complete — CKKS scaffolding, synthetic `x²` circuit, in-process protocol, benchmark CLI emitting JSON, Python plotting and tables.
 
-## Quick start
+**Phase 2 status:** complete — Orion-compiled C3AE inference swaps in for `x²` when the CLI is pointed at an Orion build directory via `--orion`. Output JSON shifts to `results/phase2/`.
+
+## Quick start — Phase 1 (synthetic `x²`)
 
 ```sh
 # Run the full §3 protocol in-process (5 iterations) and emit JSON.
-go run ./cmd/ppiav-cli e2e --n 5
+go run ./cmd/ppiav-cli e2e --image cmd/ppiav-cli/testdata/synthetic.bin --n 5
 
 # Per-step benchmarks (each writes to results/phase1/<step>.json).
-for step in keygen encrypt-image infer mac decrypt-result verify-mac; do
-    go run ./cmd/ppiav-cli "$step" --n 5
-done
+go run ./cmd/ppiav-cli keygen --n 5
+go run ./cmd/ppiav-cli encrypt-image --image cmd/ppiav-cli/testdata/synthetic.bin --n 5
+go run ./cmd/ppiav-cli infer --n 5
+go run ./cmd/ppiav-cli mac --n 5
+go run ./cmd/ppiav-cli decrypt-result --n 5
+go run ./cmd/ppiav-cli verify-mac --n 5
 
 # Render Markdown summary tables to stdout.
 cd bench && uv run python -m bench.tables ../results/phase1
 
 # Render PNG plots into ../results/phase1/plots/.
 cd bench && uv run python -m bench.plot ../results/phase1
+```
+
+## Quick start — Phase 2 (Orion-compiled C3AE)
+
+Phase 2 requires Orion's compiled C3AE model. The plan references `logn16` as canonical, but only `logn15/model.orion` is materialised on disk today — use `logn15` until a `logn16` build lands. See `docs/plans/20260514-phase-1-2-multiparty-ckks-and-c3ae.md` §Task 14 for the deviation note.
+
+```sh
+# Prerequisite: confirm Orion's compiled model + reference input exist.
+ls ~/Dev/orion/examples/c3ae-demo/out/logn15/model.orion
+ls ~/Dev/orion/examples/c3ae-demo/out/inputs/sample_test.bin
+
+# Full §3 protocol against C3AE inference. Output lands in results/phase2/.
+go run ./cmd/ppiav-cli e2e \
+    --orion ~/Dev/orion/examples/c3ae-demo/out/logn15 \
+    --image ~/Dev/orion/examples/c3ae-demo/out/inputs/sample_test.bin \
+    --n 5
+
+# Per-step benchmarks against the C3AE profile.
+ORION=~/Dev/orion/examples/c3ae-demo/out/logn15
+IMG=~/Dev/orion/examples/c3ae-demo/out/inputs/sample_test.bin
+go run ./cmd/ppiav-cli keygen         --orion "$ORION" --n 5
+go run ./cmd/ppiav-cli encrypt-image  --orion "$ORION" --image "$IMG" --n 5
+go run ./cmd/ppiav-cli infer          --orion "$ORION" --image "$IMG" --n 5
+go run ./cmd/ppiav-cli mac            --orion "$ORION" --n 5
+go run ./cmd/ppiav-cli decrypt-result --orion "$ORION" --n 5
+go run ./cmd/ppiav-cli verify-mac     --orion "$ORION" --n 5
+
+# Render Markdown tables and PNG plots from results/phase2/.
+cd bench && uv run python -m bench.tables ../results/phase2
+cd bench && uv run python -m bench.plot   ../results/phase2
+```
+
+### Preparing your own input image
+
+`models/prepare_samples.py` implements the 5-step preprocessing pipeline from `docs/DESIGN.md` §`internal/vclient` and writes a 12288-float64 `.bin` ready to feed the CLI:
+
+```sh
+cd models && uv run python -m models.prepare_samples --in path/to/face.jpg --out /tmp/face.bin
+go run ./cmd/ppiav-cli e2e \
+    --orion ~/Dev/orion/examples/c3ae-demo/out/logn15 \
+    --image /tmp/face.bin --n 1
 ```
 
 ## Tests

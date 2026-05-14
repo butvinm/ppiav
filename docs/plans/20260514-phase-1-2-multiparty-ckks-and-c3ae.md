@@ -418,10 +418,10 @@ The `models/` Python project therefore reduces to **just the image-preprocessing
 - Modify: `cmd/ppiav-cli/steps.go`
 - Modify: `README.md`
 
-- [ ] add a `--orion <dir>` flag to every subcommand. When set, output JSON lands under `results/phase2/` not `results/phase1/`. Document `~/Dev/orion/examples/c3ae-demo/out/logn16/` as the canonical value.
-- [ ] add `--image <path>` resolution that accepts any `.bin` produced by `models/prepare_samples.py` (Task 12) or Orion's `out/inputs/sample_test.bin`. Reject missing files clearly.
-- [ ] update `README.md` quick-start commands to add the Phase-2 variants alongside the Phase-1 ones.
-- [ ] run tests — must pass before Task 16: `go build ./...`.
+- [x] add a `--orion <dir>` flag to every subcommand. When set, output JSON lands under `results/phase2/` not `results/phase1/`. Document `~/Dev/orion/examples/c3ae-demo/out/logn15/` as the canonical value (Task 14 finding: `logn16/model.orion` is not materialised on disk; `logn15` is what actually exists). Verified via `--help` on each of `e2e`, `keygen`, `encrypt-image`, `infer`, `mac`, `decrypt-result`, `verify-mac`. `verify-mac` is pure CPU but still consumes `--orion` so the Δ / slot count match the inference profile (Task 14's note).
+- [x] add `--image <path>` resolution that accepts any `.bin` produced by `models/prepare_samples.py` (Task 12) or Orion's `out/inputs/sample_test.bin`. Reject missing files clearly. `loadImage` already validates the 98304-byte length, errors cleanly on missing file (`open ...: no such file or directory`), wrong size (`size N bytes, expected 98304`), and empty `--image` (`--image is required (path to a 12288-float64 .bin file)`).
+- [x] update `README.md` quick-start commands to add the Phase-2 variants alongside the Phase-1 ones. Added a "Quick start — Phase 2" section covering: prerequisite checks, full `e2e --orion ... --image ...`, per-step subcommand invocations, bench post-processing for `results/phase2/`, and a `models/prepare_samples.py` flow for custom images.
+- [x] run tests — must pass before Task 16: `go build ./...`, `go vet ./...`, `go test ./...` all green. Smoke-tested `verify-mac --n 1` (Phase 1), `unknown` subcommand (exits 2 with usage), no-args (exits 2 with usage), missing-file `--image` (clean error), wrong-size `--image` (clean error).
 
 ### Task 16: Final automated-test pass
 
