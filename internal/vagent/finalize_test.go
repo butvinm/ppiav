@@ -67,6 +67,15 @@ func TestFinalizeRejectsNegativeLogit(t *testing.T) {
 	assert.Equal(t, protocol.VerdictReject, verdict)
 }
 
+// m==0 is the strict boundary: FinalizeDecryption accepts only m > 0, so
+// exact zero must Reject. Documents the strict-positive convention so a
+// future refactor that switches to m >= 0 surfaces in CI.
+func TestFinalizeRejectsZeroLogit(t *testing.T) {
+	verdict, err := runFinalizeWith(t, 0.0)
+	require.NoError(t, err)
+	assert.Equal(t, protocol.VerdictReject, verdict)
+}
+
 func TestFinalizeRejectsTamperedShare(t *testing.T) {
 	// Replay the happy-path setup, but produce VClient's KeySwitchShare
 	// against a DIFFERENT sk (i.e., a wrong sk_c). Ver should fail and

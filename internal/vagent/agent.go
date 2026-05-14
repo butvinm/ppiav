@@ -77,17 +77,21 @@ type sessionState struct {
 
 // Agent holds VAgent's protocol-wide state. The Authenticator is built
 // once (its cached `pt_one_hot` is session-independent) and shared across
-// concurrent sessions per Lattigo v6.2.0's concurrency guarantees.
+// concurrent sessions per Lattigo v6.2.0's concurrency guarantees. The
+// shared `encoder` mirrors the Authenticator's pattern — it's used by
+// FinalizeDecryption and is params-only (no key material), so a single
+// instance is sufficient for the Agent's lifetime.
 type Agent struct {
 	params   protocol.Params
 	auth     *authenticator.Authenticator
+	encoder  *ckks.Encoder
 	sessions map[protocol.SessionID]*sessionState
 	mu       sync.Mutex
 }
 
 // New constructs an Agent with the supplied protocol parameters. The
-// Authenticator is constructed up-front so its cached `pt_one_hot` is
-// allocated once for the lifetime of the Agent.
+// Authenticator and the shared encoder are constructed up-front so their
+// per-call allocations move out of FinalizeDecryption's hot path.
 func New(params protocol.Params) (*Agent, error) {
 	auth, err := authenticator.New(params.Authenticator, params.CKKS)
 	if err != nil {
@@ -96,6 +100,7 @@ func New(params protocol.Params) (*Agent, error) {
 	return &Agent{
 		params:   params,
 		auth:     auth,
+		encoder:  ckks.NewEncoder(params.CKKS),
 		sessions: map[protocol.SessionID]*sessionState{},
 	}, nil
 }

@@ -7,7 +7,6 @@ import (
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 	"github.com/tuneinsight/lattigo/v6/multiparty"
 	"github.com/tuneinsight/lattigo/v6/ring"
-	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
 )
 
 // FinalizeDecryption runs Stage 4a/b: derives VAgent's KeySwitchShare for
@@ -39,9 +38,8 @@ func (a *Agent) FinalizeDecryption(
 	if err != nil {
 		return protocol.VerdictReject, err
 	}
-	if sess.skShare == nil {
-		return protocol.VerdictReject, fmt.Errorf("vagent: session %q has no sk_a", sid)
-	}
+	// `sess.skShare` is populated by OpenSession; a nil here would be an
+	// invariant violation, not a runtime error.
 
 	// VAgent's KeySwitchProtocol with σ=0 smudging. The NoiseFreshSK term
 	// is folded in automatically by Lattigo; per DESIGN.md eFresh is
@@ -66,10 +64,12 @@ func (a *Agent) FinalizeDecryption(
 	ksOut := rlwe.NewCiphertext(a.params.CKKS, authenticatedCt.Degree(), authenticatedCt.Level())
 	proto.KeySwitch(authenticatedCt, combined, ksOut)
 
+	// Decryptor is bound to zeroSk (a fresh per-call key), so it stays
+	// per-call. The encoder is params-only and lives on the Agent — reusing
+	// it avoids one ckks.NewEncoder per FinalizeDecryption.
 	dec := rlwe.NewDecryptor(a.params.CKKS, zeroSk)
-	encoder := ckks.NewEncoder(a.params.CKKS)
 	slots := make([]float64, a.params.CKKS.MaxSlots())
-	if err := encoder.Decode(dec.DecryptNew(ksOut), slots); err != nil {
+	if err := a.encoder.Decode(dec.DecryptNew(ksOut), slots); err != nil {
 		return protocol.VerdictReject, fmt.Errorf("vagent: decode plaintext: %w", err)
 	}
 
