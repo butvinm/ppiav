@@ -32,6 +32,7 @@ web/rclient/dist/*
 
 # Phase 2 prep
 models/data/
+models/out/
 
 # Benchmark results — selectively committed snapshots only
 results/*/

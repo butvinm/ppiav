@@ -488,11 +488,11 @@ Scope: confirm everything builds and unit tests pass on the dev box. Full chain 
 
 - Create (local, gitignored): `/home/butvinm/Dev/ppiav/models/out/weights_fhe.pth`
 
-- [ ] from local: `rsync -av ubuntu@<train-ip>:~/ppiav/models/out/weights_fhe.pth /home/butvinm/Dev/ppiav/models/out/weights_fhe.pth`
-- [ ] **manual verify**: local file present, ~140 kB
-- [ ] tear down: `openstack --os-cloud immers server delete ppiav-bench-eval-train --wait`
-- [ ] **manual verify**: `openstack --os-cloud immers server list | grep ppiav-bench-eval-train` returns nothing
-- [ ] record rental end + total billed hours
+- [x] from local: `rsync -av ubuntu@195.209.216.203:~/ppiav/models/out/weights_fhe.pth /home/butvinm/Dev/ppiav/models/out/weights_fhe.pth`
+- [x] **manual verify**: local file present, 136,347 bytes (~133 kB). Added `models/out/` to `.gitignore` to keep the weights local-only per plan's "(local, gitignored)" intent
+- [x] tear down: `openstack --os-cloud immers server delete ppiav-bench-eval-train --wait`
+- [x] **manual verify**: `openstack server list` returned `[]` (no `ppiav-bench-eval-train`)
+- [x] record rental end + total billed hours — VPS launched 2026-05-15T21:26:26Z, deleted ~2026-05-16T01:13Z; total wall time ~3h47m = 4 billed hours @ rtx4090-1.8.16.40
 
 ### Task 21: Rent FHE eval VPS
 
