@@ -314,14 +314,14 @@ Stratified: exactly 5 entries with `label=0` (minors) and 5 with `label=1` (adul
 - Create: `/home/butvinm/Dev/ppiav/cmd/ppiav-cli/keygen.go`
 - Create: `/home/butvinm/Dev/ppiav/cmd/ppiav-cli/artifacts.go`
 
-- [ ] create `artifacts.go` with helpers to write/read each artifact (sk_c, sk_a, pk, rlk, glk_master, glk_full, mac_key, sid, params, input_ct, result_ct, auth_ct, client_share) as a file at the canonical name within a workdir; helpers use existing `internal/protocol/wire.go` marshalers
-- [ ] note: `artifacts.go` stays under `cmd/ppiav-cli/`; if a helper graduates to `internal/protocol/wire.go` later, that file's test suite extends accordingly
-- [ ] create `keygen.go` parsing `--workdir <dir> --orion <dir> [--out <path>]`
-- [ ] run bilateral keygen in-process mirroring `orchestrator.Setup`; wrap each round (`open`, `pk`, `rlk-r1`, `rlk-r2`, `galois`) in `bench.Measure`; append samples to a single `bench.Run` named "keygen"
-- [ ] write artifacts to `<workdir>/{pk.bin, sk_c.bin, sk_a.bin, rlk.bin, glk_master.bin, glk_full.bin, mac_key.bin, sid.txt, params.json}` via `artifacts.go`
-- [ ] do NOT record per-artifact byte sizes in metadata — the aggregator gets them from `os.Stat` (single source of truth)
-- [ ] write `run` JSON to `--out` (default `<workdir>/keygen.json`)
-- [ ] run `go build ./... && go vet ./...` — must succeed before next task
+- [x] create `artifacts.go` with helpers to write/read each artifact (sk_c, sk_a, pk, rlk, glk_master, glk_full, mac_key, sid, params, input_ct, result_ct, auth_ct, client_share) as a file at the canonical name within a workdir; helpers use existing `internal/protocol/wire.go` marshalers
+- [x] note: `artifacts.go` stays under `cmd/ppiav-cli/`; if a helper graduates to `internal/protocol/wire.go` later, that file's test suite extends accordingly
+- [x] create `keygen.go` parsing `--workdir <dir> --orion <dir> [--out <path>]`
+- [x] run bilateral keygen in-process mirroring `orchestrator.Setup`; wrap each round (`open`, `pk`, `rlk-r1`, `rlk-r2`, `galois`) in `bench.Measure`; append samples to a single `bench.Run` named "keygen"
+- [x] write artifacts to `<workdir>/{pk.bin, sk_c.bin, sk_a.bin, rlk.bin, glk_master.bin, glk_full.bin, mac_key.bin, sid.txt, params.json}` via `artifacts.go`
+- [x] do NOT record per-artifact byte sizes in metadata — the aggregator gets them from `os.Stat` (single source of truth)
+- [x] write `run` JSON to `--out` (default `<workdir>/keygen.json`)
+- [x] run `go build ./... && go vet ./...` — must succeed before next task
 
 ### Task 8: Implement VClient-side subcommands (`encrypt`, `partial-decrypt`)
 

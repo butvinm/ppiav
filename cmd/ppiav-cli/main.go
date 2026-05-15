@@ -128,10 +128,9 @@ func loadImage(path string) ([]float64, error) {
 	return out, nil
 }
 
-// Stub handlers — implementations land in Tasks 7-10. Each returns
+// Stub handlers — implementations land in Tasks 8-10. Each returns
 // "unimplemented" so `go build ./...` succeeds with the dispatch in place.
 
-func runKeygen(args []string) error         { return fmt.Errorf("keygen: unimplemented") }
 func runEncrypt(args []string) error        { return fmt.Errorf("encrypt: unimplemented") }
 func runInfer(args []string) error          { return fmt.Errorf("infer: unimplemented") }
 func runMAC(args []string) error            { return fmt.Errorf("mac: unimplemented") }
