@@ -391,12 +391,12 @@ Stratified: exactly 5 entries with `label=0` (minors) and 5 with `label=1` (adul
 
 - Create: `/home/butvinm/Dev/ppiav/bench/bench/eval.py`
 
-- [ ] implement `main(argv)` parsing `--inputs <eval_inputs.json> --orion <dir> [--batch-dir <path>]`
-- [ ] create batch dir `results/phase2/eval-<UTC-timestamp>/`, mkdir `keys/`
-- [ ] invoke `ppiav-cli keygen --workdir <batch>/keys --orion <orion> --out <batch>/keygen.json` via subprocess; fail fast on non-zero exit
-- [ ] for each image in `eval_inputs.images`: mkdir `<batch>/img_<idx>/`; invoke encrypt → infer → mac → partial-decrypt → finalize in sequence; finalize gets `--ref-logit` from the manifest entry
-- [ ] after all images: call `aggregate(<batch>)` (Task 14)
-- [ ] no tests — benchmark harness
+- [x] implement `main(argv)` parsing `--inputs <eval_inputs.json> --orion <dir> [--batch-dir <path>]`
+- [x] create batch dir `results/phase2/eval-<UTC-timestamp>/`, mkdir `keys/`
+- [x] invoke `ppiav-cli keygen --workdir <batch>/keys --orion <orion> --out <batch>/keygen.json` via subprocess; fail fast on non-zero exit
+- [x] for each image in `eval_inputs.images`: mkdir `<batch>/img_<idx>/`; invoke encrypt → infer → mac → partial-decrypt → finalize in sequence; finalize gets `--ref-logit` from the manifest entry
+- [x] after all images: call `aggregate(<batch>)` (Task 14) — currently stubbed; raises NotImplementedError so main() prints "pipeline complete; aggregate pending" and exits 0
+- [x] no tests — benchmark harness
 
 ### Task 14: Aggregator (summary.md generation)
 
