@@ -734,12 +734,12 @@ Implementation note: main.ts uses the raw `globalThis.ppiav` bridge directly (wi
 - Create: `deploy/Dockerfile.rservice`
 - Create: `deploy/docker-compose.yml` (for local development)
 
-- [ ] create `deploy/Dockerfile.vservice`: FROM `golang:1.22-alpine`, `WORKDIR /app`, `COPY go.* ./`, `COPY internal/ ./internal/`, `COPY cmd/ppiav-vservice/ ./cmd/ppiav-vservice/`, `RUN go build -o vservice ./cmd/ppiav-vservice`, `CMD ["/app/vservice", "--addr", ":8080"]`, `EXPOSE 8080`
-- [ ] create `deploy/Dockerfile.vagent`: similar, also `COPY web/ ./web/` so the embed picks up VClient + WASM at build time; the WASM blob must already exist in the build context (build via `make wasm` before `docker build`).
-- [ ] create `deploy/Dockerfile.rservice`: similar, `COPY web/rclient/ ./web/rclient/` for the RClient embed.
-- [ ] create `deploy/docker-compose.yml`: three services: `vservice`, `vagent`, `rservice`, each with `build` context `.` and `dockerfile` corresponding, ports `8080:8080`, `8081:8081`, `8082:8082`, depends on `vservice` for `vagent`
-- [ ] verify dockerfiles syntax: `docker build -f deploy/Dockerfile.vservice .` (dry run)
-- [ ] **No docker-compose smoke test** — manual verification
+- [x] create `deploy/Dockerfile.vservice`: multi-stage `golang:1.26-alpine` builder (go.mod pins `go 1.26.1`, so `1.22-alpine` from the original plan would not satisfy the toolchain) → `alpine:latest` runtime. Single-stage flow (`go mod download` → `COPY internal/ cmd/ppiav-vservice/` → `CGO_ENABLED=0 go build`); no web embed dependency. `EXPOSE 8080`, `ENTRYPOINT ["/usr/local/bin/vservice"]`, `CMD ["--addr", ":8080"]`.
+- [x] create `deploy/Dockerfile.vagent`: multi-stage with `nodejs npm` in the `golang:1.26-alpine` builder. `COPY web/ ./web/` plus `Makefile`, runs `make wasm spas` to populate the embed assets (TS dist, wasm_exec.js, ppiav.wasm) before `go build`. Runtime stage copies only the binary. Note: dropped the original plan's "assets must already exist in the build context" assumption — multi-stage is safer because a stale host workspace can't poison the image.
+- [x] create `deploy/Dockerfile.rservice`: multi-stage with `nodejs npm` for the RClient bundle (`cd web/rclient && npm install && npm run build`). Does NOT build the WASM blob — RService never serves it. Only `web/rclient/` is copied.
+- [x] create `deploy/docker-compose.yml`: three services with `build.context: ..` (repo root) and the corresponding Dockerfiles. Ports `8080/8081/8082`. `depends_on`: vagent → vservice, rservice → vagent (RService server-to-servers to VAgent on Stage 1, so it needs VAgent up). Service URLs use Docker DNS (`http://vservice:8080`, `http://vagent:8081`, etc.).
+- [x] verify dockerfiles syntax: `docker build --check` clean for all three. Full `docker build -f deploy/Dockerfile.vservice .` succeeded end-to-end (builder + runtime stages, image `ppiav-vservice:test` tagged); vagent/rservice not fully built (would pull node_modules / cross-compile WASM, long) but syntax-check is green and same multi-stage pattern as vservice. `docker compose -f deploy/docker-compose.yml config` parses without warnings.
+- [x] **No docker-compose smoke test** — manual verification (skipped — not automatable, deferred to Phase-3 manual acceptance run in Post-Completion section)
 
 ### Task 21: Final Go test suite verification
 

@@ -1,0 +1,49 @@
+# Phase 3 local development stack.
+# Build context is the repo root so each Dockerfile sees go.mod, internal/, cmd/, web/.
+# Run `make wasm spas` on the host first is NOT required — each Dockerfile builds
+# its own web assets in-stage.
+#
+# Service URLs use Docker's internal DNS so VAgent/RService can reach each other
+# by service name. Host ports are mapped 1:1 for browser access on localhost.
+
+services:
+  vservice:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.vservice
+    image: ppiav-vservice:latest
+    ports:
+      - "8080:8080"
+    command: ["--addr", ":8080"]
+
+  vagent:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.vagent
+    image: ppiav-vagent:latest
+    ports:
+      - "8081:8081"
+    command:
+      - "--addr"
+      - ":8081"
+      - "--vservice-url"
+      - "http://vservice:8080"
+      - "--rservice-url"
+      - "http://rservice:8082"
+    depends_on:
+      - vservice
+
+  rservice:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.rservice
+    image: ppiav-rservice:latest
+    ports:
+      - "8082:8082"
+    command:
+      - "--addr"
+      - ":8082"
+      - "--vagent-url"
+      - "http://vagent:8081"
+    depends_on:
+      - vagent

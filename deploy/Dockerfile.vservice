@@ -1,0 +1,17 @@
+# VService — FHE inference HTTP server.
+# No web embed dependency, so a simple single-stage build suffices.
+
+FROM golang:1.26-alpine AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY internal/ ./internal/
+COPY cmd/ppiav-vservice/ ./cmd/ppiav-vservice/
+RUN CGO_ENABLED=0 go build -o /out/vservice ./cmd/ppiav-vservice
+
+FROM alpine:latest
+RUN apk add --no-cache ca-certificates
+COPY --from=builder /out/vservice /usr/local/bin/vservice
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/vservice"]
+CMD ["--addr", ":8080"]
