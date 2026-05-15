@@ -1,18 +1,7 @@
-// Command ppiav-vagent runs the VAgent HTTP server. It exposes the
-// Stage-1 `POST /sessions`, the proxy `GET /sessions/:sid/params`, the
-// per-stage keygen routes (`pk-share`, `rlk/round1`, `rlk/round2`,
-// `gks-shares`), and the Stage-3/4 image/result/partial-decryption
-// routes added in Tasks 6 and 7. See docs/DESIGN.md §`Protocol` and the
-// Phase-3 plan.
-//
-// Flags mirror `cmd/ppiav-vservice`'s --orion semantics: when `--orion`
-// is set, params are derived from the compiled Orion model so VAgent
-// agrees with VService on the CKKS profile. The agent itself does not
-// touch the Orion model — it only needs matching `protocol.Params`.
-//
-// `--rservice-url` is wired now for the verdict callback implemented in
-// Task 7; Task 5's keygen routes do not use it but the flag surface is
-// stable.
+// Command ppiav-vagent runs the VAgent HTTP server. When `--orion` is set
+// params are derived from the compiled Orion model so VAgent agrees with
+// VService on the CKKS profile (agent does not touch the model itself).
+// See docs/DESIGN.md §`Protocol`.
 package main
 
 import (
@@ -45,8 +34,6 @@ func main() {
 		os.Exit(1)
 	}
 	if *orionDir != "" {
-		// VAgent only consumes Params (CKKS, Authenticator, InputLevel,
-		// ExtraRotationIndices) — we don't need the Orion model itself.
 		// vservice.NewWithOrion is the single source of truth that aligns
 		// params across services; we discard the *Service it returns.
 		svc, err := vservice.NewWithOrion(params, *orionDir)
@@ -63,9 +50,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Stage-1 sid allocation happens dynamically per request: RService
-	// → VAgent `POST /sessions` → VService `POST /sessions`. No initial
-	// session is opened here.
 	srv := vagent.NewServer(agent, *vserviceURL, *rserviceURL, *rservicePublicURL)
 	log.Printf("ppiav-vagent listening on %s (vservice=%s, rservice=%s, rservice-public=%s, orion=%q)",
 		*addr, *vserviceURL, *rserviceURL, *rservicePublicURL, *orionDir)

@@ -1,11 +1,6 @@
 // Command ppiav-rservice runs the RService HTTP server. It exposes the
 // `/protected` cookie-gated stub and `/api/callback/:sid` verdict
-// receiver — see docs/DESIGN.md §`Protocol` and the Phase-3 plan.
-//
-// Task-3 scope: bring up the binary against the existing Task-2 handlers.
-// The Stage-1 server-to-server redirect to VAgent is implemented in
-// Task 18; the `--vagent-url` flag is wired up front to keep the flag
-// surface stable.
+// receiver — see docs/DESIGN.md §`Protocol`.
 package main
 
 import (
