@@ -340,9 +340,9 @@ Stratified: exactly 5 entries with `label=0` (minors) and 5 with `label=1` (adul
 
 - Create: `/home/butvinm/Dev/ppiav/cmd/ppiav-cli/infer.go`
 
-- [ ] parse `--workdir --orion --in-ct --out-ct --out`; load `{sid, rlk, glk_full, params}` via `artifacts.go`; build `vservice.Service` via `NewWithState(params, orionDir, state)`
-- [ ] wrap `Infer` in `bench.Measure`; write `--out-ct` and `--out` JSON
-- [ ] run `go build ./... && go vet ./...` — must succeed before next task
+- [x] parse `--workdir --orion --in-ct --out-ct --out`; load `{sid, rlk, glk_full, params}` via `artifacts.go`; build `vservice.Service` via `NewWithState(params, orionDir, state)`
+- [x] wrap `Infer` in `bench.Measure`; write `--out-ct` and `--out` JSON
+- [x] run `go build ./... && go vet ./...` — must succeed before next task
 
 ### Task 10: Implement VAgent-side subcommands (`mac`, `finalize`)
 
