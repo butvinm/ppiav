@@ -465,10 +465,10 @@ Scope: confirm everything builds and unit tests pass on the dev box. Full chain 
 
 **Files:** none — operates against immers.cloud only
 
-- [ ] check immers.cloud account balance is sufficient (top up if HTTP 401 surfaces)
-- [ ] rent the GPU training VPS via the `vps` skill: `vps create --name ppiav-bench-eval-train --flavor rtx4090-1.8.16.40` (auto-selects the CUDA Ubuntu image because the flavor starts with `rtx`)
-- [ ] **manual verify**: `openstack --os-cloud immers server show ppiav-bench-eval-train -f json | jq '.status, .addresses'` — status `ACTIVE`; note the IP
-- [ ] record rental start time
+- [x] check immers.cloud account balance is sufficient (top up if HTTP 401 surfaces) — `server list` returned empty `[]` (auth OK, no HTTP 401)
+- [x] rent the GPU training VPS via the `vps` skill: `vps create --name ppiav-bench-eval-train --flavor rtx4090-1.8.16.40` (auto-selects the CUDA Ubuntu image because the flavor starts with `rtx`)
+- [x] **manual verify**: `openstack --os-cloud immers server show ppiav-bench-eval-train -f json | jq '.status, .addresses'` — status `ACTIVE`; IP `195.209.216.203`
+- [x] record rental start time — `launched_at = 2026-05-15T21:26:26Z` (UTC)
 
 ### Task 19: Bootstrap training VPS + train weights
 
