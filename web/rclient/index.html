@@ -11,6 +11,9 @@
       <h1>Protected <span class="accent">resource</span></h1>
       <p class="subtitle">Access gated by Resource Service.</p>
       <div id="status" class="status">Loading...</div>
+      <form method="post" action="/reset" class="reset-form">
+        <button type="submit" class="reset-btn">reset session</button>
+      </form>
     </main>
     <!--
       RService injects `<script>window.verdict = {"sid":"...", "verdict":"..."};</script>`
