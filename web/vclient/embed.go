@@ -6,5 +6,5 @@ package vclient
 
 import "embed"
 
-//go:embed index.html dist wasm_exec.js
+//go:embed index.html dist wasm_exec.js styles.css
 var FS embed.FS

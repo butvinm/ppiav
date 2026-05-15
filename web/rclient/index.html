@@ -3,11 +3,15 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>RClient</title>
+    <title>Protected · ppiav</title>
+    <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <h1>Protected resource</h1>
-    <div id="status">Loading...</div>
+    <main class="card">
+      <h1>Protected <span class="accent">resource</span></h1>
+      <p class="subtitle">Access gated by Resource Service.</p>
+      <div id="status" class="status">Loading...</div>
+    </main>
     <!--
       RService injects `<script>window.verdict = {"sid":"...", "verdict":"..."};</script>`
       before </body> when serving this page. main.ts reads window.verdict and

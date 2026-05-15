@@ -5,5 +5,5 @@ package rclient
 
 import "embed"
 
-//go:embed index.html dist
+//go:embed index.html dist styles.css
 var FS embed.FS

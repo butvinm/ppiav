@@ -74,6 +74,7 @@ func (s *Server) register() {
 	s.mux.HandleFunc("/verify", s.handleVerify)
 	s.mux.HandleFunc("/dist/", s.handleVClientAsset)
 	s.mux.HandleFunc("/wasm_exec.js", s.handleVClientAsset)
+	s.mux.HandleFunc("/styles.css", s.handleVClientAsset)
 	s.mux.HandleFunc("/ppiav.wasm", s.handlePpiavWASM)
 	s.mux.HandleFunc("/sessions", s.handleSessions)
 	s.mux.HandleFunc("/sessions/", s.handleSession)

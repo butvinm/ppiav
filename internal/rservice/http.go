@@ -75,6 +75,7 @@ func (s *Server) ListenAndServe(addr string) error {
 func (s *Server) register() {
 	s.mux.HandleFunc("/protected", s.handleProtected)
 	s.mux.HandleFunc("/dist/", s.handleRClientAsset)
+	s.mux.HandleFunc("/styles.css", s.handleRClientAsset)
 	s.mux.HandleFunc("/api/callback/", s.handleCallback)
 }
 
