@@ -11,8 +11,10 @@ import (
 // accept and return JS values; the underlying logic lives in core.go and
 // is host-buildable for tests.
 //
-// JS surface (handle-based — the TS wrapper in web/ppiav/ts/ppiav/ builds
-// the Client object that hides the handle):
+// JS surface (handle-based — the TS wrapper in web/ppiav/ts/ppiav/index.ts
+// wraps these as a Client class that hides the handle and converts
+// {error} responses into thrown JS Errors). The TS PpiavBridge interface
+// in that file mirrors the signatures below 1:1 — keep them in sync.
 //
 //	ppiav.newClient(paramsJSON: string, sid: string)
 //	    → {handle: number} | {error: string}

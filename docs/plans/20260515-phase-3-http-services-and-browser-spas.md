@@ -564,27 +564,10 @@ already check.
 
 - Modify: `web/ppiav/ts/ppiav/index.ts`
 
-- [ ] declare `globalThis.ppiav` namespace with types matching Go exports:
-  ```typescript
-  declare global {
-    export namespace ppiav {
-      export function newClient(paramsJSON: string, sid: string): Client;
-      export interface Client {
-        genPKShare(): Uint8Array;
-        aggregatePK(agentShareBytes: Uint8Array): void;
-        genRLKShareRound1(): Uint8Array;
-        aggregateRLKRound1(agentShareBytes: Uint8Array): void;
-        genRLKShareRound2(): Uint8Array;
-        genGaloisShares(): Uint8Array;
-        encryptImage(tensor: Float64Array): Uint8Array;
-        partialDecrypt(authenticatedCtBytes: Uint8Array): Uint8Array;
-      }
-    }
-  }
-  ```
-- [ ] verify TypeScript compiles: `cd web/ppiav && npm run build`
-- [ ] annotate Go `ppiav.go` `RegisterJS()` to declare the exact JS function signatures matching the TS types (comments for reference)
-- [ ] verify WASM builds: `cd web/ppiav && make wasm`
+- [x] declare `globalThis.ppiav` namespace with types matching Go exports. Implementation deviates from the plan's exact shape: the Go bridge is handle-based and returns `{error}` objects (not thrown errors), so `web/ppiav/ts/ppiav/index.ts` declares a low-level `PpiavBridge` interface mirroring the raw JS surface, then exports a high-level `Client` class + `newClient` factory that match the plan's user-facing shape (lines 567-583). The Client wrapper hides the handle and converts `{error}` results into thrown `Error`s; `Client.close()` releases the Go-side handle, and a `FinalizationRegistry` catches forgotten closes (same pattern as `ts/lattigo/rlwe.ts`).
+- [x] verify TypeScript compiles: `cd web/ppiav && npm run build` (tsc passes clean)
+- [x] annotate Go `ppiav.go` `RegisterJS()` to declare the exact JS function signatures matching the TS types (comments for reference) — extended the existing doc comment to cross-reference the TS `PpiavBridge` interface and note the keep-in-sync requirement
+- [x] verify WASM builds: `cd web/ppiav && make wasm` (12.5 MB output, builds clean)
 
 ### Task 13: Create `web/vclient` SPA project structure
 
