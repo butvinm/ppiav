@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VClient</title>
+  </head>
+  <body>
+    <h1>Privacy-Preserving Image Attribute Verification</h1>
+    <div id="status">Loading WASM...</div>
+    <div id="progress"></div>
+    <input type="file" id="image-input" accept="image/*" />
+    <!--
+      The plan stub used `<script src="/ppiav.wasm" type="application/wasm">`,
+      but that is not how WebAssembly loads. The real Go/WASM pattern is to
+      include the standard Go shim (wasm_exec.js) first, then fetch and
+      instantiate ppiav.wasm from JS. Task 15's main.ts performs the fetch +
+      WebAssembly.instantiate. Here we only include the shim.
+    -->
+    <script src="/wasm_exec.js"></script>
+    <script type="module" src="./dist/main.js"></script>
+  </body>
+</html>

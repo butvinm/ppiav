@@ -579,9 +579,9 @@ already check.
 - Create: `web/vclient/package.json`
 - Create: `web/vclient/tsconfig.json`
 
-- [ ] create `web/vclient/package.json`: `{"name": "ppiav-vclient", "version": "0.1.0", "type": "module", "scripts": {"build": "tsc"}}`, dev dependencies: `typescript`
-- [ ] create `web/vclient/tsconfig.json`: outputs to `./dist`, ES module target
-- [ ] create `web/vclient/index.html`: minimal HTML — `<title>VClient</title>`, WASM loader via `<script src="/ppiav.wasm" type="application/wasm"></script>` served by VAgent at root, TS module `<script type="module" src="./dist/main.js"></script>`, body with file input (`<input type="file">`), status div (`#status`), progress div (`#progress`)
+- [x] create `web/vclient/package.json`: `{"name": "ppiav-vclient", "version": "0.1.0", "type": "module", "scripts": {"build": "tsc"}}`, dev dependencies: `typescript`
+- [x] create `web/vclient/tsconfig.json`: outputs to `./dist`, ES module target
+- [x] create `web/vclient/index.html`: minimal HTML — `<title>VClient</title>`, WASM loader (deviation: plan stub used `<script src="/ppiav.wasm" type="application/wasm">`, which is not how WASM loads; replaced with standard Go `<script src="/wasm_exec.js"></script>` shim, leaving the actual `WebAssembly.instantiate` of `ppiav.wasm` to Task 15 main.ts), TS module `<script type="module" src="./dist/main.js"></script>`, body with file input (`<input type="file">`), status div (`#status`), progress div (`#progress`)
 
 ### Task 14: Implement `web/vclient/ts/preprocess.ts` image preprocessing
 

@@ -9,6 +9,9 @@ web/ppiav/*.wasm
 
 # Node / TypeScript build artefacts
 web/ppiav/node_modules/
+web/vclient/node_modules/
+web/vclient/dist/
+web/vclient/wasm_exec.js
 
 # Python (bench/, models/)
 **/.venv/
