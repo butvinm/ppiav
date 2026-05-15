@@ -232,10 +232,10 @@ Stratified: exactly 5 entries with `label=0` (minors) and 5 with `label=1` (adul
 - Modify: `/home/butvinm/Dev/ppiav/internal/bench/bench.go`
 - Modify: `/home/butvinm/Dev/ppiav/internal/bench/bench_test.go`
 
-- [ ] add `PreVmHWM uint64 \`json:"pre_vm_hwm"\``to`Sample` struct
-- [ ] in `measure(...)`, call `readVmHWM()` before `start := time.Now()` and stamp `s.PreVmHWM`
-- [ ] write test verifying `Sample.PreVmHWM` is non-zero after Measure on Linux (skip via `runtime.GOOS != "linux"` check); also assert `PreVmHWM <= VmHWM`
-- [ ] run `go test ./internal/bench/...` — must pass before next task
+- [x] add `PreVmHWM uint64 \`json:"pre_vm_hwm"\``to`Sample` struct
+- [x] in `measure(...)`, call `readVmHWM()` before `start := time.Now()` and stamp `s.PreVmHWM`
+- [x] write test verifying `Sample.PreVmHWM` is non-zero after Measure on Linux (skip via `runtime.GOOS != "linux"` check); also assert `PreVmHWM <= VmHWM`
+- [x] run `go test ./internal/bench/...` — must pass before next task
 
 ### Task 2: Extend FinalizeDecryption to expose decoded slots
 

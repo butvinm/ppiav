@@ -201,3 +201,22 @@ func TestVmHWM(t *testing.T) {
 		assert.Equal(t, uint64(0), v)
 	}
 }
+
+func TestMeasurePreVmHWM(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "linux" {
+		t.Skip("PreVmHWM is only populated on Linux")
+	}
+
+	s, err := Measure("stage", func() error {
+		// Allocate a small slice to ensure the process has measurable RSS.
+		buf := make([]byte, 1<<20)
+		buf[0] = 1
+		_ = buf
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Greater(t, s.PreVmHWM, uint64(0), "PreVmHWM must be non-zero on Linux")
+	assert.LessOrEqual(t, s.PreVmHWM, s.VmHWM, "PreVmHWM must not exceed VmHWM (HWM is monotonic)")
+}

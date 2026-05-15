@@ -25,6 +25,7 @@ type Sample struct {
 	AllocDelta uint64        `json:"alloc_delta"`
 	NumGC      uint32        `json:"num_gc"`
 	PauseNs    uint64        `json:"pause_ns"`
+	PreVmHWM   uint64        `json:"pre_vm_hwm"`
 	VmHWM      uint64        `json:"vm_hwm"`
 	Bytes      uint64        `json:"bytes"`
 }
@@ -110,6 +111,7 @@ func measure(name string, iter int, fn func() (uint64, error)) (Sample, error) {
 	runtime.GC()
 	runtime.ReadMemStats(&before)
 
+	preVmHWM := readVmHWM()
 	start := time.Now()
 	size, err := fn()
 	wall := time.Since(start)
@@ -124,6 +126,7 @@ func measure(name string, iter int, fn func() (uint64, error)) (Sample, error) {
 		HeapInuse: after.HeapInuse,
 		Sys:       after.Sys,
 		NumGC:     after.NumGC - before.NumGC,
+		PreVmHWM:  preVmHWM,
 		Bytes:     size,
 	}
 	if after.TotalAlloc >= before.TotalAlloc {
