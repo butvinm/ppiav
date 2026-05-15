@@ -330,9 +330,9 @@ Stratified: exactly 5 entries with `label=0` (minors) and 5 with `label=1` (adul
 - Create: `/home/butvinm/Dev/ppiav/cmd/ppiav-cli/encrypt.go`
 - Create: `/home/butvinm/Dev/ppiav/cmd/ppiav-cli/partial_decrypt.go`
 
-- [ ] `encrypt.go`: parse `--workdir --image --out-ct --out`; load `{sid, sk_c, pk_agg, params}` via `artifacts.go`; build `vclient.Client` via `NewWithState`; wrap `EncryptImage` in `bench.Measure`; write `--out-ct` and `--out` JSON
-- [ ] `partial_decrypt.go`: parse `--workdir --in-ct --out-share --out`; load `{sid, sk_c, params}`; build Client via `NewWithState`; wrap `PartialDecrypt` in `bench.Measure`; write `--out-share` and `--out` JSON
-- [ ] run `go build ./... && go vet ./...` — must succeed before next task
+- [x] `encrypt.go`: parse `--workdir --image --out-ct --out`; load `{sid, sk_c, pk_agg, params}` via `artifacts.go`; build `vclient.Client` via `NewWithState`; wrap `EncryptImage` in `bench.Measure`; write `--out-ct` and `--out` JSON
+- [x] `partial_decrypt.go`: parse `--workdir --in-ct --out-share --out`; load `{sid, sk_c, params}`; build Client via `NewWithState`; wrap `PartialDecrypt` in `bench.Measure`; write `--out-share` and `--out` JSON
+- [x] run `go build ./... && go vet ./...` — must succeed before next task
 
 ### Task 9: Implement VService-side subcommand (`infer`)
 

@@ -128,11 +128,9 @@ func loadImage(path string) ([]float64, error) {
 	return out, nil
 }
 
-// Stub handlers — implementations land in Tasks 8-10. Each returns
+// Stub handlers for subcommands not yet implemented. Each returns
 // "unimplemented" so `go build ./...` succeeds with the dispatch in place.
 
-func runEncrypt(args []string) error        { return fmt.Errorf("encrypt: unimplemented") }
-func runInfer(args []string) error          { return fmt.Errorf("infer: unimplemented") }
-func runMAC(args []string) error            { return fmt.Errorf("mac: unimplemented") }
-func runPartialDecrypt(args []string) error { return fmt.Errorf("partial-decrypt: unimplemented") }
-func runFinalize(args []string) error       { return fmt.Errorf("finalize: unimplemented") }
+func runInfer(args []string) error    { return fmt.Errorf("infer: unimplemented") }
+func runMAC(args []string) error      { return fmt.Errorf("mac: unimplemented") }
+func runFinalize(args []string) error { return fmt.Errorf("finalize: unimplemented") }

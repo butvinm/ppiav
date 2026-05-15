@@ -9,6 +9,7 @@ import (
 	"github.com/butvinm/ppiav/internal/authenticator"
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
+	"github.com/tuneinsight/lattigo/v6/multiparty"
 	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
 	"github.com/tuneinsight/lattigo/v6/utils/structs"
 )
@@ -293,4 +294,105 @@ func readCiphertext(workdir, name string) (*rlwe.Ciphertext, error) {
 		return nil, fmt.Errorf("artifacts: unmarshal ct %s: %w", name, err)
 	}
 	return ct, nil
+}
+
+// writeCiphertextPath serialises a Ciphertext to an arbitrary absolute or
+// relative path. Used by encrypt/infer/mac when the output ciphertext lives
+// in a per-image directory outside the keygen workdir.
+func writeCiphertextPath(path string, ct *rlwe.Ciphertext) error {
+	if ct == nil {
+		return fmt.Errorf("artifacts: writeCiphertextPath %s: ct is nil", path)
+	}
+	data, err := ct.MarshalBinary()
+	if err != nil {
+		return fmt.Errorf("artifacts: marshal ct %s: %w", path, err)
+	}
+	return writeBytesPath(path, data)
+}
+
+// readCiphertextPath inverts writeCiphertextPath.
+func readCiphertextPath(path string) (*rlwe.Ciphertext, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("artifacts: read ct %s: %w", path, err)
+	}
+	ct := &rlwe.Ciphertext{}
+	if err := ct.UnmarshalBinary(data); err != nil {
+		return nil, fmt.Errorf("artifacts: unmarshal ct %s: %w", path, err)
+	}
+	return ct, nil
+}
+
+// writeKeySwitchShare serialises a multiparty.KeySwitchShare to an arbitrary
+// path. The bench `partial-decrypt` subcommand emits one of these per
+// image into a per-image directory outside the keygen workdir.
+func writeKeySwitchShare(path string, share multiparty.KeySwitchShare) error {
+	data, err := share.MarshalBinary()
+	if err != nil {
+		return fmt.Errorf("artifacts: marshal client share %s: %w", path, err)
+	}
+	return writeBytesPath(path, data)
+}
+
+// readKeySwitchShare inverts writeKeySwitchShare.
+func readKeySwitchShare(path string) (multiparty.KeySwitchShare, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return multiparty.KeySwitchShare{}, fmt.Errorf("artifacts: read client share %s: %w", path, err)
+	}
+	var share multiparty.KeySwitchShare
+	if err := share.UnmarshalBinary(data); err != nil {
+		return multiparty.KeySwitchShare{}, fmt.Errorf("artifacts: unmarshal client share %s: %w", path, err)
+	}
+	return share, nil
+}
+
+// writeBytesPath atomically writes data to path: temp file in the same
+// directory then rename. Mirrors writeBytes's contract but for paths that
+// may live outside the keygen workdir (per-image artifacts).
+func writeBytesPath(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("artifacts: mkdir %s: %w", dir, err)
+	}
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("artifacts: create tmp for %s: %w", path, err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("artifacts: write %s: %w", path, err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("artifacts: close tmp for %s: %w", path, err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("artifacts: rename tmp -> %s: %w", path, err)
+	}
+	return nil
+}
+
+// loadParams reconstructs a full protocol.Params from the workdir's
+// params.json + protocol.Defaults() for non-CKKS fields (Authenticator,
+// FloodSigma). InputLevel is left at the Defaults() value (0 → EncryptImage
+// builds at MaxLevel); ExtraRotationIndices is left empty because the
+// rotation set is encoded in the persisted glk_full.bin via Galois elements
+// and no caller of loadParams runs the keygen handshake. Phase-2 callers
+// that need Orion's InputLevel or rotation labels reload via LoadOrionParams
+// from --orion <dir> in addition.
+func loadParams(workdir string) (protocol.Params, error) {
+	ckksParams, err := readCKKSParams(workdir)
+	if err != nil {
+		return protocol.Params{}, err
+	}
+	defaults, err := protocol.Defaults()
+	if err != nil {
+		return protocol.Params{}, fmt.Errorf("artifacts: build default params: %w", err)
+	}
+	defaults.CKKS = ckksParams
+	return defaults, nil
 }
