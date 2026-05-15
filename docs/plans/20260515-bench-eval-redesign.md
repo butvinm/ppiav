@@ -273,11 +273,11 @@ Stratified: exactly 5 entries with `label=0` (minors) and 5 with `label=1` (adul
 - Create: `/home/butvinm/Dev/ppiav/internal/vclient/state.go`
 - Create: `/home/butvinm/Dev/ppiav/internal/vclient/state_test.go`
 
-- [ ] define `ExportedState`: `{SID, SkShare *rlwe.SecretKey, PkAgg *rlwe.PublicKey}` (`PkAgg` needed for `EncryptImage`; `PartialDecrypt` uses only `SkShare`)
-- [ ] implement `(c *Client) ExportState() (*ExportedState, error)` and `NewWithState(params, *ExportedState) (*Client, error)`
-- [ ] rebuild CRS from `state.SID` in `NewWithState`; do not serialize
-- [ ] write round-trip test at LogN=15: drive through Open + PK handshake, export, build new Client, call `EncryptImage` and `PartialDecrypt` on probes, verify deterministic outputs
-- [ ] run `go test ./internal/vclient/...` — must pass before next task
+- [x] define `ExportedState`: `{SID, SkShare *rlwe.SecretKey, PkAgg *rlwe.PublicKey}` (`PkAgg` needed for `EncryptImage`; `PartialDecrypt` uses only `SkShare`)
+- [x] implement `(c *Client) ExportState() (*ExportedState, error)` and `NewWithState(params, *ExportedState) (*Client, error)`
+- [x] rebuild CRS from `state.SID` in `NewWithState`; do not serialize
+- [x] write round-trip test at LogN=15: drive through Open + PK handshake, export, build new Client, call `EncryptImage` and `PartialDecrypt` on probes, verify deterministic outputs (encrypt test at LogN=15 via `imageParams`; partial-decrypt round-trip at LogN=14 via `smallParams` since `PartialDecrypt` is image-length-independent and LogN=15 would balloon test wall time)
+- [x] run `go test ./internal/vclient/...` — must pass (4 new tests all green)
 
 ### Task 5: VService state export/import (NEW — required for `infer` subcommand)
 
