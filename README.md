@@ -39,6 +39,14 @@ uv run python -m bench.plot ../results/phase2
 
 ## Quick start — Phase 3 (HTTP services + browser SPAs)
 
+### Prerequisites
+
+- Go 1.22+ (`go env GOROOT/lib/wasm/wasm_exec.js` must exist — bundled with the standard Go toolchain).
+- Node.js 18+ and `npm` for the TypeScript SPA build (`tsc`).
+- `make phase3` copies `wasm_exec.js` from the active Go toolchain into `web/vclient/`; that file is `.gitignore`d and rebuilt on every `make wasm`.
+
+### Build and run locally
+
 Build the WASM blob, both SPAs, and the three Go services:
 
 ```sh
@@ -47,7 +55,7 @@ make phase3
 make wasm spas services
 ```
 
-Run all three services in three terminals:
+Run all three services in three terminals (synthetic x² circuit, no Orion model required):
 
 ```sh
 ./bin/ppiav-vservice --addr :8080
@@ -55,13 +63,23 @@ Run all three services in three terminals:
 ./bin/ppiav-rservice --addr :8082 --vagent-url http://localhost:8081
 ```
 
-Or via docker-compose:
+For full FHE inference, pass `--orion <model-dir>` to `ppiav-vservice` (and to `ppiav-vagent` so both services agree on the CKKS params):
+
+```sh
+./bin/ppiav-vservice --addr :8080 --orion ./models/out/logn16
+./bin/ppiav-vagent  --addr :8081 --orion ./models/out/logn16 \
+    --vservice-url http://localhost:8080 --rservice-url http://localhost:8082
+```
+
+Or via docker-compose (synthetic x² by default; see comments in `deploy/docker-compose.yml` for the `--orion` override + volume mount):
 
 ```sh
 cd deploy && docker compose up
 ```
 
-Browser flow: open `http://localhost:8082/protected`. RService 302s to VAgent's `/verify?sid=...`, the VClient SPA loads, upload an image, and on completion you are redirected back to `/protected` with the verdict (Accept or Reject).
+When deploying behind a reverse proxy or in Docker, pass `--rservice-public-url` to `ppiav-vagent` and `--vagent-public-url` to `ppiav-rservice` so the browser-visible redirect URLs use host-reachable hostnames rather than internal service names.
+
+Browser flow: open `http://localhost:8082/protected`. RService 302s to VAgent's `/verify?sid=...`, the VClient SPA loads, upload an image, and on completion the SPA reads the JSON `{redirect: …}` reply from VAgent and navigates back to `/protected` with the verdict (Accept or Reject).
 
 For WASM debugging open the browser console: `globalThis.lattigo` and `globalThis.ppiav` expose the underlying CKKS and vclient namespaces.
 

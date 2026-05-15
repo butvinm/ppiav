@@ -9,13 +9,18 @@
 # WASM build outputs
 web/ppiav/*.wasm
 
-# Node / TypeScript build artefacts
+# Node / TypeScript build artefacts. dist/ is gitignored content-only —
+# the directory itself stays tracked via dist/.gitkeep so `//go:embed dist`
+# in web/vclient/embed.go and web/rclient/embed.go does not fail on a
+# fresh checkout before `make spas` runs.
 web/ppiav/node_modules/
 web/vclient/node_modules/
-web/vclient/dist/
+web/vclient/dist/*
+!web/vclient/dist/.gitkeep
 web/vclient/wasm_exec.js
 web/rclient/node_modules/
-web/rclient/dist/
+web/rclient/dist/*
+!web/rclient/dist/.gitkeep
 
 # Python (bench/, models/)
 **/.venv/
