@@ -371,14 +371,19 @@ Scope note: `POST /sessions/:sid/eval-keys` ships its payload as `application/oc
 - Create: `internal/rservice/http.go`
 - Create: `internal/rservice/http_test.go`
 
-- [ ] create `internal/rservice/http.go` with `type Server struct { svc *rservice.Service; addr string; vagentURL string }` and `func New(svc *Service, vagentURL, addr string) *Server` (added `vagentURL` field for Stage 1 redirect to VAgent — fully implemented in Task 18)
-- [ ] implement `func (s *Server) ListenAndServe() error` using `http.Server` and `http.ServeMux`
-- [ ] implement `GET /protected` handler: read `sid` cookie, call `svc.CheckAccess(sid)`, return simple HTML page with verdict (Accept/Reject/Unknown) — no SPA yet, just a stub showing the verdict. NOTE: full Stage-1 server-to-server flow (RService → `VAgent POST /sessions` → set cookie + 302 to `/verify?sid=`) is implemented in Task 18; for now, on missing sid just return Unknown/403.
-- [ ] implement `POST /api/callback` handler: parse JSON `VerdictNotification`, call `svc.AcceptVerdict(sid, Verdict)`, return 200
-- [ ] write tests for `GET /protected` with `httptest.ResponseRecorder`: asserts Unknown verdict on missing sid, Accept/Reject on valid verdict
-- [ ] write tests for `POST /api/callback`: upserts verdict, subsequent `CheckAccess` returns stored value
-- [ ] write tests for malformed JSON: returns 400 with error JSON
-- [ ] run tests — must pass before Task 3: `go test ./internal/rservice/...`
+Scope notes:
+
+- The Server constructor is named `NewServer` rather than `New` (same reason as Task 1's `vservice.NewServer`) — `rservice.New()` already exists as the Service constructor and Go does not allow overloads.
+- The callback URL is `POST /api/callback/:sid` (sid in URL path). DESIGN.md §`Components` states "subsequent routes carry sid in the URL path"; `protocol.VerdictNotification` is `{ Verdict Verdict }` only, so the URL is the natural place to carry sid. No wire-format change.
+
+- [x] create `internal/rservice/http.go` with `type Server struct { svc *rservice.Service; addr string; vagentURL string }` and `func NewServer(svc *Service, vagentURL, addr string) *Server` (added `vagentURL` field for Stage 1 redirect to VAgent — fully implemented in Task 18)
+- [x] implement `func (s *Server) ListenAndServe() error` using `http.Server` and `http.ServeMux`
+- [x] implement `GET /protected` handler: read `sid` cookie, call `svc.CheckAccess(sid)`, return simple HTML page with verdict (Accept/Reject/Unknown) — no SPA yet, just a stub showing the verdict. NOTE: full Stage-1 server-to-server flow (RService → `VAgent POST /sessions` → set cookie + 302 to `/verify?sid=`) is implemented in Task 18; for now, on missing sid just return Unknown/403.
+- [x] implement `POST /api/callback/:sid` handler: parse JSON `VerdictNotification`, call `svc.AcceptVerdict(sid, Verdict)`, return 200
+- [x] write tests for `GET /protected` with `httptest.ResponseRecorder`: asserts Unknown verdict on missing sid, Accept/Reject on valid verdict
+- [x] write tests for `POST /api/callback`: upserts verdict, subsequent `CheckAccess` returns stored value
+- [x] write tests for malformed JSON: returns 400 with error JSON
+- [x] run tests — must pass before Task 3: `go test ./internal/rservice/...`
 
 ### Task 3: Create `cmd/ppiav-vservice` and `cmd/ppiav-rservice` binary entry points
 
