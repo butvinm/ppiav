@@ -607,13 +607,13 @@ No unit test for `preprocessImage`. Canvas pipeline correctness is verified by t
 - Create: `web/vclient/ts/main.ts`
 - Create: `web/vclient/ts/protocol_test.ts` (reflection test, not browser e2e)
 
-- [ ] create `web/vclient/ts/main.ts` with main async IIFE:
+- [x] create `web/vclient/ts/main.ts` with main async IIFE:
   - check URL query params for `sid`, if missing, show error "No sid provided"
   - wait for `globalThis.ppiav` to be available (poll or `WebAssembly.instantiate` callback)
   - load params via `fetch('/sessions/' + sid + '/params')` (`response.json()`)
   - create `ppiav.newClient(paramsJSON, sid)`
   - set up file input change listener: on file select, run protocol drive
-- [ ] implement protocol drive sequence in async function `runProtocol(sid, client, file)`. Convention: each `client.gen*` returns `Uint8Array`; each `fetch` sends `body: bytes` with `Content-Type: application/octet-stream`; the response body is fetched as `Uint8Array` via `new Uint8Array(await response.arrayBuffer())` and passed straight back to the next bridge call:
+- [x] implement protocol drive sequence in async function `runProtocol(sid, client, file)`. Convention: each `client.gen*` returns `Uint8Array`; each `fetch` sends `body: bytes` with `Content-Type: application/octet-stream`; the response body is fetched as `Uint8Array` via `new Uint8Array(await response.arrayBuffer())` and passed straight back to the next bridge call:
   - Stage 2a: `fetch('/sessions/' + sid + '/params')` (JSON)
   - Stage 2b: `const share = client.genPKShare(); const resp = await fetch('/sessions/' + sid + '/pk-share', { method: 'POST', headers: {'Content-Type': 'application/octet-stream'}, body: share }); const agentShare = new Uint8Array(await resp.arrayBuffer()); client.aggregatePK(agentShare);`
   - Stage 2c Round 1: same pattern with `genRLKShareRound1` / `aggregateRLKRound1`
@@ -624,11 +624,13 @@ No unit test for `preprocessImage`. Canvas pipeline correctness is verified by t
   - Stage 4a: when SSE `onmessage` fires, `const partial = client.partialDecrypt(authCt); const resp = await fetch('/sessions/' + sid + '/partial-decryption', { method: 'POST', headers: {'Content-Type': 'application/octet-stream'}, body: partial, redirect: 'manual' });`
   - Stage 4b: on `resp.status === 302`, read `Location` header → `window.location.assign(location)`
   - Stage 4b (error): on non-2xx response, show error message in UI, abort (no redirect)
-- [ ] add actual redirect implementation: after `fetch('/sessions/' + sid + '/partial-decryption', ...)` completes, check `response.status === 302`, read `Location` header, assign to `window.location`
-- [ ] add progress updates to `#progress`, `#status` divs during stages ("Stage 2b: Generating public key share...", "Stage 2c: Relinearization key round 1...", etc.)
-- [ ] implement error handling at each fetch: non-2xx status → show error, abort
-- [ ] verify TypeScript compiles: `cd web/vclient && npm install && npm run build`
-- [ ] **No automated browser test** — VClient SPA is verified manually after deployment
+- [x] add actual redirect implementation: after `fetch('/sessions/' + sid + '/partial-decryption', ...)` completes, check `response.status === 302`, read `Location` header, assign to `window.location` (opaqueredirect fallback surfaces an error per implementation note in main.ts)
+- [x] add progress updates to `#progress`, `#status` divs during stages ("Stage 2b: Generating public key share...", "Stage 2c: Relinearization key round 1...", etc.)
+- [x] implement error handling at each fetch: non-2xx status → show error, abort
+- [x] verify TypeScript compiles: `cd web/vclient && npm install && npm run build`
+- [x] **No automated browser test** — VClient SPA is verified manually after deployment
+
+Implementation note: main.ts uses the raw `globalThis.ppiav` bridge directly (with inline `unwrapBytes`/`unwrapVoid` helpers) rather than importing the high-level `Client` class from `@ppiav/ppiav/index.ts`. Both options were explicitly endorsed by the plan; the raw-bridge approach avoids importmap/relative-path gymnastics at browser runtime so the existing `dist/main.js` → `./preprocess.js` import is the only inter-module reference. `protocol_test.ts` is intentionally not created (per Task 15 file note and the explicit "No automated browser test" checkbox).
 
 ### Task 16: Create `web/rclient` SPA and embed both SPAs into Go services
 
