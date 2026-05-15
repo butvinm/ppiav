@@ -51,11 +51,13 @@ const (
 	// params, callback, redirect-reply).
 	MaxJSONBody int64 = 64 * 1024
 
-	// MaxShareBody covers single-share octet-stream endpoints whose
-	// payload is one CKKS share or one key-switch share (pk-share,
-	// rlk/round1, rlk/round2, partial-decryption). Sized for LogN=16
-	// with a comfortable head-room over the largest per-share encoding.
-	MaxShareBody int64 = 16 * 1024 * 1024
+	// MaxShareBody covers single-share octet-stream endpoints (pk-share,
+	// rlk/round1, rlk/round2, partial-decryption). The largest of these
+	// at LogN=16 is the RLK round-1 share — a GadgetCiphertext, ~66 MiB
+	// (BaseRNSDecomp × 2 polynomials × (Qi+Pi) limbs × N coefficients).
+	// 128 MiB gives ~2× headroom; smaller per-share endpoints
+	// (pk-share/rlk-round2/partial-decryption) cap the same allocation.
+	MaxShareBody int64 = 128 * 1024 * 1024
 
 	// MaxGksSharesBody covers the aggregated Galois-share blob
 	// (gks-shares): Lambda × per-rotation share. At LogN=16 × Lambda=128
