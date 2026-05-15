@@ -24,9 +24,10 @@ import (
 // callback payload is the `VerdictNotification` wire struct as JSON.
 //
 // Stage-1 flow (DESIGN.md §3 Stage 1): `GET /protected` with no sid cookie
-// triggers a synchronous server-to-server `POST <vagentURL>/sessions`.
+// — or a sid cookie that resolves to VerdictUnknown (stale / unfinished)
+// — triggers a synchronous server-to-server `POST <vagentURL>/sessions`.
 // On success RService sets `Set-Cookie: sid=<sid>; Path=/; HttpOnly` and
-// 302s to `<vagentURL>/verify?sid=<sid>`. On VAgent failure RService
+// 302s to `<vagentPublicURL>/verify?sid=<sid>`. On VAgent failure RService
 // returns a 5xx with no cookie set (F4a).
 type Server struct {
 	svc             *Service
@@ -103,6 +104,14 @@ func (s *Server) handleProtected(w http.ResponseWriter, r *http.Request) {
 	}
 	sid := protocol.SessionID(c.Value)
 	verdict := s.svc.CheckAccess(sid)
+	// VerdictUnknown means the sid was never followed by a callback —
+	// stale cookie from an abandoned verification, or a value the
+	// browser carried over without ever finishing Stage 1. Restart
+	// rather than render an unrecoverable "unknown" verdict.
+	if verdict == protocol.VerdictUnknown {
+		s.beginStage1(w, r)
+		return
+	}
 	status := http.StatusOK
 	if verdict != protocol.VerdictAccept {
 		status = http.StatusForbidden

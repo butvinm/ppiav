@@ -53,17 +53,36 @@ func TestHTTPGetProtected_CookieReject(t *testing.T) {
 	assert.Contains(t, w.Body.String(), `"sid":"sid-2"`)
 }
 
-func TestHTTPGetProtected_CookieUnknownSid(t *testing.T) {
-	srv := newTestServer("", "")
+// A stale or never-finished sid (CheckAccess returns VerdictUnknown) is
+// indistinguishable from a brand-new visitor in terms of next action:
+// restart Stage 1. /protected must redirect via VAgent and overwrite the
+// cookie with a fresh sid.
+func TestHTTPGetProtected_CookieUnknownSidRedirectsViaVAgent(t *testing.T) {
+	var calls int
+	vagent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/sessions", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(protocol.VerificationSession{SessionID: "sid-fresh"})
+	}))
+	defer vagent.Close()
 
+	srv := newTestServer(vagent.URL, "")
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	req.AddCookie(&http.Cookie{Name: "sid", Value: "not-seen-before"})
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
-	require.Equal(t, http.StatusForbidden, w.Code)
-	assert.Contains(t, w.Body.String(), `"verdict":"unknown"`)
-	assert.Contains(t, w.Body.String(), `"sid":"not-seen-before"`)
+	require.Equal(t, http.StatusFound, w.Code)
+	assert.Equal(t, 1, calls, "vagent /sessions hit exactly once")
+	assert.Equal(t, vagent.URL+"/verify?sid=sid-fresh", w.Header().Get("Location"))
+
+	cookies := w.Result().Cookies()
+	require.Len(t, cookies, 1)
+	c := cookies[0]
+	assert.Equal(t, "sid", c.Name)
+	assert.Equal(t, "sid-fresh", c.Value, "stale sid overwritten with fresh allocation")
 }
 
 func TestHTTPGetProtected_RejectsPost(t *testing.T) {
@@ -373,3 +392,4 @@ func TestHTTPCallback_FollowedByProtected(t *testing.T) {
 	assert.Contains(t, getW.Body.String(), `"verdict":"accept"`)
 	assert.Contains(t, getW.Body.String(), `"sid":"sid-e2e"`)
 }
+
