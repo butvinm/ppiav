@@ -492,13 +492,13 @@ Originally an HTTP-level end-to-end test with mocked crypto. Removed — Tasks 1
 
 `web/ppiav` lives in the **root Go module** — do not create `web/ppiav/go.mod`, do not add any `replace` directive. Lattigo version is whatever the root `/home/butvinm/Dev/ppiav/go.mod` already declares (currently `github.com/tuneinsight/lattigo/v6 v6.2.0` from the public proxy). Lattigo v6.2.0 is pure-Go, compiles to `GOOS=js GOARCH=wasm` out of the box, and is the same code the CLI uses — preserving DESIGN.md line 896's "same Go code in CLI and WASM" invariant.
 
-- [ ] copy bridge sources from `~/Dev/orion/js/lattigo/bridge/` into `web/ppiav/bridge/lattigo/`. Confirm the file list first with `ls ~/Dev/orion/js/lattigo/bridge/*.go`; as of writing it is: `bootstrap.go`, `bootstrap_streaming.go`, `decryptor.go`, `encoder.go`, `encryptor.go`, `handles.go`, `helpers.go`, `keygen.go`, `main.go`, `params.go`, `polynomial.go`, `serialize.go`. **Do not copy** `*_test.go`, `go.mod`, `go.sum`, `build.sh`. Update each copied file's package declaration to `package lattigo` (if Orion's was `package main`, narrow it to the new name).
-- [ ] create `web/ppiav/bridge/lattigo/lattigo.go` with `func RegisterJS()` that registers `globalThis.lattigo`. Orion's `main.go` likely contains the analogous registration logic — extract it here and delete `main.go` from the copy (we use our own entry point in `web/ppiav/bridge/main.go`).
-- [ ] create `web/ppiav/bridge/ppiav/ppiav.go` with `func RegisterJS()` registering `globalThis.ppiav` (body filled in by Task 10)
-- [ ] create `web/ppiav/bridge/main.go` with `//go:build js && wasm`. Named imports (not blank): `import ("github.com/butvinm/ppiav/web/ppiav/bridge/lattigo"; "github.com/butvinm/ppiav/web/ppiav/bridge/ppiav")`. `main()` calls `lattigo.RegisterJS()` then `ppiav.RegisterJS()` then `select {}`.
-- [ ] verify Go compiles for the host: `go build ./web/ppiav/bridge/...` (from the repo root — no `cd`)
-- [ ] verify Go compiles to wasm: `GOOS=js GOARCH=wasm go build -o web/ppiav/ppiav.wasm ./web/ppiav/bridge` (from the repo root)
-- [ ] run unit tests: `go test ./web/ppiav/...` — should pass even with no test files (no-op)
+- [x] copy bridge sources from `~/Dev/orion/js/lattigo/bridge/` into `web/ppiav/bridge/lattigo/`. Confirm the file list first with `ls ~/Dev/orion/js/lattigo/bridge/*.go`; as of writing it is: `bootstrap.go`, `bootstrap_streaming.go`, `decryptor.go`, `encoder.go`, `encryptor.go`, `handles.go`, `helpers.go`, `keygen.go`, `main.go`, `params.go`, `polynomial.go`, `serialize.go`. **Do not copy** `*_test.go`, `go.mod`, `go.sum`, `build.sh`. Update each copied file's package declaration to `package lattigo` (if Orion's was `package main`, narrow it to the new name).
+- [x] create `web/ppiav/bridge/lattigo/lattigo.go` with `func RegisterJS()` that registers `globalThis.lattigo`. Orion's `main.go` likely contains the analogous registration logic — extract it here and delete `main.go` from the copy (we use our own entry point in `web/ppiav/bridge/main.go`).
+- [x] create `web/ppiav/bridge/ppiav/ppiav.go` with `func RegisterJS()` registering `globalThis.ppiav` (body filled in by Task 10)
+- [x] create `web/ppiav/bridge/main.go` with `//go:build js && wasm`. Named imports (not blank): `import ("github.com/butvinm/ppiav/web/ppiav/bridge/lattigo"; "github.com/butvinm/ppiav/web/ppiav/bridge/ppiav")`. `main()` calls `lattigo.RegisterJS()` then `ppiav.RegisterJS()` then `select {}`.
+- [x] verify Go compiles for the host: `go build ./web/ppiav/bridge/...` (from the repo root — no `cd`) — skipped cleanly via build tags (`matched no packages`), expected
+- [x] verify Go compiles to wasm: `GOOS=js GOARCH=wasm go build -o web/ppiav/ppiav.wasm ./web/ppiav/bridge` (from the repo root) — built successfully, 12.5 MB output
+- [x] run unit tests: `go test ./web/ppiav/...` — should pass even with no test files (no-op) — `matched no packages` as expected
 
 ### Task 10: Implement `web/ppiav/bridge/ppiav` protocol APIs
 

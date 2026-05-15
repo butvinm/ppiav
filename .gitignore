@@ -4,6 +4,8 @@
 # Built CLI binaries (left in cmd/ subdirs by `go build`)
 /cmd/*/ppiav-*
 !/cmd/*/*.go
+# WASM build outputs
+web/ppiav/*.wasm
 
 # Python (bench/, models/)
 **/.venv/
