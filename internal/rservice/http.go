@@ -1,12 +1,15 @@
 package rservice
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"strings"
 
 	"github.com/butvinm/ppiav/internal/protocol"
+	"github.com/butvinm/ppiav/web/rclient"
 )
 
 // Server wraps a *Service with the HTTP handlers RService exposes:
@@ -50,7 +53,20 @@ func (s *Server) ListenAndServe() error {
 
 func (s *Server) register() {
 	s.mux.HandleFunc("/protected", s.handleProtected)
+	s.mux.HandleFunc("/dist/", s.handleRClientAsset)
 	s.mux.HandleFunc("/api/callback/", s.handleCallback)
+}
+
+// handleRClientAsset serves files from the embedded RClient FS — the
+// compiled TS bundle under `/dist/*`. The RClient SPA `index.html`
+// references `./dist/main.js`, which resolves to `/dist/main.js` once
+// served at `/protected`.
+func (s *Server) handleRClientAsset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	http.FileServer(http.FS(rclient.FS)).ServeHTTP(w, r)
 }
 
 func (s *Server) handleProtected(w http.ResponseWriter, r *http.Request) {
@@ -100,33 +116,45 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// protectedPage renders the RClient SPA shell with the verdict injected
-// as JSON via `<script>window.verdict = {...}</script>` before the closing
-// `</body>` tag. The RClient `main.ts` reads `window.verdict` and renders
-// it into `#status`. Task 17 will swap the inline HTML for embed.FS-served
-// `web/rclient/index.html` + `web/rclient/dist/main.js`; for now the page
-// is self-contained so the cookie-gated read path stays testable.
+// protectedPage renders the RClient SPA shell (embedded index.html) with
+// the verdict injected as JSON via `<script>window.verdict = {...}</script>`
+// inserted immediately before the closing `</body>` tag. The RClient
+// `main.ts` reads `window.verdict` and renders it into `#status`.
 //
 // sid and verdict are passed through `encoding/json` rather than spliced
 // directly so any future field changes propagate without manual escaping.
+// If the embedded index.html lookup or </body> insertion fails we fall
+// back to a minimal self-contained shell so the handler still returns
+// valid HTML (impossible-by-build, since embed validates at compile time).
 func protectedPage(sid protocol.SessionID, v protocol.Verdict) string {
 	injection := struct {
 		Sid     string `json:"sid"`
 		Verdict string `json:"verdict"`
 	}{Sid: string(sid), Verdict: v.String()}
-	// json.Marshal handles escaping; both sid and verdict are server-trusted
-	// (sid comes from the cookie which we set; verdict is an enum).
 	payload, err := json.Marshal(injection)
 	if err != nil {
-		// Marshaling a flat struct of strings cannot fail in practice;
-		// fall back to a minimal escape-free shell so the handler still
-		// returns valid HTML.
 		payload = []byte(`{"sid":"","verdict":"unknown"}`)
 	}
-	return fmt.Sprintf(
-		`<!doctype html><html><head><title>RClient</title></head><body><h1>Protected resource</h1><div id="status">Loading...</div><script>window.verdict = %s;</script></body></html>`,
-		payload,
-	)
+	script := []byte(fmt.Sprintf(`<script>window.verdict = %s;</script>`, payload))
+
+	raw, err := fs.ReadFile(rclient.FS, "index.html")
+	if err != nil {
+		return fmt.Sprintf(
+			`<!doctype html><html><head><title>RClient</title></head><body><h1>Protected resource</h1><div id="status">Loading...</div>%s</body></html>`,
+			script,
+		)
+	}
+	closeTag := []byte("</body>")
+	idx := bytes.LastIndex(raw, closeTag)
+	if idx < 0 {
+		// No </body> — append before EOF so the script still executes.
+		return string(raw) + string(script)
+	}
+	out := make([]byte, 0, len(raw)+len(script))
+	out = append(out, raw[:idx]...)
+	out = append(out, script...)
+	out = append(out, raw[idx:]...)
+	return string(out)
 }
 
 // errorBody is the wire shape of all 4xx/5xx JSON responses, mirroring

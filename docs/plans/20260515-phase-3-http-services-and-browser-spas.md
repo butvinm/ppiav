@@ -664,7 +664,7 @@ Implementation note: main.ts uses the raw `globalThis.ppiav` bridge directly (wi
 
 `//go:embed` does **not** support `..` regardless of directory or module boundaries — the embed pattern must be at or below the file's own directory. Solution: co-locate one tiny embed file with each asset tree under `web/`, and have the consumers import its `FS`/`WASM` variable. No `web/ → internal/web/` rename, no module shenanigans.
 
-- [ ] create `web/vclient/embed.go`:
+- [x] create `web/vclient/embed.go`:
   ```go
   package vclient
   import "embed"
@@ -672,8 +672,8 @@ Implementation note: main.ts uses the raw `globalThis.ppiav` bridge directly (wi
   var FS embed.FS
   ```
   Consumers do `import "github.com/butvinm/ppiav/web/vclient"` and use `vclient.FS`.
-- [ ] create `web/rclient/embed.go`: same pattern, `package rclient`, exports `FS embed.FS` over `index.html dist`.
-- [ ] create `web/ppiav/embed.go`:
+- [x] create `web/rclient/embed.go`: same pattern, `package rclient`, exports `FS embed.FS` over `index.html dist`.
+- [x] create `web/ppiav/embed.go`:
   ```go
   package ppiav
   import _ "embed"
@@ -681,16 +681,16 @@ Implementation note: main.ts uses the raw `globalThis.ppiav` bridge directly (wi
   var WASM []byte
   ```
   Compile note: `embed.go` requires `ppiav.wasm` to exist at the time `go build` runs, so the WASM build step must precede any binary that imports this package. Captured in the `make phase3` ordering (Task 19): `make wasm` → `make services`.
-- [ ] modify `internal/vagent/http.go`:
+- [x] modify `internal/vagent/http.go`:
   - import `github.com/butvinm/ppiav/web/vclient` and `github.com/butvinm/ppiav/web/ppiav`
   - `GET /verify` serves `vclient.FS` (HTML + dist bundle) via `http.FileServer(http.FS(vclient.FS))`
   - `GET /ppiav.wasm` writes `ppiav.WASM` with `Content-Type: application/wasm`
-- [ ] modify `internal/rservice/http.go`:
+- [x] modify `internal/rservice/http.go`:
   - import `github.com/butvinm/ppiav/web/rclient`
   - `GET /protected` reads `index.html` from `rclient.FS`, injects `<script>window.verdict=...</script>` before `</body>`, returns text/html
-- [ ] verify embed compiles: `go build ./web/vclient ./web/rclient ./web/ppiav` (the WASM blob must exist first; in CI this is gated by Makefile target ordering)
-- [ ] verify served content: `httptest` tests assert `GET /verify` returns HTML containing the SPA bootstrap, `GET /ppiav.wasm` returns `application/wasm` content-type with non-empty body
-- [ ] run tests: `go test ./internal/vagent/... ./internal/rservice/... ./web/vclient/... ./web/rclient/... ./web/ppiav/...`
+- [x] verify embed compiles: `go build ./web/vclient ./web/rclient ./web/ppiav` (the WASM blob must exist first; in CI this is gated by Makefile target ordering)
+- [x] verify served content: `httptest` tests assert `GET /verify` returns HTML containing the SPA bootstrap, `GET /ppiav.wasm` returns `application/wasm` content-type with non-empty body
+- [x] run tests: `go test ./internal/vagent/... ./internal/rservice/... ./web/vclient/... ./web/rclient/... ./web/ppiav/...` (pre-existing flaky `TestFinalizeRejectsZeroLogit` unrelated to this task)
 
 ### Task 18: Complete RService `/protected` handler with embedded RClient
 

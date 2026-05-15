@@ -174,6 +174,42 @@ func TestHTTPCallback_MissingSidReturns404(t *testing.T) {
 	}
 }
 
+// Task 17: `GET /protected` serves the embedded RClient index.html with
+// the verdict script injected before `</body>`.
+func TestHTTPGetProtected_EmbedsRClientHTML(t *testing.T) {
+	srv := newTestServer()
+	require.NoError(t, srv.svc.AcceptVerdict("sid-embed", protocol.VerdictAccept))
+
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req.AddCookie(&http.Cookie{Name: "sid", Value: "sid-embed"})
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	// Embedded RClient bootstrap reference.
+	assert.Contains(t, body, `./dist/main.js`)
+	// Injected verdict block sits before </body>.
+	assert.Contains(t, body, `<script>window.verdict = `)
+	assert.Contains(t, body, `"sid":"sid-embed"`)
+	assert.Contains(t, body, `"verdict":"accept"`)
+	scriptIdx := strings.Index(body, `<script>window.verdict =`)
+	bodyEndIdx := strings.LastIndex(body, `</body>`)
+	require.GreaterOrEqual(t, scriptIdx, 0)
+	require.Greater(t, bodyEndIdx, scriptIdx)
+}
+
+// Task 17: `/dist/main.js` served from the embedded RClient FS.
+func TestHTTPRClientDist_ReturnsJS(t *testing.T) {
+	srv := newTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/dist/main.js", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.NotEmpty(t, w.Body.Bytes())
+}
+
 func TestHTTPCallback_FollowedByProtected(t *testing.T) {
 	// End-to-end through the handler: post a verdict, then read it back
 	// via /protected with the matching cookie.

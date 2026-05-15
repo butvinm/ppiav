@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"strings"
 
 	"github.com/butvinm/ppiav/internal/protocol"
+	"github.com/butvinm/ppiav/web/ppiav"
+	"github.com/butvinm/ppiav/web/vclient"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 )
 
@@ -69,22 +72,56 @@ func (s *Server) ListenAndServe() error {
 
 func (s *Server) register() {
 	s.mux.HandleFunc("/verify", s.handleVerify)
+	s.mux.HandleFunc("/dist/", s.handleVClientAsset)
+	s.mux.HandleFunc("/wasm_exec.js", s.handleVClientAsset)
+	s.mux.HandleFunc("/ppiav.wasm", s.handlePpiavWASM)
 	s.mux.HandleFunc("/sessions", s.handleSessions)
 	s.mux.HandleFunc("/sessions/", s.handleSession)
 }
 
-// handleVerify serves the VClient SPA. The browser lands here after
-// RService's Stage-1 302 (URL carries `?sid=<sid>`). Task 16 returns a
-// placeholder; Task 17 swaps in `web/vclient/index.html` served via
-// embed.FS, alongside `/wasm_exec.js` and `/ppiav.wasm`.
+// handleVerify serves the VClient SPA's index.html (embedded via
+// web/vclient/embed.go). The browser lands here after RService's Stage-1
+// 302 (URL carries `?sid=<sid>`). Companion assets — `/dist/*`,
+// `/wasm_exec.js`, `/ppiav.wasm` — live on sibling routes so the SPA can
+// fetch them with absolute paths.
 func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	data, err := fs.ReadFile(vclient.FS, "index.html")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("read vclient index.html: %s", err))
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`<!doctype html><html><head><title>VClient</title></head><body><p>VClient SPA not embedded yet</p></body></html>`))
+	_, _ = w.Write(data)
+}
+
+// handleVClientAsset serves files from the embedded VClient FS — namely
+// `/dist/*` (compiled TS bundle) and `/wasm_exec.js` (the Go runtime
+// shim). The file path inside the FS is the request path with the leading
+// slash stripped. Missing files return 404 via http.FileServer.
+func (s *Server) handleVClientAsset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	http.FileServer(http.FS(vclient.FS)).ServeHTTP(w, r)
+}
+
+// handlePpiavWASM serves the embedded compiled WASM blob at
+// `/ppiav.wasm`. Browsers require `application/wasm` for the streaming
+// `WebAssembly.instantiateStreaming` path used by the VClient main.ts.
+func (s *Server) handlePpiavWASM(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	w.Header().Set("Content-Type", "application/wasm")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(ppiav.WASM)
 }
 
 // handleSessions is the Stage-1 entry point. Called server-to-server by

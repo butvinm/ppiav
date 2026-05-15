@@ -970,10 +970,9 @@ func TestHTTPVAgent_PartialDecryption_RejectsGet(t *testing.T) {
 	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
 }
 
-// Task 16: `GET /verify` placeholder handler. The actual VClient SPA
-// (served from embed.FS) lands in Task 17; for now the handler returns a
-// fixed HTML stub so the route exists and the request method is enforced.
-func TestHTTPVAgent_Verify_ReturnsPlaceholderHTML(t *testing.T) {
+// Task 17: `GET /verify` serves the VClient SPA index.html (embedded via
+// web/vclient/embed.go).
+func TestHTTPVAgent_Verify_ReturnsEmbeddedHTML(t *testing.T) {
 	_, vagentSrv, _, _, _, _ := newHTTPFixture(t)
 	resp, err := http.Get(vagentSrv.URL + "/verify?sid=anything")
 	require.NoError(t, err)
@@ -982,7 +981,9 @@ func TestHTTPVAgent_Verify_ReturnsPlaceholderHTML(t *testing.T) {
 	require.Equal(t, "text/html; charset=utf-8", resp.Header.Get("Content-Type"))
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	assert.Contains(t, string(body), "VClient SPA not embedded yet")
+	// Embedded VClient index.html includes the SPA bootstrap script tag.
+	assert.Contains(t, string(body), `./dist/main.js`)
+	assert.Contains(t, string(body), `wasm_exec.js`)
 }
 
 func TestHTTPVAgent_Verify_RejectsPost(t *testing.T) {
@@ -991,4 +992,45 @@ func TestHTTPVAgent_Verify_RejectsPost(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
+}
+
+// Task 17: `GET /ppiav.wasm` returns application/wasm with the embedded
+// compiled WASM blob.
+func TestHTTPVAgent_PpiavWASM_ReturnsBlob(t *testing.T) {
+	_, vagentSrv, _, _, _, _ := newHTTPFixture(t)
+	resp, err := http.Get(vagentSrv.URL + "/ppiav.wasm")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, "application/wasm", resp.Header.Get("Content-Type"))
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.NotEmpty(t, body)
+	// WASM magic number: 0x00 0x61 0x73 0x6d.
+	require.GreaterOrEqual(t, len(body), 4)
+	assert.Equal(t, []byte{0x00, 0x61, 0x73, 0x6d}, body[:4])
+}
+
+// Task 17: `/dist/main.js` is served from the embedded VClient FS.
+func TestHTTPVAgent_VClientDist_ReturnsJS(t *testing.T) {
+	_, vagentSrv, _, _, _, _ := newHTTPFixture(t)
+	resp, err := http.Get(vagentSrv.URL + "/dist/main.js")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.NotEmpty(t, body)
+}
+
+// Task 17: `/wasm_exec.js` is served from the embedded VClient FS.
+func TestHTTPVAgent_WasmExecJS_ReturnsJS(t *testing.T) {
+	_, vagentSrv, _, _, _, _ := newHTTPFixture(t)
+	resp, err := http.Get(vagentSrv.URL + "/wasm_exec.js")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.NotEmpty(t, body)
 }
