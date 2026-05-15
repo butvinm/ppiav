@@ -589,14 +589,14 @@ already check.
 
 - Create: `web/vclient/ts/preprocess.ts`
 
-- [ ] create `web/vclient/ts/preprocess.ts` with `export async function preprocessImage(file: File): Promise<Float64Array>` implementing the 6-step pipeline (see Solution Overview):
+- [x] create `web/vclient/ts/preprocess.ts` with `export async function preprocessImage(file: File): Promise<Float64Array>` implementing the 6-step pipeline (see Solution Overview):
   1. Read file as `ArrayBuffer` via `URL.createObjectURL` + `new Image()`
   2. Decode and draw onto a 64×64 `<canvas>`
   3. `getImageData(0, 0, 64, 64).data` → RGBA `Uint8ClampedArray`
   4. Drop alpha → 3 channels
   5. Normalize: `(x / 255 - 0.5) / 0.5` → `Float64Array` in `[-1, 1]`
   6. HWC → CHW permute → length-12288 `Float64Array`
-- [ ] verify TypeScript compiles: `cd web/vclient && npm install && npm run build`
+- [x] verify TypeScript compiles: `cd web/vclient && npm install && npm run build`
 
 No unit test for `preprocessImage`. Canvas pipeline correctness is verified by the manual acceptance run in Post-Completion (upload faces of known age, observe correct verdict distribution).
 
