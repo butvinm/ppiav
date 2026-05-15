@@ -515,16 +515,8 @@ Scope: confirm everything builds and unit tests pass on the dev box. Full chain 
 
 **Files:** outputs land on the VPS
 
-- [ ] on the VPS, in a `nohup`-wrapped block (the compile peaks at ~26 GB RSS, ~6 min wall clock at logn16 per Orion's measurements):
-  ```sh
-  cd ~/ppiav/models
-  source ../.venv/bin/activate
-  uv run python -m models.compile --variant fhe --config logn16 \
-      --weights ./out/weights_fhe.pth --output ./out/logn16/model.orion
-  uv run python -m models.prepare_samples --batch 10 --stratified --with-ref-logit \
-      --data-dir ./data/UTKFace --out-dir ./out/inputs --out-manifest ./out/eval_inputs.json
-  ```
-- [ ] **manual verify**: `~/ppiav/models/out/logn16/model.orion` present (~1.75 GB); `~/ppiav/models/out/logn16/compile.json` present and valid JSON; `~/ppiav/models/out/eval_inputs.json` has exactly 10 images with `label=0` x5 and `label=1` x5
+- [x] on the VPS, ran `models.compile --variant fhe --config logn16` and `models.prepare_samples --batch 10 --stratified --with-ref-logit` (no venv-activate needed; `uv run` handles the .venv). Compile: 199.5 s wall, peak RSS 26.3 GB (matches plan estimate), peak Python-tracked 6.7 GB
+- [x] **manual verify**: `model.orion` = 1,753,901,352 bytes (~1.75 GB exactly); `compile.json` valid JSON with `{compile_s, compile_peak_python_mb, compile_peak_rss_mb, model_bytes}`; `eval_inputs.json` has 10 images, label distribution {0: 5, 1: 5}, first entry includes `ref_logit` (16.56 for an adult age 22)
 
 ### Task 24: Run the eval pipeline on FHE VPS
 
