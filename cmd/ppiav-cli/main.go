@@ -128,8 +128,3 @@ func loadImage(path string) ([]float64, error) {
 	return out, nil
 }
 
-// Stub handlers for subcommands not yet implemented. Each returns
-// "unimplemented" so `go build ./...` succeeds with the dispatch in place.
-
-func runMAC(args []string) error      { return fmt.Errorf("mac: unimplemented") }
-func runFinalize(args []string) error { return fmt.Errorf("finalize: unimplemented") }

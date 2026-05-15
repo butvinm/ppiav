@@ -351,12 +351,12 @@ Stratified: exactly 5 entries with `label=0` (minors) and 5 with `label=1` (adul
 - Create: `/home/butvinm/Dev/ppiav/cmd/ppiav-cli/mac.go`
 - Create: `/home/butvinm/Dev/ppiav/cmd/ppiav-cli/finalize.go`
 
-- [ ] `mac.go`: parse `--workdir --in-ct --out-ct --out`; load `{sid, sk_a, mac_key, params}`; build `vagent.Agent` via `NewWithState`; wrap `BuildAuthenticatedCt` in `bench.Measure`; write `--out-ct` (auth_ct.bin) and `--out` JSON
-- [ ] `finalize.go`: parse `--workdir --in-ct --in-share --ref-logit --out-decoded --out`; load `{sid, sk_a, mac_key, params}`; build Agent via `NewWithState`
-- [ ] wrap `FinalizeDecryptionVerbose` (from Task 2) in `bench.Measure`; receive `(verdict, slots, err)`
-- [ ] compute `noise_per_slot[i] = slots[i] - ref_logit` for i in non-S slots (S is the authenticator's secret index set, available from `params.Authenticator` + key.S as in the existing `verify-mac` path)
-- [ ] write `decoded.json` with `{verdict, ref_logit, slots_in_s, noise_per_slot}` and `--out` JSON
-- [ ] run `go build ./... && go vet ./...` — must succeed before next task
+- [x] `mac.go`: parse `--workdir --in-ct --out-ct --out`; load `{sid, sk_a, mac_key, params}`; build `vagent.Agent` via `NewWithState`; wrap `BuildAuthenticatedCt` in `bench.Measure`; write `--out-ct` (auth_ct.bin) and `--out` JSON
+- [x] `finalize.go`: parse `--workdir --in-ct --in-share --ref-logit --out-decoded --out`; load `{sid, sk_a, mac_key, params}`; build Agent via `NewWithState`
+- [x] wrap `FinalizeDecryptionVerbose` (from Task 2) in `bench.Measure`; receive `(verdict, slots, err)`
+- [x] compute `noise_per_slot[i] = slots[i] - ref_logit` for i in non-S slots (S is the authenticator's secret index set, available from `params.Authenticator` + key.S as in the existing `verify-mac` path)
+- [x] write `decoded.json` with `{verdict, ref_logit, slots_in_s, noise_per_slot}` and `--out` JSON
+- [x] run `go build ./... && go vet ./...` — must succeed before next task
 
 ### Task 11: Extend `prepare_samples.py` for stratified batch + ref logits
 
