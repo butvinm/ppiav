@@ -40,8 +40,8 @@ if [ ! -d ~/ppiav ]; then
     git clone https://github.com/butvinm/ppiav.git ~/ppiav
 fi
 cd ~/ppiav
-git fetch origin phase-1-2
-git checkout phase-1-2 || true
+git fetch origin phase-3-http-services-and-browser-spas
+git checkout phase-3-http-services-and-browser-spas
 
 # Install Python dependencies via uv
 cd ~/ppiav/models

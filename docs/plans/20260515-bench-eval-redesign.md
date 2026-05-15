@@ -476,16 +476,11 @@ Scope: confirm everything builds and unit tests pass on the dev box. Full chain 
 
 - Reuse: `/home/butvinm/Dev/ppiav/docs/plans/20260514-orion-integration-training-compilation/setup.sh` (already in repo)
 
-- [ ] scp `setup.sh` to the training VPS; the script currently checks out branch `phase-1-2` — verify or update to checkout the current working branch (master if merged, else the phase-3 branch). Edit the script's `git checkout` line if needed before scp
-- [ ] run `setup.sh` on the VPS; wait for "ready" output
-- [ ] **manual verify** over SSH: `python -c "import torch, orion_compiler; print(torch.__version__, torch.cuda.is_available())"` — torch printed, CUDA True; `go version` shows 1.24+
-- [ ] in a `nohup` session on the VPS:
-  ```sh
-  cd ~/ppiav/models
-  uv run python -m models.utkface --target ./data/UTKFace
-  uv run python -m models.train --variant fhe --data-dir ./data/UTKFace --epochs 60 --output ./out/weights_fhe.pth
-  ```
-- [ ] **manual verify**: `ls -la ~/ppiav/models/out/weights_fhe.pth` shows ~140 kB; training log ends with a sensible final loss
+- [x] scp `setup.sh` to the training VPS — branch line updated `phase-1-2 → phase-3-http-services-and-browser-spas` before scp (branch pushed to origin first)
+- [x] run `setup.sh` on the VPS; wait for "ready" output — apt/Go/uv/git-clone all succeeded; initial dataset fetch failed on malformed kaggle.json (only `username`, no `key`), recovered by writing proper `{username, key}` to `~/.kaggle/kaggle.json` from a token the user provided in-session
+- [x] **manual verify** over SSH: torch 2.12.0+cu130, CUDA True, device RTX 4090; `go version` = `go1.24.0 linux/amd64`. Note: `orion_compiler` import not verified yet (only needed in Task 23 on FHE VPS)
+- [x] in a `nohup` session on the VPS: `models.utkface` (331 MB pulled in ~13 s), `models.train --variant fhe --epochs 60` ran clean
+- [x] **manual verify**: `weights_fhe.pth` = 136,347 bytes (~133 kB, matches plan's "~140 kB"); training ended in 389.1s (6.5s/epoch). Final loss 1.8746. Test set: FPR=20.7%, FNR=3.8%, Acc=93.3%
 
 ### Task 20: Capture training artifacts + tear down training VPS
 
