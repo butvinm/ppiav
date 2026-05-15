@@ -8,32 +8,24 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/butvinm/ppiav/internal/httputil"
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func newTestServer() *Server {
-	return NewServer(New(), "http://vagent.local", "")
-}
-
-// newTestServerWithVAgent returns a Server pointed at the given URL — used
-// to drive the Stage-1 redirect against an httptest VAgent stub. The
-// browser-visible vagentPublicURL is left empty so it falls back to
-// vagentURL — preserving the localhost test flow.
-func newTestServerWithVAgent(vagentURL string) *Server {
-	return NewServer(New(), vagentURL, "")
-}
-
-// newTestServerWithVAgentPublic exposes a different browser-visible URL
-// from the server-to-server URL, mirroring the docker-compose deployment
-// case.
-func newTestServerWithVAgentPublic(vagentURL, vagentPublicURL string) *Server {
-	return NewServer(New(), vagentURL, vagentPublicURL)
+// newTestServer builds a Server pointing at `vagentURL` (defaulting to a
+// dead address when empty). `publicURL` overrides the browser-visible
+// URL — leave empty to fall back to vagentURL.
+func newTestServer(vagentURL, publicURL string) *Server {
+	if vagentURL == "" {
+		vagentURL = "http://vagent.local"
+	}
+	return NewServer(New(), vagentURL, publicURL)
 }
 
 func TestHTTPGetProtected_CookieAccept(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer("", "")
 	require.NoError(t, srv.svc.AcceptVerdict("sid-1", protocol.VerdictAccept))
 
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
@@ -48,7 +40,7 @@ func TestHTTPGetProtected_CookieAccept(t *testing.T) {
 }
 
 func TestHTTPGetProtected_CookieReject(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer("", "")
 	require.NoError(t, srv.svc.AcceptVerdict("sid-2", protocol.VerdictReject))
 
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
@@ -62,7 +54,7 @@ func TestHTTPGetProtected_CookieReject(t *testing.T) {
 }
 
 func TestHTTPGetProtected_CookieUnknownSid(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer("", "")
 
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	req.AddCookie(&http.Cookie{Name: "sid", Value: "not-seen-before"})
@@ -75,7 +67,7 @@ func TestHTTPGetProtected_CookieUnknownSid(t *testing.T) {
 }
 
 func TestHTTPGetProtected_RejectsPost(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer("", "")
 
 	req := httptest.NewRequest(http.MethodPost, "/protected", nil)
 	w := httptest.NewRecorder()
@@ -85,7 +77,7 @@ func TestHTTPGetProtected_RejectsPost(t *testing.T) {
 }
 
 func TestHTTPCallback_AcceptUpsertsVerdict(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer("", "")
 
 	payload, err := json.Marshal(protocol.VerdictNotification{Verdict: protocol.VerdictAccept})
 	require.NoError(t, err)
@@ -100,7 +92,7 @@ func TestHTTPCallback_AcceptUpsertsVerdict(t *testing.T) {
 }
 
 func TestHTTPCallback_RejectUpsertsVerdict(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer("", "")
 
 	payload, err := json.Marshal(protocol.VerdictNotification{Verdict: protocol.VerdictReject})
 	require.NoError(t, err)
@@ -114,14 +106,14 @@ func TestHTTPCallback_RejectUpsertsVerdict(t *testing.T) {
 }
 
 func TestHTTPCallback_MalformedJSONReturns400(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer("", "")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/callback/sid-bad", bytes.NewReader([]byte("{not json")))
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusBadRequest, w.Code)
-	var body errorBody
+	var body httputil.ErrorBody
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	assert.NotEmpty(t, body.Error)
 	// Service must not have stored anything.
@@ -129,7 +121,7 @@ func TestHTTPCallback_MalformedJSONReturns400(t *testing.T) {
 }
 
 func TestHTTPCallback_UnknownVerdictReturns400(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer("", "")
 
 	payload, err := json.Marshal(protocol.VerdictNotification{Verdict: protocol.VerdictUnknown})
 	require.NoError(t, err)
@@ -139,14 +131,14 @@ func TestHTTPCallback_UnknownVerdictReturns400(t *testing.T) {
 	srv.Handler().ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusBadRequest, w.Code)
-	var body errorBody
+	var body httputil.ErrorBody
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	assert.NotEmpty(t, body.Error)
 }
 
-// Task 22 (review iteration): empty body on /api/callback ⇒ 400.
+// Empty body on /api/callback is a wire-shape violation ⇒ 400.
 func TestHTTPCallback_EmptyBodyReturns400(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer("", "")
 	req := httptest.NewRequest(http.MethodPost, "/api/callback/sid-empty", bytes.NewReader(nil))
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -155,7 +147,7 @@ func TestHTTPCallback_EmptyBodyReturns400(t *testing.T) {
 }
 
 func TestHTTPCallback_RejectsGet(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer("", "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/callback/sid-x", nil)
 	w := httptest.NewRecorder()
@@ -165,7 +157,7 @@ func TestHTTPCallback_RejectsGet(t *testing.T) {
 }
 
 func TestHTTPCallback_MissingSidReturns404(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer("", "")
 
 	cases := []struct {
 		name string
@@ -185,10 +177,10 @@ func TestHTTPCallback_MissingSidReturns404(t *testing.T) {
 	}
 }
 
-// Task 17: `GET /protected` serves the embedded RClient index.html with
-// the verdict script injected before `</body>`.
+// `GET /protected` serves the embedded RClient index.html with the
+// verdict script injected before `</body>`.
 func TestHTTPGetProtected_EmbedsRClientHTML(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer("", "")
 	require.NoError(t, srv.svc.AcceptVerdict("sid-embed", protocol.VerdictAccept))
 
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
@@ -210,9 +202,9 @@ func TestHTTPGetProtected_EmbedsRClientHTML(t *testing.T) {
 	require.Greater(t, bodyEndIdx, scriptIdx)
 }
 
-// Task 17: `/dist/main.js` served from the embedded RClient FS.
+// `/dist/main.js` is served from the embedded RClient FS.
 func TestHTTPRClientDist_ReturnsJS(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer("", "")
 	req := httptest.NewRequest(http.MethodGet, "/dist/main.js", nil)
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -223,9 +215,8 @@ func TestHTTPRClientDist_ReturnsJS(t *testing.T) {
 	assert.NotEmpty(t, w.Body.Bytes())
 }
 
-// Task 18: Stage-1 redirect — no sid cookie triggers a server-to-server
-// VAgent `POST /sessions`. On success RService sets the sid cookie and
-// 302s to `<vagent>/verify?sid=<sid>`.
+// Stage-1: no sid cookie triggers a server-to-server VAgent `POST
+// /sessions`, RService sets the sid cookie and 302s to `/verify?sid=...`.
 func TestHTTPGetProtected_NoCookieRedirectsViaVAgent(t *testing.T) {
 	var calls int
 	vagent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -237,7 +228,7 @@ func TestHTTPGetProtected_NoCookieRedirectsViaVAgent(t *testing.T) {
 	}))
 	defer vagent.Close()
 
-	srv := newTestServerWithVAgent(vagent.URL)
+	srv := newTestServer(vagent.URL, "")
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -256,15 +247,14 @@ func TestHTTPGetProtected_NoCookieRedirectsViaVAgent(t *testing.T) {
 	assert.True(t, c.HttpOnly, "HttpOnly cookie")
 }
 
-// Task 18: F4a — VAgent returns 5xx ⇒ RService surfaces 5xx with no
-// cookie set.
+// F4a: VAgent returns 5xx ⇒ RService surfaces 5xx with no cookie.
 func TestHTTPGetProtected_NoCookieVAgent5xx_NoSetCookie(t *testing.T) {
 	vagent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer vagent.Close()
 
-	srv := newTestServerWithVAgent(vagent.URL)
+	srv := newTestServer(vagent.URL, "")
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -275,9 +265,7 @@ func TestHTTPGetProtected_NoCookieVAgent5xx_NoSetCookie(t *testing.T) {
 	assert.Empty(t, w.Result().Cookies(), "no Set-Cookie on failure (F4a)")
 }
 
-// Task 18: F4a — VAgent unreachable (connection refused) ⇒ RService
-// surfaces 5xx with no cookie. We use a server that we Close() right away
-// to force `connection refused`.
+// F4a: VAgent unreachable (connection refused) ⇒ RService 5xx, no cookie.
 func TestHTTPGetProtected_NoCookieVAgentUnreachable_NoSetCookie(t *testing.T) {
 	vagent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -285,7 +273,7 @@ func TestHTTPGetProtected_NoCookieVAgentUnreachable_NoSetCookie(t *testing.T) {
 	addr := vagent.URL
 	vagent.Close()
 
-	srv := newTestServerWithVAgent(addr)
+	srv := newTestServer(addr, "")
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -296,7 +284,7 @@ func TestHTTPGetProtected_NoCookieVAgentUnreachable_NoSetCookie(t *testing.T) {
 	assert.Empty(t, w.Result().Cookies(), "no Set-Cookie on failure (F4a)")
 }
 
-// Task 18: malformed VerificationSession from VAgent ⇒ 5xx, no cookie.
+// Malformed VerificationSession from VAgent ⇒ 5xx, no cookie.
 func TestHTTPGetProtected_NoCookieVAgentBadJSON_NoSetCookie(t *testing.T) {
 	vagent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -304,7 +292,7 @@ func TestHTTPGetProtected_NoCookieVAgentBadJSON_NoSetCookie(t *testing.T) {
 	}))
 	defer vagent.Close()
 
-	srv := newTestServerWithVAgent(vagent.URL)
+	srv := newTestServer(vagent.URL, "")
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -314,7 +302,7 @@ func TestHTTPGetProtected_NoCookieVAgentBadJSON_NoSetCookie(t *testing.T) {
 	assert.Empty(t, w.Result().Cookies())
 }
 
-// Task 18: empty sid from VAgent ⇒ 5xx, no cookie.
+// Empty sid from VAgent ⇒ 5xx, no cookie.
 func TestHTTPGetProtected_NoCookieVAgentEmptySid_NoSetCookie(t *testing.T) {
 	vagent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -322,7 +310,7 @@ func TestHTTPGetProtected_NoCookieVAgentEmptySid_NoSetCookie(t *testing.T) {
 	}))
 	defer vagent.Close()
 
-	srv := newTestServerWithVAgent(vagent.URL)
+	srv := newTestServer(vagent.URL, "")
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -332,19 +320,17 @@ func TestHTTPGetProtected_NoCookieVAgentEmptySid_NoSetCookie(t *testing.T) {
 	assert.Empty(t, w.Result().Cookies())
 }
 
-// Task 22 (review iteration): NewServer must trim trailing slashes on
-// vagentURL and vagentPublicURL so a `--vagent-url http://localhost:8081/`
-// flag does not produce a `//sessions` URL on the wire. Mirrors the
-// equivalent TrimRight in vagent.NewServer.
+// NewServer must trim trailing slashes on vagentURL and vagentPublicURL
+// so `--vagent-url http://localhost:8081/` does not produce `//sessions`.
 func TestNewServerTrimsTrailingSlash(t *testing.T) {
 	srv := NewServer(New(), "http://vagent.local/", "http://public.local/")
 	assert.Equal(t, "http://vagent.local", srv.vagentURL)
 	assert.Equal(t, "http://public.local", srv.vagentPublicURL)
 }
 
-// Task 22: when vagentPublicURL differs from vagentURL, the redirect
-// Location must point at the public URL (browser-visible) and the
-// server-to-server POST must hit vagentURL.
+// When vagentPublicURL differs from vagentURL, the redirect Location
+// points at the public (browser-visible) URL while the server-to-server
+// POST still hits vagentURL.
 func TestHTTPGetProtected_UsesPublicURLInRedirect(t *testing.T) {
 	var calls int
 	vagent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -355,7 +341,7 @@ func TestHTTPGetProtected_UsesPublicURLInRedirect(t *testing.T) {
 	defer vagent.Close()
 
 	const browserURL = "http://browser.local:9999"
-	srv := newTestServerWithVAgentPublic(vagent.URL, browserURL)
+	srv := newTestServer(vagent.URL, browserURL)
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -369,7 +355,7 @@ func TestHTTPGetProtected_UsesPublicURLInRedirect(t *testing.T) {
 func TestHTTPCallback_FollowedByProtected(t *testing.T) {
 	// End-to-end through the handler: post a verdict, then read it back
 	// via /protected with the matching cookie.
-	srv := newTestServer()
+	srv := newTestServer("", "")
 
 	payload, err := json.Marshal(protocol.VerdictNotification{Verdict: protocol.VerdictAccept})
 	require.NoError(t, err)

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/butvinm/ppiav/internal/httputil"
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -133,7 +134,7 @@ func TestHTTPStoreEvalKeysUnknownSid(t *testing.T) {
 	srv.Handler().ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusNotFound, w.Code)
-	var body errorBody
+	var body httputil.ErrorBody
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	assert.Contains(t, body.Error, "unknown session")
 }
@@ -156,7 +157,7 @@ func TestHTTPStoreEvalKeysMalformedBody(t *testing.T) {
 	srv.Handler().ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusBadRequest, w.Code)
-	var body errorBody
+	var body httputil.ErrorBody
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	assert.NotEmpty(t, body.Error)
 }
@@ -243,7 +244,7 @@ func TestHTTPImageUnknownSid(t *testing.T) {
 	srv.Handler().ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusNotFound, w.Code, "body=%s", w.Body.String())
-	var berr errorBody
+	var berr httputil.ErrorBody
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &berr))
 	assert.NotEmpty(t, berr.Error)
 }
@@ -261,7 +262,7 @@ func TestHTTPImageMalformedBody(t *testing.T) {
 	srv.Handler().ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusBadRequest, w.Code)
-	var body errorBody
+	var body httputil.ErrorBody
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	assert.NotEmpty(t, body.Error)
 }

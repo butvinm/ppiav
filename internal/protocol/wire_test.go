@@ -40,14 +40,6 @@ func testCRS(t *testing.T) *sampling.KeyedPRNG {
 	return prng
 }
 
-func TestSessionOpenBinaryRoundTrip(t *testing.T) {
-	t.Skip("SessionOpen is an empty struct; no marshaling required")
-}
-
-func TestVerificationSessionBinaryRoundTrip(t *testing.T) {
-	t.Skip("VerificationSession travels as JSON (control message); see HTTP handler tests")
-}
-
 func TestVClientPKShareBinaryRoundTrip(t *testing.T) {
 	params := smallCKKS(t)
 	kgen := rlwe.NewKeyGenerator(params)
@@ -356,7 +348,7 @@ func TestPartialDecryptionBinaryRoundTrip(t *testing.T) {
 
 // VerdictNotification travels as JSON across `POST /api/callback/:sid`.
 // Round-trip via encoding/json so handler-side wire shape is locked.
-func TestVerdictNotificationBinaryRoundTrip(t *testing.T) {
+func TestVerdictNotificationJSONRoundTrip(t *testing.T) {
 	cases := []Verdict{VerdictAccept, VerdictReject, VerdictUnknown}
 	for _, v := range cases {
 		original := VerdictNotification{Verdict: v}

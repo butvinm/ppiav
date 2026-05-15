@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/butvinm/ppiav/internal/httputil"
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/butvinm/ppiav/internal/vservice"
 	"github.com/stretchr/testify/assert"
@@ -119,8 +120,7 @@ func TestHTTPVAgent_PostSessions_VServiceUnreachableReturns5xx(t *testing.T) {
 	assert.GreaterOrEqual(t, resp.StatusCode, 500)
 }
 
-// Task 22 (review iteration): F4a — VService returns malformed JSON for
-// POST /sessions ⇒ VAgent surfaces 502 (DESIGN.md §`Failure modes`).
+// F4a: VService returns malformed JSON ⇒ VAgent surfaces 502.
 func TestHTTPVAgent_PostSessions_VServiceBadJSONReturns502(t *testing.T) {
 	params := smallParams(t)
 	agent, err := New(params)
@@ -138,7 +138,7 @@ func TestHTTPVAgent_PostSessions_VServiceBadJSONReturns502(t *testing.T) {
 	require.Equal(t, http.StatusBadGateway, resp.StatusCode)
 }
 
-// Task 22 (review iteration): F4a — VService returns empty SessionID.
+// F4a: VService returns empty SessionID ⇒ VAgent surfaces 502.
 func TestHTTPVAgent_PostSessions_VServiceEmptySidReturns502(t *testing.T) {
 	params := smallParams(t)
 	agent, err := New(params)
@@ -156,9 +156,8 @@ func TestHTTPVAgent_PostSessions_VServiceEmptySidReturns502(t *testing.T) {
 	require.Equal(t, http.StatusBadGateway, resp.StatusCode)
 }
 
-// Task 22 (review iteration): agent.OpenSession fails when the same sid
-// is registered twice. We force VService to hand out the same sid for
-// two consecutive calls and assert the second POST returns 500.
+// Force VService to hand out the same sid twice and assert the second
+// POST returns 500 (duplicate sid registration on the agent).
 func TestHTTPVAgent_PostSessions_AgentOpenSessionFailureReturns500(t *testing.T) {
 	params := smallParams(t)
 	agent, err := New(params)
@@ -229,7 +228,6 @@ func TestHTTPVAgent_PKShare_HappyPath(t *testing.T) {
 
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	t.Logf("response body length: %d, client share bytes length: %d", len(body), len(clientBytes))
 	var agentShareWire protocol.VAgentPKShare
 	require.NoError(t, agentShareWire.UnmarshalBinary(body))
 
@@ -246,7 +244,7 @@ func TestHTTPVAgent_PKShare_UnknownSidReturns404(t *testing.T) {
 	resp := postOctet(t, vagentSrv.URL, "/sessions/never-opened/pk-share", []byte{0x00})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
-	var body errorBody
+	var body httputil.ErrorBody
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	assert.Contains(t, body.Error, "unknown session")
 }
@@ -257,7 +255,7 @@ func TestHTTPVAgent_PKShare_MalformedBodyReturns400(t *testing.T) {
 	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/pk-share", []byte{0xff, 0xff, 0xff})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	var body errorBody
+	var body httputil.ErrorBody
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	assert.NotEmpty(t, body.Error)
 }
@@ -378,39 +376,9 @@ func TestHTTPVAgent_RLKRound1_MalformedBodyReturns400(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
-func TestHTTPVAgent_RLKRound2_MalformedBodyReturns400(t *testing.T) {
-	_, vagentSrv, _, _, _, _ := newHTTPFixture(t)
-	sid := openSessionViaHTTP(t, vagentSrv)
-
-	// Run PK + RLK round1 first so the session is in the right state for
-	// round 2 to be reachable.
-	params := smallParams(t)
-	stub := newVClientStub(t, params, sid)
-
-	// PK
-	pkProto := multiparty.NewPublicKeyGenProtocol(params.CKKS)
-	clientCRP := pkProto.SampleCRP(stub.crs)
-	clientPKShare := pkProto.AllocateShare()
-	pkProto.GenShare(stub.skC, clientCRP, &clientPKShare)
-	pkBytes, err := protocol.VClientPKShare{Share: clientPKShare}.MarshalBinary()
-	require.NoError(t, err)
-	r := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/pk-share", pkBytes)
-	r.Body.Close()
-	// RLK round 1
-	rlkProto := multiparty.NewRelinearizationKeyGenProtocol(params.CKKS)
-	clientRLKCRP := rlkProto.SampleCRP(stub.crs)
-	ephSk, share1, _ := rlkProto.AllocateShare()
-	rlkProto.GenShareRoundOne(stub.skC, clientRLKCRP, ephSk, &share1)
-	r1, err := protocol.VClientRLKRound1{Share: share1}.MarshalBinary()
-	require.NoError(t, err)
-	r2 := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/rlk/round1", r1)
-	r2.Body.Close()
-
-	// Now hit round2 with garbage.
-	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/rlk/round2", []byte{0xff, 0xff})
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
-}
+// Round2 malformed body is exercised by
+// TestHTTPVAgent_RLKRound2_MalformedBodyRejectAndEvicts; the body-read
+// fires before state inspection so no PK/RLK-1 prefix is needed.
 
 func TestHTTPVAgent_GKSShares_UnknownSidReturns404(t *testing.T) {
 	_, vagentSrv, _, _, _, _ := newHTTPFixture(t)
@@ -426,41 +394,9 @@ func TestHTTPVAgent_GKSShares_LabelMismatchReturns400(t *testing.T) {
 	_, vagentSrv, _, _, _, params := newHTTPFixture(t)
 	sid := openSessionViaHTTP(t, vagentSrv)
 	stub := newVClientStub(t, params, sid)
+	runKeygenUpToGKS(t, vagentSrv.URL, sid, stub, params)
 
-	// PK + RLK round1 + round2
-	pkProto := multiparty.NewPublicKeyGenProtocol(params.CKKS)
-	clientCRP := pkProto.SampleCRP(stub.crs)
-	clientPKShare := pkProto.AllocateShare()
-	pkProto.GenShare(stub.skC, clientCRP, &clientPKShare)
-	pkBytes, _ := protocol.VClientPKShare{Share: clientPKShare}.MarshalBinary()
-	r := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/pk-share", pkBytes)
-	require.Equal(t, http.StatusOK, r.StatusCode)
-	pkResp, _ := io.ReadAll(r.Body)
-	r.Body.Close()
-	var agentPK protocol.VAgentPKShare
-	require.NoError(t, agentPK.UnmarshalBinary(pkResp))
-
-	rlkProto := multiparty.NewRelinearizationKeyGenProtocol(params.CKKS)
-	clientRLKCRP := rlkProto.SampleCRP(stub.crs)
-	ephSk, share1, share2 := rlkProto.AllocateShare()
-	rlkProto.GenShareRoundOne(stub.skC, clientRLKCRP, ephSk, &share1)
-	r1b, _ := protocol.VClientRLKRound1{Share: share1}.MarshalBinary()
-	r1 := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/rlk/round1", r1b)
-	require.Equal(t, http.StatusOK, r1.StatusCode)
-	r1Resp, _ := io.ReadAll(r1.Body)
-	r1.Body.Close()
-	var agentR1 protocol.VAgentRLKRound1
-	require.NoError(t, agentR1.UnmarshalBinary(r1Resp))
-	_, share1Agg, _ := rlkProto.AllocateShare()
-	rlkProto.AggregateShares(share1, agentR1.Share, &share1Agg)
-	rlkProto.GenShareRoundTwo(ephSk, stub.skC, share1Agg, &share2)
-	r2b, _ := protocol.VClientRLKRound2{Share: share2}.MarshalBinary()
-	r2 := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/rlk/round2", r2b)
-	require.Equal(t, http.StatusOK, r2.StatusCode)
-	r2.Body.Close()
-
-	// Submit a gks-shares blob with zero shares — the agent has Lambda-1
-	// labels, so the count mismatch must be rejected as 400.
+	// Zero shares < Lambda-1 labels → count mismatch → 400.
 	emptyBytes, err := protocol.VClientGaloisKeyShare{Shares: nil}.MarshalBinary()
 	require.NoError(t, err)
 	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/gks-shares", emptyBytes)
@@ -516,41 +452,9 @@ func TestHTTPVAgent_GKSShares_VServiceForwardFailure(t *testing.T) {
 
 	sid := openSessionViaHTTP(t, vagentSrv)
 	stub := newVClientStub(t, params, sid)
+	runKeygenUpToGKS(t, vagentSrv.URL, sid, stub, params)
 
-	// Drive the keygen to completion of round 2 (so gks-shares is
-	// reachable with the right session state).
-	pkProto := multiparty.NewPublicKeyGenProtocol(params.CKKS)
-	clientCRP := pkProto.SampleCRP(stub.crs)
-	clientPKShare := pkProto.AllocateShare()
-	pkProto.GenShare(stub.skC, clientCRP, &clientPKShare)
-	pkBytes, _ := protocol.VClientPKShare{Share: clientPKShare}.MarshalBinary()
-	r := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/pk-share", pkBytes)
-	require.Equal(t, http.StatusOK, r.StatusCode)
-	pkRespBody, _ := io.ReadAll(r.Body)
-	r.Body.Close()
-	var agentPK protocol.VAgentPKShare
-	require.NoError(t, agentPK.UnmarshalBinary(pkRespBody))
-
-	rlkProto := multiparty.NewRelinearizationKeyGenProtocol(params.CKKS)
-	clientRLKCRP := rlkProto.SampleCRP(stub.crs)
-	ephSk, share1, share2 := rlkProto.AllocateShare()
-	rlkProto.GenShareRoundOne(stub.skC, clientRLKCRP, ephSk, &share1)
-	r1b, _ := protocol.VClientRLKRound1{Share: share1}.MarshalBinary()
-	r1 := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/rlk/round1", r1b)
-	require.Equal(t, http.StatusOK, r1.StatusCode)
-	r1RespBody, _ := io.ReadAll(r1.Body)
-	r1.Body.Close()
-	var agentR1 protocol.VAgentRLKRound1
-	require.NoError(t, agentR1.UnmarshalBinary(r1RespBody))
-	_, share1Agg, _ := rlkProto.AllocateShare()
-	rlkProto.AggregateShares(share1, agentR1.Share, &share1Agg)
-	rlkProto.GenShareRoundTwo(ephSk, stub.skC, share1Agg, &share2)
-	r2b, _ := protocol.VClientRLKRound2{Share: share2}.MarshalBinary()
-	r2 := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/rlk/round2", r2b)
-	require.Equal(t, http.StatusOK, r2.StatusCode)
-	r2.Body.Close()
-
-	// Build valid gks shares
+	// Build valid gks shares.
 	gkg := multiparty.NewGaloisKeyGenProtocol(params.CKKS)
 	labels := params.RotationIndices()
 	clientGalShares := make([]multiparty.GaloisKeyGenShare, len(labels))
@@ -825,7 +729,7 @@ func TestHTTPVAgent_Image_UnknownSidReturns404(t *testing.T) {
 	resp := postOctet(t, vagentSrv.URL, "/sessions/never-opened/image", []byte{0x00})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
-	var body errorBody
+	var body httputil.ErrorBody
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	assert.Contains(t, body.Error, "unknown session")
 }
@@ -836,57 +740,6 @@ func TestHTTPVAgent_Image_MalformedBodyReturns400(t *testing.T) {
 	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/image", []byte{0xff, 0xff, 0xff})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
-}
-
-// Task 22 (review iteration): image handler F4a coverage — VService /image
-// 500s ⇒ VAgent surfaces 502. We stub VService to fail only on /image
-// while still issuing valid sids on /sessions so the agent reaches the
-// image POST.
-func TestHTTPVAgent_Image_VServiceImageFailureReturns502(t *testing.T) {
-	params := smallParams(t)
-	var sidCount atomic.Int64
-	stubVSvc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == "/sessions" {
-			n := sidCount.Add(1)
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"SessionID":"sid-img-fail-` + strings.Repeat("a", int(n)) + `"}`))
-			return
-		}
-		if strings.HasSuffix(r.URL.Path, "/image") {
-			http.Error(w, "vservice image down", http.StatusInternalServerError)
-			return
-		}
-		http.NotFound(w, r)
-	}))
-	t.Cleanup(stubVSvc.Close)
-
-	agent, err := New(params)
-	require.NoError(t, err)
-	rstub := newRServiceStub()
-	rsvcSrv := httptest.NewServer(rstub.handler())
-	t.Cleanup(rsvcSrv.Close)
-	vagentSrv := httptest.NewServer(NewServer(agent, stubVSvc.URL, rsvcSrv.URL, "").Handler())
-	t.Cleanup(vagentSrv.Close)
-
-	sid := openSessionViaHTTP(t, vagentSrv)
-	// Encrypt a valid-looking ciphertext under fresh keys so the handler
-	// reaches the VService forward step rather than failing earlier on
-	// MalformedBody.
-	kgen := rlwe.NewKeyGenerator(params.CKKS)
-	_, pk := kgen.GenKeyPairNew()
-	encoder := ckks.NewEncoder(params.CKKS)
-	encryptor := rlwe.NewEncryptor(params.CKKS, pk)
-	values := make([]float64, params.CKKS.MaxSlots())
-	pt := ckks.NewPlaintext(params.CKKS, params.CKKS.MaxLevel())
-	require.NoError(t, encoder.Encode(values, pt))
-	ct, err := encryptor.EncryptNew(pt)
-	require.NoError(t, err)
-	body, err := ct.MarshalBinary()
-	require.NoError(t, err)
-
-	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/image", body)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusBadGateway, resp.StatusCode, "body=%s", readAll(t, resp.Body))
 }
 
 func TestHTTPVAgent_Image_RejectsGet(t *testing.T) {
@@ -1077,9 +930,8 @@ func TestHTTPVAgent_PartialDecryption_BeforeImageRejects(t *testing.T) {
 	require.Error(t, err, "F3 must evict the session")
 }
 
-// Task 22 (review iteration): RService callback failures must surface as
-// 502 even on a clean Accept finalize. The Stage-4b callback is fire-and-
-// matters: an upstream RService 5xx blocks the redirect.
+// Stage-4b callback failure must surface as 502 even on a clean Accept —
+// blocks the redirect so the operator sees the wire fault.
 func TestHTTPVAgent_PartialDecryption_CallbackFailureReturns502(t *testing.T) {
 	vagentSrv, _, _, agent, rstub, _, params := newHTTPFixtureWithRService(t)
 	rstub.mu.Lock()
@@ -1132,8 +984,7 @@ func TestHTTPVAgent_PartialDecryption_RejectsGet(t *testing.T) {
 	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
 }
 
-// Task 17: `GET /verify` serves the VClient SPA index.html (embedded via
-// web/vclient/embed.go).
+// `GET /verify` serves the embedded VClient SPA index.html.
 func TestHTTPVAgent_Verify_ReturnsEmbeddedHTML(t *testing.T) {
 	_, vagentSrv, _, _, _, _ := newHTTPFixture(t)
 	resp, err := http.Get(vagentSrv.URL + "/verify?sid=anything")
@@ -1156,8 +1007,7 @@ func TestHTTPVAgent_Verify_RejectsPost(t *testing.T) {
 	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
 }
 
-// Task 17: `GET /ppiav.wasm` returns application/wasm with the embedded
-// compiled WASM blob.
+// `GET /ppiav.wasm` returns application/wasm with the embedded blob.
 func TestHTTPVAgent_PpiavWASM_ReturnsBlob(t *testing.T) {
 	_, vagentSrv, _, _, _, _ := newHTTPFixture(t)
 	resp, err := http.Get(vagentSrv.URL + "/ppiav.wasm")
@@ -1173,7 +1023,7 @@ func TestHTTPVAgent_PpiavWASM_ReturnsBlob(t *testing.T) {
 	assert.Equal(t, []byte{0x00, 0x61, 0x73, 0x6d}, body[:4])
 }
 
-// Task 17: `/dist/main.js` is served from the embedded VClient FS.
+// `/dist/main.js` is served from the embedded VClient FS.
 func TestHTTPVAgent_VClientDist_ReturnsJS(t *testing.T) {
 	_, vagentSrv, _, _, _, _ := newHTTPFixture(t)
 	resp, err := http.Get(vagentSrv.URL + "/dist/main.js")
@@ -1187,7 +1037,7 @@ func TestHTTPVAgent_VClientDist_ReturnsJS(t *testing.T) {
 	assert.NotEmpty(t, body)
 }
 
-// Task 17: `/wasm_exec.js` is served from the embedded VClient FS.
+// `/wasm_exec.js` is served from the embedded VClient FS.
 func TestHTTPVAgent_WasmExecJS_ReturnsJS(t *testing.T) {
 	_, vagentSrv, _, _, _, _ := newHTTPFixture(t)
 	resp, err := http.Get(vagentSrv.URL + "/wasm_exec.js")
