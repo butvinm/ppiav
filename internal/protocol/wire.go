@@ -1,7 +1,9 @@
 package protocol
 
 import (
+	"encoding/binary"
 	"fmt"
+	"sort"
 
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 	"github.com/tuneinsight/lattigo/v6/multiparty"
@@ -84,9 +86,9 @@ func (s VClientGaloisKeyShare) MarshalBinary() ([]byte, error) {
 		total += 4 + len(b)
 	}
 	out := make([]byte, 0, total)
-	out = appendUint32(out, uint32(len(s.Shares)))
+	out = binary.BigEndian.AppendUint32(out, uint32(len(s.Shares)))
 	for _, p := range parts {
-		out = appendUint32(out, uint32(len(p)))
+		out = binary.BigEndian.AppendUint32(out, uint32(len(p)))
 		out = append(out, p...)
 	}
 	return out, nil
@@ -96,14 +98,14 @@ func (s *VClientGaloisKeyShare) UnmarshalBinary(data []byte) error {
 	if len(data) < 4 {
 		return fmt.Errorf("VClientGaloisKeyShare: short header")
 	}
-	count := readUint32(data[0:4])
+	count := binary.BigEndian.Uint32(data[0:4])
 	off := 4
 	shares := make([]multiparty.GaloisKeyGenShare, count)
 	for i := uint32(0); i < count; i++ {
 		if off+4 > len(data) {
 			return fmt.Errorf("VClientGaloisKeyShare: short length prefix at share %d", i)
 		}
-		n := int(readUint32(data[off : off+4]))
+		n := int(binary.BigEndian.Uint32(data[off : off+4]))
 		off += 4
 		if off+n > len(data) {
 			return fmt.Errorf("VClientGaloisKeyShare: short body at share %d", i)
@@ -115,14 +117,6 @@ func (s *VClientGaloisKeyShare) UnmarshalBinary(data []byte) error {
 	}
 	s.Shares = shares
 	return nil
-}
-
-func appendUint32(dst []byte, v uint32) []byte {
-	return append(dst, byte(v>>24), byte(v>>16), byte(v>>8), byte(v))
-}
-
-func readUint32(b []byte) uint32 {
-	return uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
 }
 
 // InferEvalKeys carries the aggregated relinearization key and the full
@@ -170,13 +164,7 @@ func (k *InferEvalKeys) UnmarshalBinary(data []byte) error {
 	for el := range evk.GaloisKeys {
 		elements = append(elements, el)
 	}
-	// Sort ascending for deterministic order. Avoid a sort import — this
-	// loop is O(n²) over ≤Lambda+|extra| ≈ low hundreds.
-	for i := 1; i < len(elements); i++ {
-		for j := i; j > 0 && elements[j-1] > elements[j]; j-- {
-			elements[j-1], elements[j] = elements[j], elements[j-1]
-		}
-	}
+	sort.Slice(elements, func(i, j int) bool { return elements[i] < elements[j] })
 	out := make([]*rlwe.GaloisKey, 0, len(elements))
 	for _, el := range elements {
 		gk := evk.GaloisKeys[el]

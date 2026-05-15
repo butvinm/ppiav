@@ -117,7 +117,11 @@ func TestDeleteClientIdempotent(t *testing.T) {
 
 // loadOps for handle-not-found errors on every method.
 func TestUnknownHandleErrors(t *testing.T) {
-	const bogus uint64 = 999_999_999
+	// Compute a handle value guaranteed to be ahead of any allocation
+	// done by other tests in this package — `nextHandle` is a process-wide
+	// counter, so a hard-coded constant could collide with handles minted
+	// by other tests when this test runs alongside them.
+	bogus := nextHandle.Load() + 1_000_000
 	_, err := GenPKShare(bogus)
 	require.Error(t, err)
 	require.Error(t, AggregatePK(bogus, []byte{0}))

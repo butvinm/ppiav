@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -283,12 +284,36 @@ func TestInferEvalKeysEmptyGKS(t *testing.T) {
 	assert.Empty(t, got.GKS)
 }
 
+// EncryptedImage and AuthenticatedResult marshal as the bare
+// `*rlwe.Ciphertext` (no JSON envelope) per the wire convention in
+// internal/vservice/http.go's handleImage and internal/vagent/http.go's
+// SSE handler. The two messages have no `MarshalBinary` of their own —
+// callers serialise `.Ct` directly. Verify the ciphertext round-trips
+// here so future drift breaks the build rather than the wire.
 func TestEncryptedImageBinaryRoundTrip(t *testing.T) {
-	t.Skip("binary round-trip is a Phase-3 HTTP-transport concern; Phase 1–2 pass these structs in-process")
+	params := smallCKKS(t)
+	ct := rlwe.NewCiphertext(params, 1, params.MaxLevel())
+	data, err := ct.MarshalBinary()
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
+	got := &rlwe.Ciphertext{}
+	require.NoError(t, got.UnmarshalBinary(data))
+	again, err := got.MarshalBinary()
+	require.NoError(t, err)
+	assert.Equal(t, data, again)
 }
 
 func TestAuthenticatedResultBinaryRoundTrip(t *testing.T) {
-	t.Skip("binary round-trip is a Phase-3 HTTP-transport concern; Phase 1–2 pass these structs in-process")
+	params := smallCKKS(t)
+	ct := rlwe.NewCiphertext(params, 1, params.MaxLevel())
+	data, err := ct.MarshalBinary()
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
+	got := &rlwe.Ciphertext{}
+	require.NoError(t, got.UnmarshalBinary(data))
+	again, err := got.MarshalBinary()
+	require.NoError(t, err)
+	assert.Equal(t, data, again)
 }
 
 func TestPartialDecryptionBinaryRoundTrip(t *testing.T) {
@@ -318,6 +343,16 @@ func TestPartialDecryptionBinaryRoundTrip(t *testing.T) {
 	assert.Equal(t, data, again)
 }
 
+// VerdictNotification travels as JSON across `POST /api/callback/:sid`.
+// Round-trip via encoding/json so handler-side wire shape is locked.
 func TestVerdictNotificationBinaryRoundTrip(t *testing.T) {
-	t.Skip("binary round-trip is a Phase-3 HTTP-transport concern; Phase 1–2 pass these structs in-process")
+	cases := []Verdict{VerdictAccept, VerdictReject, VerdictUnknown}
+	for _, v := range cases {
+		original := VerdictNotification{Verdict: v}
+		data, err := json.Marshal(original)
+		require.NoError(t, err)
+		var got VerdictNotification
+		require.NoError(t, json.Unmarshal(data, &got))
+		assert.Equal(t, original, got)
+	}
 }
