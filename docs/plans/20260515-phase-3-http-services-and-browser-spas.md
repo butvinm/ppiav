@@ -393,13 +393,13 @@ Scope notes:
 - Create: `cmd/ppiav-rservice/main.go`
 - Modify: `go.mod` (add net/http nettle if needed; likely not needed, stdlib is enough)
 
-- [ ] create `cmd/ppiav-vservice/main.go` with `--addr` flag (default `:8080`), `--orion` flag (Phase 2+, same semantics as CLI)
-- [ ] implement main: parse flags, load `protocol.Params` (load from `vservice.NewWithOrion` if `--orion` set, else `Defaults()`), construct `vservice.Service`, construct `vservice.New(svc, addr)`, call `ListenAndServe()`
-- [ ] create `cmd/ppiav-rservice/main.go` with `--addr` flag (default `:8082`), `--vagent-url` flag (default `http://localhost:8081`, needed for Stage 1 redirect)
-- [ ] implement main: parse flags, construct `rservice.Service`, construct `rservice.New(svc, vagentURL, addr)`, call `ListenAndServe()`
-- [ ] verify binaries compile: `go build ./cmd/ppiav-vservice`, `go build ./cmd/ppiav-rservice`
-- [ ] manually smoke-test: `./ppiav-vservice --addr :8080 &` → `curl http://localhost:8080/params` → verify JSON response, `curl http://localhost:8080/sessions -X POST` → verify sid returned; same for RService `POST /api/callback` → `GET /protected` cookie flow
-- [ ] run tests — verify existing unit tests still green: `go test ./internal/vservice/... ./internal/rservice/...`
+- [x] create `cmd/ppiav-vservice/main.go` with `--addr` flag (default `:8080`), `--orion` flag (Phase 2+, same semantics as CLI)
+- [x] implement main: parse flags, load `protocol.Params` (load from `vservice.NewWithOrion` if `--orion` set, else `Defaults()`), construct `vservice.Service`, construct `vservice.NewServer(svc, addr)`, call `ListenAndServe()`
+- [x] create `cmd/ppiav-rservice/main.go` with `--addr` flag (default `:8082`), `--vagent-url` flag (default `http://localhost:8081`, needed for Stage 1 redirect)
+- [x] implement main: parse flags, construct `rservice.Service`, construct `rservice.NewServer(svc, vagentURL, addr)`, call `ListenAndServe()`
+- [x] verify binaries compile: `go build ./cmd/ppiav-vservice`, `go build ./cmd/ppiav-rservice`
+- [x] manually smoke-test: `./ppiav-vservice --addr :8080 &` → `curl http://localhost:8080/params` → verify JSON response, `curl http://localhost:8080/sessions -X POST` → verify sid returned; same for RService `POST /api/callback` → `GET /protected` cookie flow
+- [x] run tests — verify existing unit tests still green: `go test ./internal/vservice/... ./internal/rservice/...`
 
 ### Task 4: `internal/vagent` — HTTP layer (all protocol routes except SSE/reverse-proxy)
 
