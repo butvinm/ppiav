@@ -404,17 +404,17 @@ Stratified: exactly 5 entries with `label=0` (minors) and 5 with `label=1` (adul
 
 - Modify: `/home/butvinm/Dev/ppiav/bench/bench/eval.py`
 
-- [ ] implement `aggregate(batch_dir: Path) -> None` reading `<batch>/keygen.json` + `<batch>/img_*/*.json` + `<batch>/img_*/decoded.json`
-- [ ] compute per-step timing table (mean/p50/p95 wall ms across 10 images for non-keygen steps; keygen single row with per-round sub-rows)
-- [ ] compute RSS table (mean `delta_rss_mib`, mean `vm_hwm_mib` per step)
-- [ ] compute per-message byte table by walking `<batch>/keys/*` and `<batch>/img_0/*` (or all img\_\*; sizes are stable per image) with `os.stat`. Each file gets its own row; `glk_master.bin` and `glk_full.bin` both appear with a footnote about Phase-4 divergence
-- [ ] compute protocol FPR / FNR / accuracy by joining `decoded.json.verdict` with `eval_inputs.json[idx].label`
-- [ ] compute noise stats (mean/min/max/std) across flattened `noise_per_slot` arrays from all 10 images
-- [ ] compute SNR per image (`|ref_logit| / std(noise_per_slot_i)`) — produce array of 10 values
-- [ ] compute network estimate table (per-message bytes ÷ {1, 10, 100} Mbps → seconds)
-- [ ] write `summary.md` with all tables
-- [ ] call `plots_eval.write_plots(batch_dir, agg_data)` (Task 15)
-- [ ] no tests — benchmark harness
+- [x] implement `aggregate(batch_dir: Path) -> None` reading `<batch>/keygen.json` + `<batch>/img_*/*.json` + `<batch>/img_*/decoded.json`
+- [x] compute per-step timing table (mean/p50/p95 wall ms across 10 images for non-keygen steps; keygen single row with per-round sub-rows)
+- [x] compute RSS table (mean `delta_rss_mib`, mean `vm_hwm_mib` per step)
+- [x] compute per-message byte table by walking `<batch>/keys/*` and `<batch>/img_0/*` (or all img\_\*; sizes are stable per image) with `os.stat`. Each file gets its own row; `glk_master.bin` and `glk_full.bin` both appear with a footnote about Phase-4 divergence
+- [x] compute protocol FPR / FNR / accuracy by joining `decoded.json.verdict` with `eval_inputs.json[idx].label` — driver now copies the manifest into `<batch>/eval_inputs.json` so `aggregate(batch_dir)` is self-contained
+- [x] compute noise stats (mean/min/max/std) across flattened `noise_per_slot` arrays from all 10 images
+- [x] compute SNR per image (`|ref_logit| / std(noise_per_slot_i)`) — produce array of 10 values
+- [x] compute network estimate table (per-message bytes ÷ {1, 10, 100} Mbps → seconds)
+- [x] write `summary.md` with all tables
+- [x] call `plots_eval.write_plots(batch_dir, agg_data)` (Task 15) — lazy `importlib.import_module` so Task 14 doesn't depend on Task 15; logs a warning + returns cleanly when the module is missing
+- [x] no tests — benchmark harness
 
 ### Task 15: Plot generation
 
