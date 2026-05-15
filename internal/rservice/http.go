@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/butvinm/ppiav/web/rclient"
@@ -14,30 +15,38 @@ import (
 
 // Server wraps a *Service with the HTTP handlers RService exposes:
 //
-//	GET  /protected               (cookie-gated; stub HTML for Task 2)
+//	GET  /protected               (cookie-gated; Stage-1 redirect when no sid)
 //	POST /api/callback/:sid       (VerdictNotification from VAgent)
 //
 // Per docs/DESIGN.md §`Components`, sid is carried in the URL path. The
 // callback payload is the `VerdictNotification` wire struct as JSON.
 //
-// NOTE: full Stage-1 server-to-server flow (RService → VAgent
-// POST /sessions → set cookie + 302 to VAgent /verify?sid=) is implemented
-// in Task 18. Task 2 returns Unknown verdict (HTTP 403) for missing sid.
+// Stage-1 flow (DESIGN.md §3 Stage 1): `GET /protected` with no sid cookie
+// triggers a synchronous server-to-server `POST <vagentURL>/sessions`.
+// On success RService sets `Set-Cookie: sid=<sid>; Path=/; HttpOnly` and
+// 302s to `<vagentURL>/verify?sid=<sid>`. On VAgent failure RService
+// returns a 5xx with no cookie set (F4a).
 type Server struct {
-	svc       *Service
-	addr      string
-	vagentURL string
-	mux       *http.ServeMux
+	svc        *Service
+	addr       string
+	vagentURL  string
+	mux        *http.ServeMux
+	httpClient *http.Client
 }
 
-// NewServer wires a Server around `svc`. `vagentURL` is stored for the
-// Stage-1 redirect implemented in Task 18; Task 2's `GET /protected` does
-// not use it yet but the field is declared up front to keep the
-// constructor stable. The constructor is named `NewServer` rather than
-// `New` to avoid shadowing the existing `rservice.New()` Service
-// constructor — same pattern as `vservice.NewServer`.
+// NewServer wires a Server around `svc`. `vagentURL` is the VAgent base
+// URL (e.g., `http://localhost:8081`) used by the Stage-1 server-to-server
+// hop. The constructor is named `NewServer` rather than `New` to avoid
+// shadowing the existing `rservice.New()` Service constructor — same
+// pattern as `vservice.NewServer`.
 func NewServer(svc *Service, vagentURL, addr string) *Server {
-	s := &Server{svc: svc, addr: addr, vagentURL: vagentURL, mux: http.NewServeMux()}
+	s := &Server{
+		svc:        svc,
+		addr:       addr,
+		vagentURL:  vagentURL,
+		mux:        http.NewServeMux(),
+		httpClient: &http.Client{Timeout: 5 * time.Second},
+	}
 	s.register()
 	return s
 }
@@ -76,9 +85,7 @@ func (s *Server) handleProtected(w http.ResponseWriter, r *http.Request) {
 	}
 	c, err := r.Cookie("sid")
 	if err != nil || c.Value == "" {
-		// Task-2 stub: no Stage-1 redirect yet. Task 18 wires the
-		// server-to-server VAgent flow here.
-		writeHTML(w, http.StatusForbidden, protectedPage("", protocol.VerdictUnknown))
+		s.beginStage1(w, r)
 		return
 	}
 	sid := protocol.SessionID(c.Value)
@@ -88,6 +95,48 @@ func (s *Server) handleProtected(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusForbidden
 	}
 	writeHTML(w, status, protectedPage(sid, verdict))
+}
+
+// beginStage1 implements DESIGN.md §3 Stage 1 (RService side): allocate a
+// sid via VAgent `POST /sessions` (server-to-server, no body), set the sid
+// cookie, and 302 the browser to `<vagentURL>/verify?sid=<sid>`. Any
+// failure on the VAgent hop surfaces as a 5xx with no cookie set — F4a.
+func (s *Server) beginStage1(w http.ResponseWriter, r *http.Request) {
+	if s.vagentURL == "" {
+		writeError(w, http.StatusInternalServerError, "rservice: vagentURL not configured")
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, s.vagentURL+"/sessions", nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("build vagent request: %s", err))
+		return
+	}
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("call vagent /sessions: %s", err))
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("vagent /sessions returned %d", resp.StatusCode))
+		return
+	}
+	var sess protocol.VerificationSession
+	if err := json.NewDecoder(resp.Body).Decode(&sess); err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("decode VerificationSession: %s", err))
+		return
+	}
+	if sess.SessionID == "" {
+		writeError(w, http.StatusBadGateway, "vagent returned empty sid")
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "sid",
+		Value:    string(sess.SessionID),
+		Path:     "/",
+		HttpOnly: true,
+	})
+	http.Redirect(w, r, fmt.Sprintf("%s/verify?sid=%s", s.vagentURL, sess.SessionID), http.StatusFound)
 }
 
 func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {

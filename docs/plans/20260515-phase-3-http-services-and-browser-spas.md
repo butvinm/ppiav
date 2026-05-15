@@ -700,17 +700,17 @@ Implementation note: main.ts uses the raw `globalThis.ppiav` bridge directly (wi
 - Modify: `internal/rservice/embed.go` (already created in Task 17)
 - Create: `internal/rservice/http_test.go` (update existing tests)
 
-- [ ] modify `internal/rservice/http.go` `GET /protected`:
+- [x] modify `internal/rservice/http.go` `GET /protected`:
   - Read sid cookie
   - Call `svc.CheckAccess(sid)` to get verdict
   - Read `index.html` from `rclientFS` (embed from Task 17)
   - Inject `<script>window.verdict = JSON.stringify({sid, verdict});</script>` into HTML (simple string insert before `</body>`)
   - Return `text/html`
   - If sid missing: invoke the Stage-1 server-to-server flow described in the next checkbox (DESIGN.md §3 Stage 1)
-- [ ] Stage-1 flow (DESIGN.md lines 82–90): on `GET /protected` with no sid cookie, RService's handler issues a synchronous server-to-server `POST <vagentURL>/sessions` (no body), parses the `VerificationSession{sid}` JSON response, sets `Set-Cookie: sid=<sid>; Path=/; HttpOnly` on its own response, and returns `302 Location: <vagentURL>/verify?sid=<sid>`. The browser sees exactly one redirect (from `/protected` to `/verify?sid=...`); the RS→VA hop is not browser-visible. F4a (VService unreachable Stage 1) surfaces as `VAgent POST /sessions` → 5xx → RService returns 5xx to user with no cookie set.
-- [ ] add `vagentURL string` field to `rservice.Server` and wire from a `--vagent-url` flag in `cmd/ppiav-rservice/main.go`; HTTP client uses `net/http.Client` with a sensible timeout (e.g., 5s) for the Stage-1 call
-- [ ] update tests for `GET /protected`: (a) with verdict cookie → verdict injection for Accepted/Rejected, (b) with no cookie → mock VAgent via `httptest.NewServer` returning `VerificationSession{sid}`, assert `Set-Cookie` header, assert 302 to `<vagent>/verify?sid=<sid>`, (c) with no cookie + mock VAgent returning 5xx → assert 5xx to user, no Set-Cookie
-- [ ] run tests: `go test ./internal/rservice/...`
+- [x] Stage-1 flow (DESIGN.md lines 82–90): on `GET /protected` with no sid cookie, RService's handler issues a synchronous server-to-server `POST <vagentURL>/sessions` (no body), parses the `VerificationSession{sid}` JSON response, sets `Set-Cookie: sid=<sid>; Path=/; HttpOnly` on its own response, and returns `302 Location: <vagentURL>/verify?sid=<sid>`. The browser sees exactly one redirect (from `/protected` to `/verify?sid=...`); the RS→VA hop is not browser-visible. F4a (VService unreachable Stage 1) surfaces as `VAgent POST /sessions` → 5xx → RService returns 5xx to user with no cookie set.
+- [x] add `vagentURL string` field to `rservice.Server` and wire from a `--vagent-url` flag in `cmd/ppiav-rservice/main.go`; HTTP client uses `net/http.Client` with a sensible timeout (e.g., 5s) for the Stage-1 call (field + flag already present from Tasks 2/3; Task 18 wires `httpClient *http.Client` with 5s timeout and uses it in `beginStage1`)
+- [x] update tests for `GET /protected`: (a) with verdict cookie → verdict injection for Accepted/Rejected, (b) with no cookie → mock VAgent via `httptest.NewServer` returning `VerificationSession{sid}`, assert `Set-Cookie` header, assert 302 to `<vagent>/verify?sid=<sid>`, (c) with no cookie + mock VAgent returning 5xx → assert 5xx to user, no Set-Cookie (also added: unreachable VAgent, malformed JSON, empty sid — all assert no Set-Cookie)
+- [x] run tests: `go test ./internal/rservice/...` — PASS
 
 ### Task 19: Add Makefile and build scripts for Phase 3
 

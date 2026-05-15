@@ -17,18 +17,10 @@ func newTestServer() *Server {
 	return NewServer(New(), "http://vagent.local", "")
 }
 
-func TestHTTPGetProtected_NoCookie(t *testing.T) {
-	srv := newTestServer()
-
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
-	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusForbidden, w.Code)
-	require.Equal(t, "text/html; charset=utf-8", w.Header().Get("Content-Type"))
-	body := w.Body.String()
-	assert.Contains(t, body, `"verdict":"unknown"`)
-	assert.Contains(t, body, `"sid":""`)
+// newTestServerWithVAgent returns a Server pointed at the given URL — used
+// to drive the Stage-1 redirect against an httptest VAgent stub.
+func newTestServerWithVAgent(vagentURL string) *Server {
+	return NewServer(New(), vagentURL, "")
 }
 
 func TestHTTPGetProtected_CookieAccept(t *testing.T) {
@@ -208,6 +200,115 @@ func TestHTTPRClientDist_ReturnsJS(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, w.Code)
 	assert.NotEmpty(t, w.Body.Bytes())
+}
+
+// Task 18: Stage-1 redirect — no sid cookie triggers a server-to-server
+// VAgent `POST /sessions`. On success RService sets the sid cookie and
+// 302s to `<vagent>/verify?sid=<sid>`.
+func TestHTTPGetProtected_NoCookieRedirectsViaVAgent(t *testing.T) {
+	var calls int
+	vagent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/sessions", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(protocol.VerificationSession{SessionID: "sid-stage1"})
+	}))
+	defer vagent.Close()
+
+	srv := newTestServerWithVAgent(vagent.URL)
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusFound, w.Code)
+	assert.Equal(t, 1, calls, "vagent /sessions hit exactly once")
+	assert.Equal(t, vagent.URL+"/verify?sid=sid-stage1", w.Header().Get("Location"))
+
+	// Set-Cookie must be sent on the success path.
+	cookies := w.Result().Cookies()
+	require.Len(t, cookies, 1)
+	c := cookies[0]
+	assert.Equal(t, "sid", c.Name)
+	assert.Equal(t, "sid-stage1", c.Value)
+	assert.Equal(t, "/", c.Path)
+	assert.True(t, c.HttpOnly, "HttpOnly cookie")
+}
+
+// Task 18: F4a — VAgent returns 5xx ⇒ RService surfaces 5xx with no
+// cookie set.
+func TestHTTPGetProtected_NoCookieVAgent5xx_NoSetCookie(t *testing.T) {
+	vagent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer vagent.Close()
+
+	srv := newTestServerWithVAgent(vagent.URL)
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.GreaterOrEqual(t, w.Code, 500)
+	require.Less(t, w.Code, 600)
+	assert.Empty(t, w.Header().Get("Location"), "no redirect on failure")
+	assert.Empty(t, w.Result().Cookies(), "no Set-Cookie on failure (F4a)")
+}
+
+// Task 18: F4a — VAgent unreachable (connection refused) ⇒ RService
+// surfaces 5xx with no cookie. We use a server that we Close() right away
+// to force `connection refused`.
+func TestHTTPGetProtected_NoCookieVAgentUnreachable_NoSetCookie(t *testing.T) {
+	vagent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	addr := vagent.URL
+	vagent.Close()
+
+	srv := newTestServerWithVAgent(addr)
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.GreaterOrEqual(t, w.Code, 500)
+	require.Less(t, w.Code, 600)
+	assert.Empty(t, w.Header().Get("Location"), "no redirect on failure")
+	assert.Empty(t, w.Result().Cookies(), "no Set-Cookie on failure (F4a)")
+}
+
+// Task 18: malformed VerificationSession from VAgent ⇒ 5xx, no cookie.
+func TestHTTPGetProtected_NoCookieVAgentBadJSON_NoSetCookie(t *testing.T) {
+	vagent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("{not json"))
+	}))
+	defer vagent.Close()
+
+	srv := newTestServerWithVAgent(vagent.URL)
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.GreaterOrEqual(t, w.Code, 500)
+	require.Less(t, w.Code, 600)
+	assert.Empty(t, w.Result().Cookies())
+}
+
+// Task 18: empty sid from VAgent ⇒ 5xx, no cookie.
+func TestHTTPGetProtected_NoCookieVAgentEmptySid_NoSetCookie(t *testing.T) {
+	vagent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(protocol.VerificationSession{SessionID: ""})
+	}))
+	defer vagent.Close()
+
+	srv := newTestServerWithVAgent(vagent.URL)
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.GreaterOrEqual(t, w.Code, 500)
+	require.Less(t, w.Code, 600)
+	assert.Empty(t, w.Result().Cookies())
 }
 
 func TestHTTPCallback_FollowedByProtected(t *testing.T) {
