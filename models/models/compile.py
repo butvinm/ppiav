@@ -62,7 +62,7 @@ def main() -> None:
 
     ckks_params = PARAMS[args.config]
 
-    net = C3AE(img_size=64, first_stride=args.stride)
+    net: C3AE = C3AE(img_size=64, first_stride=args.stride)
     state_dict = torch.load(args.weights, map_location="cpu", weights_only=True)
     net.load_state_dict(state_dict)
     net.eval()

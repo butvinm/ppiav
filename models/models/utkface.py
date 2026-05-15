@@ -12,10 +12,10 @@ from torch.utils.data import Dataset, Subset, random_split
 AGE_MAX = 100
 
 
-class UTKFaceDataset(Dataset):
+class UTKFaceDataset(Dataset[tuple[torch.Tensor, torch.Tensor, int]]):
     """UTKFace image+label loader with [-1, 1] normalization."""
 
-    def __init__(self, data_dir, img_size: int = 64, age_threshold: int = 18):
+    def __init__(self, data_dir: Path | str, img_size: int = 64, age_threshold: int = 18) -> None:
         self.img_size = img_size
         self.samples: list[tuple[Path, int, float]] = []
 
@@ -46,7 +46,7 @@ class UTKFaceDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, idx: int):
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, int]:
         img_path, age, is_adult = self.samples[idx]
         img = Image.open(img_path).convert("RGB").resize((self.img_size, self.img_size))
         img_arr = np.array(img, dtype=np.float32) / 255.0

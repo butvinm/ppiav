@@ -38,6 +38,15 @@ warn_unused_configs = true
 warn_unreachable = true
 disallow_any_unimported = false
 disallow_any_expr = false
+disable_error_code = ["type-arg"]
+
+[[tool.mypy.overrides]]
+module = "kagglehub"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "orion_compiler.*"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

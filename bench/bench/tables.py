@@ -53,9 +53,7 @@ def render_tables(runs: list[Run]) -> str:
     sep = "|---|---:|---:|---:|---:|---:|"
     lines = [header, sep]
     for stage, n, mean_ms, p50, p95, heap in rows:
-        lines.append(
-            f"| {stage} | {n} | {mean_ms:.2f} | {p50:.2f} | {p95:.2f} | {heap:.1f} |"
-        )
+        lines.append(f"| {stage} | {n} | {mean_ms:.2f} | {p50:.2f} | {p95:.2f} | {heap:.1f} |")
     return "\n".join(lines) + "\n"
 
 

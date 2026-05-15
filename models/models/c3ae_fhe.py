@@ -1,12 +1,14 @@
 """C3AE Age Verification Model for Orion v2 FHE (Quad activations, 64x64 RGB)."""
 
+from typing import Any
+
 import orion_compiler.nn as on
 
 
 class C3AE(on.Module):
     """C3AE-style CNN for binary age classification (18+ verification)."""
 
-    def __init__(self, img_size=64, first_stride=2):
+    def __init__(self, img_size: int = 64, first_stride: int = 2) -> None:
         super().__init__()
 
         # Block 1: 3->32 channels
@@ -58,7 +60,7 @@ class C3AE(on.Module):
         self.act6 = on.Quad()
         self.fc2 = on.Linear(12, 1)
 
-    def forward(self, x):
+    def forward(self, x: Any) -> Any:
         x = self.pool1(self.act1(self.bn1(self.conv1(x))))
         x = self.pool2(self.act2(self.bn2(self.conv2(x))))
         x = self.act3(self.bn3(self.conv3(x)))
