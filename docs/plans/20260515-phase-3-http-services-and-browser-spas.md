@@ -510,23 +510,34 @@ Originally an HTTP-level end-to-end test with mocked crypto. Removed — Tasks 1
 - Create: `web/ppiav/bridge/ppiav/decrypt.go`
 - Create: `web/ppiav/bridge/ppiav/ppiav_test.go`
 
-- [ ] create `web/ppiav/bridge/ppiav/ppiav.go` with `func RegisterJS()` that registers `globalThis.ppiav` namespace
-- [ ] implement `ppiav.newClient(paramsJSON, sid) -> Client`: parse JSON to `protocol.Params`, create `vclient.New(params, sid)`, store in `map[uint64]*Client` keyed by JS reference ID (standard syscall/js pattern)
-      Bridge convention (apply uniformly to every method below):
-- **Inputs** that are byte payloads arrive as JS `Uint8Array`. Convert with `dst := make([]byte, jsArg.Get("length").Int()); js.CopyBytesToGo(dst, jsArg)`, then `UnmarshalBinary(dst)` into the wire-message type.
-- **Outputs** that are byte payloads go back as JS `Uint8Array`. Marshal the protocol type to `[]byte` via `MarshalBinary()`, then `arr := js.Global().Get("Uint8Array").New(len(src)); js.CopyBytesToJS(arr, src); return arr`.
-- Errors are returned by panicking with a JS `Error` (caught at the JS callsite via `try/catch`), per the standard `syscall/js` pattern Orion's bridge already uses.
+Scope deviation (Option 2 from the context note): the package is split into
+host-buildable `core.go` (pure-Go marshal glue) and wasm-only `ppiav.go`
+(syscall/js wiring). Tests live in `core_test.go` and run on the host —
+the separate `keygen.go`/`image.go`/`decrypt.go` files anticipated in the
+file list above were folded into `core.go` because the per-method bodies
+are ~10 lines each and splitting would have meant five tiny files with no
+internal cohesion. Errors are returned to JS as `{error: msg}` objects
+(matching the existing `web/ppiav/bridge/lattigo` convention) rather than
+JS panics — both work; the `{error}` shape is what Orion's TS wrappers
+already check.
 
-- [ ] implement `client.genPKShare() -> Uint8Array`: call `vclient.Client.GenPKShare()`, marshal, copy to JS Uint8Array
-- [ ] implement `client.aggregatePK(agentShareBytes: Uint8Array)`: copy bytes to Go, `UnmarshalBinary` into `multiparty.PublicKeyGenShare`, call `vclient.Client.AggregatePK()`
-- [ ] implement `client.genRLKShareRound1() -> Uint8Array` and `aggregateRLKRound1(agentShareBytes: Uint8Array)`: same pattern
-- [ ] implement `client.genRLKShareRound2() -> Uint8Array`: generate, marshal, return (no aggregate)
-- [ ] implement `client.genGaloisShares() -> Uint8Array`: generate the per-rotation shares, marshal as a single `protocol.VClientGaloisKeyShare` (which already contains `[]multiparty.GaloisKeyGenShare`), return marshaled bytes
-- [ ] implement `client.encryptImage(tensorFloat64Array) -> Uint8Array`: receive JS `Float64Array`, copy to Go `[]float64`, call `vclient.Client.EncryptImage()`, marshal the resulting `EncryptedImage`, return as Uint8Array
-- [ ] implement `client.partialDecrypt(authenticatedCtBytes: Uint8Array) -> Uint8Array`: copy bytes, unmarshal `AuthenticatedResult`, call `vclient.Client.PartialDecrypt()`, marshal `PartialDecryption`, return as Uint8Array
-- [ ] write Go-only tests for each method: drive the Go-side function with fixed params, fixed sid, hardwired `sk_c`, assert marshal round-trips. JS bridge wiring is verified at runtime in the browser.
-- [ ] verify Go compiles for host and wasm from repo root (no `cd`): `go build ./web/ppiav/bridge/...` and `GOOS=js GOARCH=wasm go build -o web/ppiav/ppiav.wasm ./web/ppiav/bridge`
-- [ ] run tests: `go test ./web/ppiav/...`
+- [x] create `web/ppiav/bridge/ppiav/ppiav.go` (//go:build js && wasm) with `func RegisterJS()` that registers `globalThis.ppiav` namespace
+- [x] implement `ppiav.newClient(paramsJSON, sid) -> {handle: number}`: parse JSON to `protocol.Params` via `ParseParamsJSON` (replicates `vservice.paramsWire` shape so the bridge reads what VService writes), create `vclient.New(params, sid)`, store in `sync.Map[uint64]*vclient.Client` with `atomic.Uint64` handle allocator
+      Bridge convention (apply uniformly to every method below):
+- **Inputs** that are byte payloads arrive as JS `Uint8Array`. Convert with `js.CopyBytesToGo` (helper `jsBytesToGo`), then `UnmarshalBinary` into the wire-message type.
+- **Outputs** that are byte payloads go back as JS `Uint8Array` via `js.CopyBytesToJS` (helper `jsBytesFromGo`).
+- Errors are returned as `{error: msg}` objects matching `lattigo`'s `errorResult` helper. The TS wrapper in Task 12 checks `if ('error' in result)` and throws.
+
+- [x] implement `client.genPKShare() -> Uint8Array`: call `vclient.Client.GenPKShare()`, marshal as `protocol.VClientPKShare`, copy to JS Uint8Array
+- [x] implement `client.aggregatePK(agentShareBytes: Uint8Array)`: copy bytes to Go, `UnmarshalBinary` into `protocol.VAgentPKShare`, call `vclient.Client.AggregatePK()`
+- [x] implement `client.genRLKShareRound1() -> Uint8Array` and `aggregateRLKRound1(agentShareBytes: Uint8Array)`: same pattern (wire types `protocol.VClientRLKRound1` / `protocol.VAgentRLKRound1`)
+- [x] implement `client.genRLKShareRound2() -> Uint8Array`: generate, marshal as `protocol.VClientRLKRound2`, return (no aggregate)
+- [x] implement `client.genGaloisShares() -> Uint8Array`: generate the per-rotation shares via `vclient.Client.GenGaloisShares()`, marshal as a single `protocol.VClientGaloisKeyShare`, return marshaled bytes
+- [x] implement `client.encryptImage(tensorFloat64Array) -> Uint8Array`: receive JS `Float64Array`, copy to Go `[]float64`, call `vclient.Client.EncryptImage()`, marshal the resulting ciphertext directly (the wire payload is the raw `rlwe.Ciphertext` bytes — `EncryptedImage` has no `MarshalBinary`), return as Uint8Array
+- [x] implement `client.partialDecrypt(authenticatedCtBytes: Uint8Array) -> Uint8Array`: copy bytes, unmarshal into `rlwe.Ciphertext` (the SSE handler in Task 6 marshals the ciphertext directly — `AuthenticatedResult` has no codec), call `vclient.Client.PartialDecrypt()`, marshal `protocol.PartialDecryption`, return as Uint8Array
+- [x] write Go-only tests for each method: covered by `core_test.go` — runs on the host against the `core.go` layer (the wasm-only `ppiav.go` is type-checked by `GOOS=js GOARCH=wasm go build`). 15 tests: params round-trip + bad-input rejection, handle storage + uniqueness + idempotent delete, unknown-handle errors on every method, PK-share marshal round-trip, malformed agent share rejection, full keygen handshake against an in-test VAgent stub (asserts Galois share count matches `RotationIndices`), `EncryptImage` requires-aggregated-pk and wrong-length errors, `EncryptImage` produces a valid ciphertext, `PartialDecrypt` round-trip and malformed-ciphertext rejection.
+- [x] verify Go compiles for host and wasm from repo root (no `cd`): `go build ./web/ppiav/bridge/...` (host — empty matches due to wasm-only main/lattigo; `core.go` itself is host-buildable as part of `web/ppiav/bridge/ppiav`) and `GOOS=js GOARCH=wasm go build -o web/ppiav/ppiav.wasm ./web/ppiav/bridge` (13 MB output)
+- [x] run tests: `go test ./web/ppiav/...` (all 15 ppiav tests green, also under `-race`)
 
 ### Task 11: Add TypeScript wrappers and build infrastructure for `web/ppiav`
 
