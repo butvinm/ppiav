@@ -7,6 +7,9 @@
 # WASM build outputs
 web/ppiav/*.wasm
 
+# Node / TypeScript build artefacts
+web/ppiav/node_modules/
+
 # Python (bench/, models/)
 **/.venv/
 **/__pycache__/

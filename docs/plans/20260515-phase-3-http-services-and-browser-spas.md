@@ -549,14 +549,14 @@ already check.
 - Create: `web/ppiav/ts/ppiav/index.ts` (new, our types)
 - Create: `web/ppiav/Makefile`
 
-- [ ] create `web/ppiav/package.json`: `{"name": "ppiav-wasm", "version": "0.1.0", "type": "module", "scripts": {"build": "tsc", "test": "tsc --noEmit"}}`, dev dependencies: `typescript` (^5.x)
-- [ ] create `web/ppiav/tsconfig.json`: standard TS config, `target: ES2022`, `module: ES2022`, `noEmit: true` (only check types, no JS output needed), `lib: ["ES2022", "DOM"]`, `baseUrl: "."`, `paths: {"@": ["ts/*"]}`
-- [ ] copy `ts/lattigo/*.ts` from `~/Dev/orion/js/lattigo/ts/lattigo/` to `web/ppiav/ts/lattigo/` (namespaces matching Go exports). These are type definitions for `globalThis.lattigo`.
-- [ ] create `web/ppiav/ts/ppiav/index.ts`: empty for now (next task)
-- [ ] create `web/ppiav/Makefile`: with targets `wasm` (`GOOS=js GOARCH=wasm go build -o ppiav.wasm ./bridge/main.go`), `ts` (`cd web/ppiav && npm run build`), `all: wasm ts`
-- [ ] verify TypeScript compiles cleanly: `cd web/ppiav && npm install && npm run build` (no `.ts` errors)
-- [ ] verify WASM builds: `cd web/ppiav && make wasm`
-- [ ] verify `make all` succeeds
+- [x] create `web/ppiav/package.json`: `{"name": "ppiav-wasm", "version": "0.1.0", "type": "module", "scripts": {"build": "tsc", "test": "tsc --noEmit"}}`, dev dependencies: `typescript` (^5.x)
+- [x] create `web/ppiav/tsconfig.json`: standard TS config, `target: ES2022`, `module: ES2022`, `noEmit: true` (only check types, no JS output needed), `lib: ["ES2022", "DOM"]`, `baseUrl: "."`, `paths: {"@": ["ts/*"]}`
+- [x] copy `ts/lattigo/*.ts` from `~/Dev/orion/js/lattigo/ts/lattigo/` to `web/ppiav/ts/lattigo/` (namespaces matching Go exports). These are type definitions for `globalThis.lattigo`. (sources live under `~/Dev/orion/js/lattigo/src/`; copied `bridge.ts`, `ckks.ts`, `encoder.ts`, `index.ts`, `loader.ts`, `rlwe.ts`, `types.ts`)
+- [x] create `web/ppiav/ts/ppiav/index.ts`: empty for now (next task)
+- [x] create `web/ppiav/Makefile`: with targets `wasm` (`GOOS=js GOARCH=wasm go build -o ppiav.wasm ./bridge`), `ts` (`npm run build`), `all: wasm ts` (Makefile runs from `web/ppiav/`, so the build paths are relative to that dir; `go build` targets the `./bridge` package not the `main.go` file because of the `js && wasm` build tag)
+- [x] verify TypeScript compiles cleanly: `cd web/ppiav && npm install && npm run build` (no `.ts` errors)
+- [x] verify WASM builds: `cd web/ppiav && make wasm`
+- [x] verify `make all` succeeds
 
 ### Task 12: Complete `web/ppiav/ts/ppiav/index.ts` type definitions
 
