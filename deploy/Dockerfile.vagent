@@ -4,7 +4,7 @@
 # in-stage with Node.js (TS) and Go's js/wasm cross compiler (WASM blob).
 
 FROM golang:1.26-alpine AS builder
-RUN apk add --no-cache nodejs npm
+RUN apk add --no-cache nodejs npm make
 WORKDIR /app
 
 COPY go.mod go.sum ./
