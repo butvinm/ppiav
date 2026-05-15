@@ -78,7 +78,7 @@ def select_indices(test_set: Subset, args: argparse.Namespace) -> list[int]:
     return picked
 
 
-def dump_sample(test_set, idx: int, out_dir: Path) -> tuple[int, int]:
+def dump_sample(test_set: Subset, idx: int, out_dir: Path) -> tuple[int, int]:
     """Dump test-set position ``idx`` as a raw float64 blob.
 
     Returns ``(age, is_adult)`` for ground-truth CSV bookkeeping.
