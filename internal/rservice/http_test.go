@@ -393,3 +393,31 @@ func TestHTTPCallback_FollowedByProtected(t *testing.T) {
 	assert.Contains(t, getW.Body.String(), `"sid":"sid-e2e"`)
 }
 
+func TestHTTPReset_ClearsCookieAndRedirects(t *testing.T) {
+	srv := newTestServer("", "")
+
+	req := httptest.NewRequest(http.MethodPost, "/reset", nil)
+	req.AddCookie(&http.Cookie{Name: "sid", Value: "to-be-cleared"})
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusSeeOther, w.Code)
+	assert.Equal(t, "/protected", w.Header().Get("Location"))
+
+	cookies := w.Result().Cookies()
+	require.Len(t, cookies, 1)
+	c := cookies[0]
+	assert.Equal(t, "sid", c.Name)
+	assert.Empty(t, c.Value)
+	assert.Equal(t, -1, c.MaxAge, "MaxAge<0 instructs the browser to delete")
+}
+
+func TestHTTPReset_RejectsGet(t *testing.T) {
+	srv := newTestServer("", "")
+
+	req := httptest.NewRequest(http.MethodGet, "/reset", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusMethodNotAllowed, w.Code)
+}

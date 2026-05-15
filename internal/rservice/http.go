@@ -18,6 +18,7 @@ import (
 // Server wraps a *Service with the HTTP handlers RService exposes:
 //
 //	GET  /protected               (cookie-gated; Stage-1 redirect when no sid)
+//	POST /reset                   (clear sid cookie, 303 → /protected)
 //	POST /api/callback/:sid       (VerdictNotification from VAgent)
 //
 // Per docs/DESIGN.md §`Components`, sid is carried in the URL path. The
@@ -75,6 +76,7 @@ func (s *Server) ListenAndServe(addr string) error {
 
 func (s *Server) register() {
 	s.mux.HandleFunc("/protected", s.handleProtected)
+	s.mux.HandleFunc("/reset", s.handleReset)
 	s.mux.HandleFunc("/dist/", s.handleRClientAsset)
 	s.mux.HandleFunc("/styles.css", s.handleRClientAsset)
 	s.mux.HandleFunc("/api/callback/", s.handleCallback)
@@ -117,6 +119,25 @@ func (s *Server) handleProtected(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusForbidden
 	}
 	writeHTML(w, status, protectedPage(sid, verdict))
+}
+
+// handleReset clears the sid cookie and redirects the browser back to
+// /protected, which then re-enters beginStage1 with no cookie present.
+// POST-only so link prefetchers and accidental GETs don't drop sessions.
+func (s *Server) handleReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "sid",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		MaxAge:   -1,
+	})
+	// 303 See Other so the browser swaps POST for GET on the redirect.
+	http.Redirect(w, r, "/protected", http.StatusSeeOther)
 }
 
 // beginStage1 implements DESIGN.md §3 Stage 1 (RService side): allocate a
