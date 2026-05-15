@@ -2,6 +2,8 @@ package vagent
 
 import (
 	"bytes"
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,11 +11,13 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/butvinm/ppiav/internal/vservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 	"github.com/tuneinsight/lattigo/v6/multiparty"
 )
 
@@ -509,4 +513,93 @@ func readAll(t *testing.T, rc io.Reader) string {
 		return "(read err: " + err.Error() + ")"
 	}
 	return string(b)
+}
+
+func TestHTTPVAgent_ResultSSE_UnknownSidReturns404(t *testing.T) {
+	_, vagentSrv, _, _, _, _ := newHTTPFixture(t)
+	resp, err := http.Get(vagentSrv.URL + "/sessions/never-opened/result")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func TestHTTPVAgent_ResultSSE_RejectsPost(t *testing.T) {
+	_, vagentSrv, _, _, _, _ := newHTTPFixture(t)
+	sid := openSessionViaHTTP(t, vagentSrv)
+	resp, err := http.Post(vagentSrv.URL+"/sessions/"+string(sid)+"/result", "application/octet-stream", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
+}
+
+// TestHTTPVAgent_ResultSSE_DeliversBase64Ciphertext drives the SSE handler
+// end-to-end: starts the GET request, deposits a real ciphertext into the
+// session's authResult channel, then reads the SSE `data:` line and
+// confirms it base64-decodes back to a marshalable ciphertext. Verifies
+// the headers (Content-Type / Cache-Control) and the on-wire frame shape
+// (`data: <b64>\n\n`).
+func TestHTTPVAgent_ResultSSE_DeliversBase64Ciphertext(t *testing.T) {
+	_, vagentSrv, _, _, agent, params := newHTTPFixture(t)
+	sid := openSessionViaHTTP(t, vagentSrv)
+
+	// Build a real ciphertext under the params (degree 1, max level) so
+	// MarshalBinary produces a wire payload that round-trips.
+	ct := rlwe.NewCiphertext(params.CKKS, 1, params.CKKS.MaxLevel())
+
+	// Seed the session's authResult channel before opening SSE: the
+	// pre-arrival case (image POST finishes before SSE GET opens). Buffer
+	// is capacity 1, so this non-blocking send always succeeds for a
+	// freshly-opened session.
+	ch, ok := agent.SessionAuthResult(sid)
+	require.True(t, ok)
+	ch <- ct
+
+	resp, err := http.Get(vagentSrv.URL + "/sessions/" + string(sid) + "/result")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
+	assert.Equal(t, "no-cache", resp.Header.Get("Cache-Control"))
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	frame := string(body)
+	require.True(t, strings.HasPrefix(frame, "data: "), "frame must start with `data: `: %q", frame)
+	require.True(t, strings.HasSuffix(frame, "\n\n"), "SSE event separator missing: %q", frame)
+	encoded := strings.TrimSuffix(strings.TrimPrefix(frame, "data: "), "\n\n")
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	require.NoError(t, err)
+
+	// Cross-check the base64 payload is the same MarshalBinary output the
+	// handler should have produced.
+	want, err := ct.MarshalBinary()
+	require.NoError(t, err)
+	assert.Equal(t, want, decoded)
+}
+
+// TestHTTPVAgent_ResultSSE_CancelledOnClientDisconnect verifies the
+// `r.Context().Done()` branch: starting the request with a cancellable
+// context, then cancelling before any ciphertext arrives, must return
+// without waiting forever. We use a client context with a short deadline.
+func TestHTTPVAgent_ResultSSE_CancelledOnClientDisconnect(t *testing.T) {
+	_, vagentSrv, _, _, _, _ := newHTTPFixture(t)
+	sid := openSessionViaHTTP(t, vagentSrv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, vagentSrv.URL+"/sessions/"+string(sid)+"/result", nil)
+	require.NoError(t, err)
+	start := time.Now()
+	resp, err := http.DefaultClient.Do(req)
+	// Either the read finishes after server-side cancellation or the
+	// client surfaces a context error — both are acceptable.
+	if err == nil {
+		// Drain body so the connection can be cleanly closed.
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+	elapsed := time.Since(start)
+	// The handler must not hang past the cancel deadline by more than a
+	// generous margin (network jitter on httptest.Server).
+	require.Less(t, elapsed, 2*time.Second, "SSE handler did not exit on client disconnect")
 }

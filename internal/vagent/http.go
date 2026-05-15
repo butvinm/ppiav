@@ -2,6 +2,7 @@ package vagent
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -135,8 +136,61 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		s.handleRLKRound2(w, r, sessID)
 	case sub == "gks-shares":
 		s.handleGKSShares(w, r, sessID)
+	case sub == "result":
+		s.handleResultSSE(w, r, sessID)
 	default:
 		writeError(w, http.StatusNotFound, "not found")
+	}
+}
+
+// handleResultSSE implements `GET /sessions/:sid/result` (Stage 4a SSE).
+// Opens before the image POST so the ct_M deposit can never miss the
+// receiver (capacity-1 channel covers the pre-arrival case too). Streams a
+// single base64-encoded AuthenticatedResult event, then closes — SSE
+// framing is text-only by spec, so we eat ~33% inflation on this one event
+// in exchange for the simplest "open before image POST" semantics.
+//
+// Cancellable: a `select` on `r.Context().Done()` ends the handler cleanly
+// when the browser disconnects, which `sync.Cond.Wait` cannot.
+func (s *Server) handleResultSSE(w http.ResponseWriter, r *http.Request, sid protocol.SessionID) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	ch, ok := s.agent.SessionAuthResult(sid)
+	if !ok {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("vagent: unknown session id %q", sid))
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "response writer does not support flushing")
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	select {
+	case ct := <-ch:
+		if ct == nil {
+			return
+		}
+		data, err := ct.MarshalBinary()
+		if err != nil {
+			// Headers already written — cannot upgrade to 500. Emit an SSE
+			// error event so the browser can surface it (best-effort).
+			_, _ = fmt.Fprintf(w, "event: error\ndata: marshal AuthenticatedResult: %s\n\n", err)
+			flusher.Flush()
+			return
+		}
+		encoded := base64.StdEncoding.EncodeToString(data)
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", encoded)
+		flusher.Flush()
+	case <-r.Context().Done():
+		return
 	}
 }
 

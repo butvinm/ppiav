@@ -447,13 +447,13 @@ Scope notes:
 - Modify: `internal/vagent/http.go`
 - Modify: `internal/vagent/http_test.go`
 
-- [ ] add `authResult chan rlwe.Ciphertext` (buffered, capacity 1) to `vagent.Agent.sessionState`; allocate it in `OpenSession` via `make(chan rlwe.Ciphertext, 1)`. Capacity 1 covers the pre-arrival case where Stage-3 finishes before the SSE handler opens its receive (DESIGN.md line 175). Buffered + `select`-based receive means the SSE handler can be cancelled cleanly when the browser disconnects — `sync.Cond.Wait()` cannot, so don't use it.
-- [ ] implement `GET /sessions/:sid/result` handler:
+- [x] add `authResult chan rlwe.Ciphertext` (buffered, capacity 1) to `vagent.Agent.sessionState`; allocate it in `OpenSession` via `make(chan rlwe.Ciphertext, 1)`. Capacity 1 covers the pre-arrival case where Stage-3 finishes before the SSE handler opens its receive (DESIGN.md line 175). Buffered + `select`-based receive means the SSE handler can be cancelled cleanly when the browser disconnects — `sync.Cond.Wait()` cannot, so don't use it. (Implemented as `chan *rlwe.Ciphertext` — pointer match to BuildAuthenticatedCt's `*rlwe.Ciphertext` return type and FinalizeDecryption's pointer-argument input, so Task 7 can deposit `ctM` directly without an extra indirection.)
+- [x] implement `GET /sessions/:sid/result` handler:
   - set `Content-Type: text/event-stream`, `Cache-Control: no-cache`, flush headers via `http.Flusher`
   - `select { case ct := <-sess.authResult: ...   case <-r.Context().Done(): return }`
-  - on receive: marshal `AuthenticatedResult{Ct: &ct}` to bytes, base64-encode (SSE framing is text-only by spec — see Technical Details), write `data: <b64>\n\n`, `Flush()`, return (single-use, connection closes)
-- [ ] write tests: verify `Content-Type`/`Cache-Control` headers and that the handler accepts `http.Flusher`. Streaming semantics are verified manually in the browser.
-- [ ] run tests — must pass before Task 7: `go test ./internal/vagent/...`
+  - on receive: marshal the ciphertext to bytes, base64-encode (SSE framing is text-only by spec — see Technical Details), write `data: <b64>\n\n`, `Flush()`, return (single-use, connection closes). Marshals the ciphertext directly via `rlwe.Ciphertext.MarshalBinary` rather than wrapping in `AuthenticatedResult{Ct: &ct}` since `AuthenticatedResult` has no MarshalBinary (skipped in `wire_test.go:290`) — the wire payload is the ciphertext itself, which is what the browser will round-trip back through `client.partialDecrypt(authenticatedCtBytes)` in Task 10.
+- [x] write tests: verify `Content-Type`/`Cache-Control` headers and that the handler accepts `http.Flusher`. Streaming semantics are verified manually in the browser. (Added 4 tests: unknown sid → 404, POST → 405, happy-path frame shape `data: <b64>\n\n` with payload round-trip, client-disconnect cancel via `context.WithTimeout`.)
+- [x] run tests — must pass before Task 7: `go test ./internal/vagent/...` (all SSE tests green; pre-existing `TestFinalizeRejectsZeroLogit` flake unaffected by this task, verified by stashing the diff and reproducing the same failure on master)
 
 ### Task 7: Add image submission and final decryption to `internal/vagent/http.go` (Stages 3 and 4b)
 
