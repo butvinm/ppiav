@@ -10,21 +10,20 @@ Companion thesis context lives at `~/Dev/ITMO/thesis/`.
 
 ## Status
 
-Early scaffolding. No code yet. Design captured in `docs/DESIGN.md`.
+Phase 1 (multi-party CKKS + synthetic `x²` + MPD-Auth) and Phase 2 (Orion-compiled C3AE inference) complete. An in-process orchestrator (`internal/orchestrator`) drives the full §3 protocol via `cmd/ppiav-cli`, emitting per-stage benchmark JSON consumed by the Python `bench/` project. Phase 3 (HTTP services + browser SPAs) and Phase 4 (lattigo-hierkeys) are outstanding.
 
 ## Implementation Phases
 
-1. **Phase 1**: Synthetic CKKS circuit (`x²`), CLI + benchmark harness, no model, no Orion. Goal: scaffolding, abstractions, baseline bench numbers.
-2. **Phase 2**: Orion-compiled C3AE inference. `models/` Python pipeline (training + compilation).
-3. **Phase 3**: Verification Service / Verification Agent / Resource Service Go HTTP services + browser SPAs (vanilla JS + WASM, copy of Orion's `js/lattigo`).
-4. **Phase 4**: lattigo-hierkeys for compressed key transmission.
+1. **Phase 1** — done. Synthetic CKKS circuit (`x²`), in-process protocol with collaborative keygen + MPD-Auth + joint decryption, CLI + benchmark harness, no model, no Orion.
+2. **Phase 2** — done. Training and compilation are in-tree under `models/`. `orion-v2-compiler` is consumed from PyPI. Acceptance runs on a rented `cpu.16.128.240` VPS via the `vps` skill.
+3. **Phase 3** — pending. Verification Service / Verification Agent / Resource Service Go HTTP services + browser SPAs (vanilla JS + WASM, copy of Orion's `js/lattigo`).
+4. **Phase 4** — pending. lattigo-hierkeys for compressed key transmission.
 
 ## Code conventions
 
 - **Go**: simple, idiomatic, minimal comments. Comments only where the _why_ is non-obvious. No multi-paragraph docstrings.
 - **Python**: uv for environments — always activate the venv before any pip/python command. Never install deps to system Python. ruff format + lint, mypy strict.
 - **Atomic commits**: stage specific files (`git add path/to/file`), never `git add .`. Clear, concrete commit messages.
-- **No copying** from `~/Dev/orion/examples/` or thesis experiments (`~/Dev/ITMO/thesis/experiments/`). Reference only — write fresh idiomatic code.
 
 ## Repo layout
 
@@ -32,7 +31,7 @@ Early scaffolding. No code yet. Design captured in `docs/DESIGN.md`.
 ppiav/
 ├── cmd/                  # Go binary entry points
 ├── internal/             # Go packages (private to this module)
-├── web/                  # Browser SPAs + ppiav-crypto WASM module
+├── web/                  # Browser SPAs + ppiav-crypto WASM module (Phase 3+)
 ├── models/               # Python ML pipeline (Phase 2+)
 ├── bench/                # Plotting & analysis scripts
 ├── docs/                 # Design & decisions

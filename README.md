@@ -1,46 +1,84 @@
 # ppiav
 
-Privacy-Preserving Image Attribute Verification — bachelor's thesis prototype demonstrating FHE-based facial attribute verification with CKKS (via Lattigo and Orion).
-
-See [`docs/DESIGN.md`](docs/DESIGN.md) for the full architecture.
-
-**Phase 1 status:** complete — CKKS scaffolding, synthetic `x²` circuit, in-process protocol, benchmark CLI emitting JSON, Python plotting and tables.
+Privacy-Preserving Image Attribute Verification using FHE-based facial attribute verification with CKKS (via Lattigo and Orion).
 
 ## Quick start
 
+Train a C3AE model, compile it for FHE inference, and run the end-to-end protocol:
+
 ```sh
-# Run the full §3 protocol in-process (5 iterations) and emit JSON.
-go run ./cmd/ppiav-cli e2e --n 5
+# 1. Download UTKFace dataset
+cd models
+uv sync
+uv run python -m models.utkface --target ./data/UTKFace
 
-# Per-step benchmarks (each writes to results/phase1/<step>.json).
-for step in keygen encrypt-image infer mac decrypt-result verify-mac; do
-    go run ./cmd/ppiav-cli "$step" --n 5
-done
+# 2. Train the model (use --variant relu for baseline, --variant fhe for FHE)
+uv run python -m models.train --variant fhe --data-dir ./data/UTKFace --epochs 60
 
-# Render Markdown summary tables to stdout.
-cd bench && uv run python -m bench.tables ../results/phase1
+# 3. Compile for FHE inference
+uv run python -m models.compile --variant fhe --config logn15 --weights ./out/weights_fhe.pth --output ./out/logn15/model.orion
 
-# Render PNG plots into ../results/phase1/plots/.
-cd bench && uv run python -m bench.plot ../results/phase1
+# 4. Prepare test sample
+uv run python -m models.prepare_samples --idx 0 --data-dir ./data/UTKFace --out-dir ./out/inputs
+
+# 5. Run end-to-end protocol (requires VPS with sufficient RAM for inference)
+cd ..
+go run ./cmd/ppiav-cli e2e \
+    --orion ./models/out/logn15 \
+    --image ./models/out/inputs/sample_0.bin \
+    --n 5
 ```
 
-## Tests
+The e2e benchmark outputs to `results/phase2/e2e.json`. Use the `bench/` scripts to visualize:
 
 ```sh
-# Default unit suite — fast.
+cd bench
+uv run python -m bench.tables ../results/phase2
+uv run python -m bench.plot ../results/phase2
+```
+
+## Training and evaluation
+
+The `models/` package provides a complete training pipeline:
+
+```sh
+cd models
+
+# Train ReLU baseline (cleartext-only, faster)
+uv run python -m models.train --variant relu --data-dir ./data/UTKFace --epochs 60
+
+# Train FHE variant (Quad approximation for Orion compilation)
+uv run python -m models.train --variant fhe --data-dir ./data/UTKFace --epochs 60
+
+# Evaluate both variants
+uv run python -m models.eval --data-dir ./data/UTKFace --output results/cleartext.csv
+```
+
+See `models/README.md` for detailed documentation.
+
+## Hardware requirements
+
+FHE inference requires significant memory:
+
+- `logn15` config: ~54 GB peak RSS — use `cpu.16.128.240` or larger
+- `logn16` config: ~114 GB peak RSS — use `cpu.16.256.240` or larger
+
+Training and compilation can run on a dev box (32+ GB RAM), but the full e2e protocol including inference requires a VPS with sufficient RAM.
+
+## Development
+
+```sh
+# Go tests
 go test ./...
+go vet ./...
+go build ./...
 
-# Integration suite — full §3 protocol e2e in one test.
-go test -tags=integration ./...
-
-# Noise-budget validation — slow (~90s, 100 keygens).
-# Load-bearing for DESIGN.md §3.6 forge bound.
-go test -tags=noise ./internal/protocol/...
-
-# Python suite.
-cd bench && uv run pytest && uv run ruff check . && uv run mypy bench tests
+# Python linting and type checking
+cd models
+uv run ruff check .
+uv run mypy .
 ```
 
-## Repo layout
+## Architecture
 
-See `docs/DESIGN.md` §7. Phase 1 implements `internal/{protocol, ckks, vclient, vagent, vservice, rservice, bench}`, `cmd/ppiav-cli`, and `bench/`. Phases 2–4 are deferred (see `docs/DESIGN.md` §4).
+See `docs/DESIGN.md` for detailed architecture documentation.
