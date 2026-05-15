@@ -37,6 +37,34 @@ uv run python -m bench.tables ../results/phase2
 uv run python -m bench.plot ../results/phase2
 ```
 
+## Quick start — Phase 3 (HTTP services + browser SPAs)
+
+Build the WASM blob, both SPAs, and the three Go services:
+
+```sh
+make phase3
+# or, equivalently
+make wasm spas services
+```
+
+Run all three services in three terminals:
+
+```sh
+./bin/ppiav-vservice --addr :8080
+./bin/ppiav-vagent --addr :8081 --vservice-url http://localhost:8080 --rservice-url http://localhost:8082
+./bin/ppiav-rservice --addr :8082 --vagent-url http://localhost:8081
+```
+
+Or via docker-compose:
+
+```sh
+cd deploy && docker compose up
+```
+
+Browser flow: open `http://localhost:8082/protected`. RService 302s to VAgent's `/verify?sid=...`, the VClient SPA loads, upload an image, and on completion you are redirected back to `/protected` with the verdict (Accept or Reject).
+
+For WASM debugging open the browser console: `globalThis.lattigo` and `globalThis.ppiav` expose the underlying CKKS and vclient namespaces.
+
 ## Training and evaluation
 
 The `models/` package provides a complete training pipeline:

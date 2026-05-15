@@ -754,15 +754,15 @@ Implementation note: main.ts uses the raw `globalThis.ppiav` bridge directly (wi
 
 ### Task 22: Update documentation and close out
 
-- [ ] update `CLAUDE.md` "Status" line to reflect Phase 3 completion
-- [ ] update `CLAUDE.md` Implementation Phases checklist if it tracks phase status
-- [ ] update `README.md` with Phase 3 quick-start:
+- [x] update `CLAUDE.md` "Status" line to reflect Phase 3 completion
+- [x] update `CLAUDE.md` Implementation Phases checklist if it tracks phase status
+- [x] update `README.md` with Phase 3 quick-start:
   - Add section "Quick start — Phase 3" covering: `make phase3`, `docker-compose up`, access `http://localhost:8082/protected` to start verification flow, or `http://localhost:8081/verify?sid=...` to open VClient directly
   - Document local dev: `make wasm`, `make spats`, build services with `make services`, run with go commands directly from three terminals
   - Mention WASM browser console debugging (`console.log(globalThis.ppiav)`, etc.)
-- [ ] add `.gitignore` entries for build artifacts: `bin/`, `web/*/dist/`, `web/ppiav/ppiav.wasm`. **Do not commit `ppiav.wasm`** — it's a derived artifact, can land in the 10–30 MB range, and changes on every `internal/vclient` edit. Build via `make wasm`; CI/release pipelines can publish prebuilt blobs separately if needed.
-- [ ] move this plan to `docs/plans/completed/` (run `mkdir -p docs/plans/completed`)
-- [ ] commit the move atomically as a separate commit
+- [x] add `.gitignore` entries for build artifacts: `bin/`, `web/*/dist/`, `web/ppiav/ppiav.wasm`. **Do not commit `ppiav.wasm`** — it's a derived artifact, can land in the 10–30 MB range, and changes on every `internal/vclient` edit. Build via `make wasm`; CI/release pipelines can publish prebuilt blobs separately if needed.
+- [x] move this plan to `docs/plans/completed/` (run `mkdir -p docs/plans/completed`)
+- [x] commit the move atomically as a separate commit
 
 ---
 
