@@ -179,18 +179,19 @@ func (a *Agent) storeAuthenticatedCt(sid protocol.SessionID, ct *rlwe.Ciphertext
 	return true
 }
 
-// SessionAuthenticatedCt returns the cached ct_M for `sid`. The third
-// return is false if the sid is unknown; the second is true once
-// storeAuthenticatedCt has run. http.go uses this in the
-// partial-decryption handler to assemble FinalizeDecryption's input.
-func (a *Agent) SessionAuthenticatedCt(sid protocol.SessionID) (ct *rlwe.Ciphertext, populated, ok bool) {
+// SessionAuthenticatedCt returns the cached ct_M for `sid`. The second
+// return is false if the sid is unknown. The ct value is nil until
+// storeAuthenticatedCt has run; callers check `ct != nil` to detect the
+// pre-image case. http.go uses this in the partial-decryption handler to
+// assemble FinalizeDecryption's input.
+func (a *Agent) SessionAuthenticatedCt(sid protocol.SessionID) (ct *rlwe.Ciphertext, ok bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	sess, exists := a.sessions[sid]
 	if !exists {
-		return nil, false, false
+		return nil, false
 	}
-	return sess.authenticatedCt, sess.authenticatedCt != nil, true
+	return sess.authenticatedCt, true
 }
 
 // session looks up a registered session under the mutex. Callers that
@@ -199,6 +200,17 @@ func (a *Agent) session(sid protocol.SessionID) (*sessionState, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.sessionLocked(sid)
+}
+
+// EvictSession removes `sid` from the sessions table. Used by the HTTP
+// layer to clean up after an unrecoverable Stage-2d failure (e.g.,
+// VService eval-keys forwarding error): the session's keygen stash is
+// already drained by AggregateGaloisShares, so retry is impossible —
+// evicting forces the client into a clean restart.
+func (a *Agent) EvictSession(sid protocol.SessionID) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.sessions, sid)
 }
 
 func (a *Agent) sessionLocked(sid protocol.SessionID) (*sessionState, error) {

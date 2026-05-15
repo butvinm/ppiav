@@ -5,9 +5,13 @@
 // the raw `globalThis.ppiav` bridge, and wire the file input to drive the
 // full multi-party protocol (Stages 2b..4b).
 //
-// The browser sees exactly one redirect at the end (Stage 4b): the POST
-// /sessions/:sid/partial-decryption response carries 302 + Location to
-// RService /protected, which we read and assign to window.location.
+// At the end of Stage 4b the VAgent returns
+// `200 {"redirect": "<rservicePublicURL>/protected"}` — we read the URL
+// and call `window.location.assign`. JSON 200 (rather than 302) is the
+// canonical pattern: `fetch(redirect: "manual")` always produces an
+// opaqueredirect response whose Location header is unreadable per the
+// Fetch spec, and `redirect: "follow"` would force a second POST of the
+// single-shot partial-decryption (which 404s).
 //
 // This file uses the raw `globalThis.ppiav` namespace directly rather
 // than importing the high-level Client wrapper from `@ppiav/ppiav`. The
@@ -310,55 +314,27 @@ async function runProtocol(
     "partialDecrypt",
   );
 
-  // Stage 4b — POST partial decryption; server replies 302 with Location.
-  //
-  // We first try `redirect: 'manual'` so we can read the Location header
-  // and call window.location.assign ourselves. In some browser/origin
-  // combinations `redirect: 'manual'` produces an opaqueredirect with
-  // status 0 and unreadable headers; in that case fall back to
-  // `redirect: 'follow'` and use the final response URL.
+  // Stage 4b — POST partial decryption; server replies 200 with
+  // `{"redirect": "<url>"}`. JSON 200 (rather than 302) is intentional —
+  // see the file header for the spec-level rationale.
   setProgress("Stage 4b: Submitting partial decryption...");
   const resp = await fetch("/sessions/" + sid + "/partial-decryption", {
     method: "POST",
     headers: { "Content-Type": "application/octet-stream" },
     body: new Uint8Array(partial),
-    redirect: "manual",
   });
-  if (resp.status === 302) {
-    const loc = resp.headers.get("Location");
-    if (loc !== null && loc !== "") {
-      window.location.assign(loc);
-      return;
-    }
-  }
-  if (resp.type === "opaqueredirect" || resp.status === 0) {
-    setProgress("Stage 4b: Following redirect (opaque)...");
-    // Re-POST with redirect: 'follow' so the browser navigates for us.
-    // partial-decryption is *not* idempotent: VAgent's handler is
-    // currently single-shot (session evicted after FinalizeDecryption),
-    // so the second POST will return 404. We instead use the cached
-    // `Location` we *cannot* read by navigating directly to the VAgent
-    // verdict-redirect target. As a last resort fall back to a hard
-    // reload of /protected on the RService origin if same-origin.
-    //
-    // Pragmatic choice: read the Location via a follow fetch on a new
-    // (idempotent) HEAD/GET is not possible. So we surface the failure
-    // and require the user to navigate manually — this branch is only
-    // hit by browsers that block Location on manual redirect responses
-    // (rare for same-origin 302s).
-    throw new Error(
-      "partial-decryption: opaque redirect; cannot read Location header",
-    );
-  }
   if (!resp.ok) {
     const text = await resp.text();
     throw new Error("partial-decryption: HTTP " + resp.status + " " + text);
   }
-  throw new Error(
-    "partial-decryption: unexpected non-redirect 2xx response (status " +
-      resp.status +
-      ")",
-  );
+  const body = (await resp.json()) as { redirect?: unknown };
+  if (typeof body.redirect !== "string" || body.redirect === "") {
+    throw new Error(
+      "partial-decryption: response missing 'redirect' field: " +
+        JSON.stringify(body),
+    );
+  }
+  window.location.assign(body.redirect);
 }
 
 async function main(): Promise<void> {

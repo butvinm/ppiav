@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/butvinm/ppiav/internal/httputil"
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 )
@@ -22,17 +23,15 @@ import (
 // JSON for control endpoints, application/octet-stream for share- and
 // key-bearing endpoints (see docs/plans Technical Details).
 type Server struct {
-	svc  *Service
-	addr string
-	mux  *http.ServeMux
+	svc *Service
+	mux *http.ServeMux
 }
 
-// NewServer wires a Server around `svc`. `addr` is forwarded verbatim to
-// http.Server.Addr in ListenAndServe. The constructor is named `NewServer`
-// rather than `New` to avoid shadowing the existing `vservice.New(params)`
-// Service constructor.
-func NewServer(svc *Service, addr string) *Server {
-	s := &Server{svc: svc, addr: addr, mux: http.NewServeMux()}
+// NewServer wires a Server around `svc`. The constructor is named
+// `NewServer` rather than `New` to avoid shadowing the existing
+// `vservice.New(params)` Service constructor.
+func NewServer(svc *Service) *Server {
+	s := &Server{svc: svc, mux: http.NewServeMux()}
 	s.register()
 	return s
 }
@@ -41,9 +40,9 @@ func NewServer(svc *Service, addr string) *Server {
 // composition.
 func (s *Server) Handler() http.Handler { return s.mux }
 
-// ListenAndServe boots an http.Server on s.addr.
-func (s *Server) ListenAndServe() error {
-	srv := &http.Server{Addr: s.addr, Handler: s.mux}
+// ListenAndServe boots an http.Server on addr.
+func (s *Server) ListenAndServe(addr string) error {
+	srv := &http.Server{Addr: addr, Handler: s.mux}
 	return srv.ListenAndServe()
 }
 
@@ -106,7 +105,7 @@ func (s *Server) handleEvalKeys(w http.ResponseWriter, r *http.Request, sid prot
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxCiphertextBody))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("read body: %s", err))
 		return
@@ -142,7 +141,7 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, sid protoco
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxCiphertextBody))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("read body: %s", err))
 		return
@@ -201,27 +200,15 @@ func writeParams(w http.ResponseWriter, p protocol.Params) error {
 	return nil
 }
 
-// errorBody is the wire shape of all 4xx/5xx JSON responses.
-type errorBody struct {
-	Error string `json:"error"`
-}
+// errorBody re-exports the shared JSON error wire shape for tests that
+// previously unmarshaled `errorBody` directly. Implementation now lives
+// in internal/httputil.
+type errorBody = httputil.ErrorBody
 
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	data, err := json.Marshal(body)
-	if err != nil {
-		// We tried; fall back to a plain 500. Logging is intentionally
-		// thin — DESIGN.md §`Out of scope` rules out structured logging.
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write(data)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, errorBody{Error: msg})
-}
+var (
+	writeJSON  = httputil.WriteJSON
+	writeError = httputil.WriteError
+)
 
 // Compile-time check that handler functions match http.HandlerFunc.
 var _ http.HandlerFunc = (&Server{}).handleParams

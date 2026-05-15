@@ -26,7 +26,7 @@ func httpSvcParams(t *testing.T) (*Service, protocol.Params) {
 
 func TestHTTPGetParams(t *testing.T) {
 	svc, params := httpSvcParams(t)
-	srv := NewServer(svc, "")
+	srv := NewServer(svc)
 
 	req := httptest.NewRequest(http.MethodGet, "/params", nil)
 	w := httptest.NewRecorder()
@@ -46,7 +46,7 @@ func TestHTTPGetParams(t *testing.T) {
 
 func TestHTTPGetParamsRejectsPost(t *testing.T) {
 	svc, _ := httpSvcParams(t)
-	srv := NewServer(svc, "")
+	srv := NewServer(svc)
 
 	req := httptest.NewRequest(http.MethodPost, "/params", nil)
 	w := httptest.NewRecorder()
@@ -57,7 +57,7 @@ func TestHTTPGetParamsRejectsPost(t *testing.T) {
 
 func TestHTTPOpenSession(t *testing.T) {
 	svc, _ := httpSvcParams(t)
-	srv := NewServer(svc, "")
+	srv := NewServer(svc)
 
 	const n = 5
 	seen := map[protocol.SessionID]struct{}{}
@@ -79,7 +79,7 @@ func TestHTTPOpenSession(t *testing.T) {
 
 func TestHTTPOpenSessionRejectsGet(t *testing.T) {
 	svc, _ := httpSvcParams(t)
-	srv := NewServer(svc, "")
+	srv := NewServer(svc)
 
 	req := httptest.NewRequest(http.MethodGet, "/sessions", nil)
 	w := httptest.NewRecorder()
@@ -90,7 +90,7 @@ func TestHTTPOpenSessionRejectsGet(t *testing.T) {
 
 func TestHTTPStoreEvalKeysHappyPath(t *testing.T) {
 	svc, params := httpSvcParams(t)
-	srv := NewServer(svc, "")
+	srv := NewServer(svc)
 
 	// Open a session via the HTTP route, then POST eval-keys for it.
 	openReq := httptest.NewRequest(http.MethodPost, "/sessions", nil)
@@ -119,7 +119,7 @@ func TestHTTPStoreEvalKeysHappyPath(t *testing.T) {
 
 func TestHTTPStoreEvalKeysUnknownSid(t *testing.T) {
 	svc, params := httpSvcParams(t)
-	srv := NewServer(svc, "")
+	srv := NewServer(svc)
 
 	kgen := rlwe.NewKeyGenerator(params.CKKS)
 	sk := kgen.GenSecretKeyNew()
@@ -140,7 +140,7 @@ func TestHTTPStoreEvalKeysUnknownSid(t *testing.T) {
 
 func TestHTTPStoreEvalKeysMalformedBody(t *testing.T) {
 	svc, _ := httpSvcParams(t)
-	srv := NewServer(svc, "")
+	srv := NewServer(svc)
 
 	// Open a session so the 400 path isn't masked by a 404.
 	openReq := httptest.NewRequest(http.MethodPost, "/sessions", nil)
@@ -163,7 +163,7 @@ func TestHTTPStoreEvalKeysMalformedBody(t *testing.T) {
 
 func TestHTTPStoreEvalKeysRejectsGet(t *testing.T) {
 	svc, _ := httpSvcParams(t)
-	srv := NewServer(svc, "")
+	srv := NewServer(svc)
 
 	req := httptest.NewRequest(http.MethodGet, "/sessions/abc/eval-keys", nil)
 	w := httptest.NewRecorder()
@@ -177,7 +177,7 @@ func TestHTTPStoreEvalKeysRejectsGet(t *testing.T) {
 // the marshaled ct, parse back the result, decrypt, verify 0.3² ≈ 0.09.
 func TestHTTPImageHappyPath(t *testing.T) {
 	svc, params := httpSvcParams(t)
-	srv := NewServer(svc, "")
+	srv := NewServer(svc)
 
 	sid, err := svc.OpenSession()
 	require.NoError(t, err)
@@ -220,7 +220,7 @@ func TestHTTPImageHappyPath(t *testing.T) {
 
 func TestHTTPImageUnknownSid(t *testing.T) {
 	svc, params := httpSvcParams(t)
-	srv := NewServer(svc, "")
+	srv := NewServer(svc)
 
 	// Build a syntactically valid ciphertext so the body parses; only the
 	// sid is missing. Without StoreEvalKeys, Infer surfaces "unknown session"
@@ -250,7 +250,7 @@ func TestHTTPImageUnknownSid(t *testing.T) {
 
 func TestHTTPImageMalformedBody(t *testing.T) {
 	svc, _ := httpSvcParams(t)
-	srv := NewServer(svc, "")
+	srv := NewServer(svc)
 
 	sid, err := svc.OpenSession()
 	require.NoError(t, err)
@@ -268,7 +268,7 @@ func TestHTTPImageMalformedBody(t *testing.T) {
 
 func TestHTTPImageRejectsGet(t *testing.T) {
 	svc, _ := httpSvcParams(t)
-	srv := NewServer(svc, "")
+	srv := NewServer(svc)
 
 	req := httptest.NewRequest(http.MethodGet, "/sessions/abc/image", nil)
 	w := httptest.NewRecorder()
@@ -279,7 +279,7 @@ func TestHTTPImageRejectsGet(t *testing.T) {
 
 func TestHTTPUnknownPath(t *testing.T) {
 	svc, _ := httpSvcParams(t)
-	srv := NewServer(svc, "")
+	srv := NewServer(svc)
 
 	cases := []struct {
 		name string

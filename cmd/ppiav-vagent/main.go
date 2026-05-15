@@ -29,7 +29,8 @@ import (
 func main() {
 	addr := flag.String("addr", ":8081", "HTTP listen address")
 	vserviceURL := flag.String("vservice-url", "http://localhost:8080", "VService base URL (e.g., http://localhost:8080)")
-	rserviceURL := flag.String("rservice-url", "http://localhost:8082", "RService base URL (used by Stage-4b verdict callback, Task 7)")
+	rserviceURL := flag.String("rservice-url", "http://localhost:8082", "RService base URL for server-to-server verdict callback (e.g. http://rservice:8082 inside Docker)")
+	rservicePublicURL := flag.String("rservice-public-url", "", "Browser-visible RService URL returned in Stage-4b redirect JSON (defaults to --rservice-url; set to host-reachable URL when --rservice-url is internal-only, e.g. http://localhost:8082 with Docker)")
 	orionDir := flag.String("orion", "", "directory holding a compiled Orion model.orion (Phase 2)")
 	flag.Parse()
 
@@ -65,10 +66,10 @@ func main() {
 	// Stage-1 sid allocation happens dynamically per request: RService
 	// → VAgent `POST /sessions` → VService `POST /sessions`. No initial
 	// session is opened here.
-	srv := vagent.NewServer(agent, *vserviceURL, *rserviceURL, *addr)
-	log.Printf("ppiav-vagent listening on %s (vservice=%s, rservice=%s, orion=%q)",
-		*addr, *vserviceURL, *rserviceURL, *orionDir)
-	if err := srv.ListenAndServe(); err != nil {
+	srv := vagent.NewServer(agent, *vserviceURL, *rserviceURL, *rservicePublicURL)
+	log.Printf("ppiav-vagent listening on %s (vservice=%s, rservice=%s, rservice-public=%s, orion=%q)",
+		*addr, *vserviceURL, *rserviceURL, *rservicePublicURL, *orionDir)
+	if err := srv.ListenAndServe(*addr); err != nil {
 		fmt.Fprintf(os.Stderr, "ppiav-vagent: %v\n", err)
 		os.Exit(1)
 	}

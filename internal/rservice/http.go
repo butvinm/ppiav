@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
+	"github.com/butvinm/ppiav/internal/httputil"
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/butvinm/ppiav/web/rclient"
 )
@@ -27,25 +29,35 @@ import (
 // 302s to `<vagentURL>/verify?sid=<sid>`. On VAgent failure RService
 // returns a 5xx with no cookie set (F4a).
 type Server struct {
-	svc        *Service
-	addr       string
-	vagentURL  string
-	mux        *http.ServeMux
-	httpClient *http.Client
+	svc             *Service
+	vagentURL       string
+	vagentPublicURL string
+	mux             *http.ServeMux
+	httpClient      *http.Client
 }
 
 // NewServer wires a Server around `svc`. `vagentURL` is the VAgent base
-// URL (e.g., `http://localhost:8081`) used by the Stage-1 server-to-server
-// hop. The constructor is named `NewServer` rather than `New` to avoid
-// shadowing the existing `rservice.New()` Service constructor — same
-// pattern as `vservice.NewServer`.
-func NewServer(svc *Service, vagentURL, addr string) *Server {
+// URL used by the Stage-1 server-to-server `POST /sessions` hop (e.g.,
+// `http://vagent:8081` inside Docker). `vagentPublicURL` is the
+// browser-visible VAgent URL emitted in the Stage-1 redirect's `Location`
+// header (e.g., `http://localhost:8081` so the host browser can reach
+// it). When `vagentPublicURL` is empty it falls back to `vagentURL`,
+// preserving the localhost single-host flow. The constructor is named
+// `NewServer` rather than `New` to avoid shadowing the existing
+// `rservice.New()` Service constructor — same pattern as
+// `vservice.NewServer`.
+func NewServer(svc *Service, vagentURL, vagentPublicURL string) *Server {
+	vagentURL = strings.TrimRight(vagentURL, "/")
+	vagentPublicURL = strings.TrimRight(vagentPublicURL, "/")
+	if vagentPublicURL == "" {
+		vagentPublicURL = vagentURL
+	}
 	s := &Server{
-		svc:        svc,
-		addr:       addr,
-		vagentURL:  vagentURL,
-		mux:        http.NewServeMux(),
-		httpClient: &http.Client{Timeout: 5 * time.Second},
+		svc:             svc,
+		vagentURL:       vagentURL,
+		vagentPublicURL: vagentPublicURL,
+		mux:             http.NewServeMux(),
+		httpClient:      &http.Client{Timeout: 5 * time.Second},
 	}
 	s.register()
 	return s
@@ -54,9 +66,9 @@ func NewServer(svc *Service, vagentURL, addr string) *Server {
 // Handler exposes the mux for composition with httptest.NewServer.
 func (s *Server) Handler() http.Handler { return s.mux }
 
-// ListenAndServe boots an http.Server on s.addr.
-func (s *Server) ListenAndServe() error {
-	srv := &http.Server{Addr: s.addr, Handler: s.mux}
+// ListenAndServe boots an http.Server on addr.
+func (s *Server) ListenAndServe(addr string) error {
+	srv := &http.Server{Addr: addr, Handler: s.mux}
 	return srv.ListenAndServe()
 }
 
@@ -102,10 +114,6 @@ func (s *Server) handleProtected(w http.ResponseWriter, r *http.Request) {
 // cookie, and 302 the browser to `<vagentURL>/verify?sid=<sid>`. Any
 // failure on the VAgent hop surfaces as a 5xx with no cookie set — F4a.
 func (s *Server) beginStage1(w http.ResponseWriter, r *http.Request) {
-	if s.vagentURL == "" {
-		writeError(w, http.StatusInternalServerError, "rservice: vagentURL not configured")
-		return
-	}
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, s.vagentURL+"/sessions", nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("build vagent request: %s", err))
@@ -136,7 +144,7 @@ func (s *Server) beginStage1(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 	})
-	http.Redirect(w, r, fmt.Sprintf("%s/verify?sid=%s", s.vagentURL, sess.SessionID), http.StatusFound)
+	http.Redirect(w, r, fmt.Sprintf("%s/verify?sid=%s", s.vagentPublicURL, url.QueryEscape(string(sess.SessionID))), http.StatusFound)
 }
 
 func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
@@ -152,7 +160,7 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	sid := protocol.SessionID(rest)
 
 	var notif protocol.VerdictNotification
-	if err := json.NewDecoder(r.Body).Decode(&notif); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, httputil.MaxJSONBody)).Decode(&notif); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("decode VerdictNotification: %s", err))
 		return
 	}
@@ -172,33 +180,20 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 //
 // sid and verdict are passed through `encoding/json` rather than spliced
 // directly so any future field changes propagate without manual escaping.
-// If the embedded index.html lookup or </body> insertion fails we fall
-// back to a minimal self-contained shell so the handler still returns
-// valid HTML (impossible-by-build, since embed validates at compile time).
+// `json.Marshal` on a two-string struct and `fs.ReadFile` on a
+// compile-time-validated embed.FS path cannot fail; both errors are
+// dropped.
 func protectedPage(sid protocol.SessionID, v protocol.Verdict) string {
 	injection := struct {
 		Sid     string `json:"sid"`
 		Verdict string `json:"verdict"`
 	}{Sid: string(sid), Verdict: v.String()}
-	payload, err := json.Marshal(injection)
-	if err != nil {
-		payload = []byte(`{"sid":"","verdict":"unknown"}`)
-	}
+	payload, _ := json.Marshal(injection)
 	script := []byte(fmt.Sprintf(`<script>window.verdict = %s;</script>`, payload))
 
-	raw, err := fs.ReadFile(rclient.FS, "index.html")
-	if err != nil {
-		return fmt.Sprintf(
-			`<!doctype html><html><head><title>RClient</title></head><body><h1>Protected resource</h1><div id="status">Loading...</div>%s</body></html>`,
-			script,
-		)
-	}
+	raw, _ := fs.ReadFile(rclient.FS, "index.html")
 	closeTag := []byte("</body>")
 	idx := bytes.LastIndex(raw, closeTag)
-	if idx < 0 {
-		// No </body> — append before EOF so the script still executes.
-		return string(raw) + string(script)
-	}
 	out := make([]byte, 0, len(raw)+len(script))
 	out = append(out, raw[:idx]...)
 	out = append(out, script...)
@@ -206,26 +201,12 @@ func protectedPage(sid protocol.SessionID, v protocol.Verdict) string {
 	return string(out)
 }
 
-// errorBody is the wire shape of all 4xx/5xx JSON responses, mirroring
-// vservice/http.go so error-handling stays uniform across services.
-type errorBody struct {
-	Error string `json:"error"`
-}
+// errorBody re-exports the shared JSON error wire shape for tests that
+// previously unmarshaled `errorBody` directly. Implementation now lives
+// in internal/httputil.
+type errorBody = httputil.ErrorBody
 
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	data, err := json.Marshal(body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write(data)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, errorBody{Error: msg})
-}
+var writeError = httputil.WriteError
 
 func writeHTML(w http.ResponseWriter, status int, body string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

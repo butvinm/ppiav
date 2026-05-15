@@ -3,8 +3,19 @@
 # Run `make wasm spas` on the host first is NOT required — each Dockerfile builds
 # its own web assets in-stage.
 #
-# Service URLs use Docker's internal DNS so VAgent/RService can reach each other
-# by service name. Host ports are mapped 1:1 for browser access on localhost.
+# Two URL flavors per peer:
+#   --*-url            = server-to-server URL via Docker's internal DNS
+#   --*-public-url     = browser-visible URL via the host port mapping
+# RService 302s the browser to vagent-public-url; VAgent's Stage-4b reply
+# carries rservice-public-url. The "public" URLs must be reachable from
+# the host browser (localhost:<port>) — the docker-DNS names are not.
+#
+# --orion and the compiled model directory are not mounted here. To run
+# end-to-end with the compiled FHE model, override the vservice command
+# with `--orion /opt/orion` and mount your local
+# `models/out/logn16/` into the container at /opt/orion (see the commented
+# example below the vservice service). The default Phase-1 synthetic x²
+# circuit completes the protocol without the model.
 
 services:
   vservice:
@@ -15,6 +26,11 @@ services:
     ports:
       - "8080:8080"
     command: ["--addr", ":8080"]
+    # To run with the compiled Orion model, swap to:
+    #   command: ["--addr", ":8080", "--orion", "/opt/orion"]
+    # and add a volume mount:
+    #   volumes:
+    #     - ../models/out/logn16:/opt/orion:ro
 
   vagent:
     build:
@@ -30,6 +46,8 @@ services:
       - "http://vservice:8080"
       - "--rservice-url"
       - "http://rservice:8082"
+      - "--rservice-public-url"
+      - "http://localhost:8082"
     depends_on:
       - vservice
 
@@ -45,5 +63,7 @@ services:
       - ":8082"
       - "--vagent-url"
       - "http://vagent:8081"
+      - "--vagent-public-url"
+      - "http://localhost:8081"
     depends_on:
       - vagent

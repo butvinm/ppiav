@@ -39,9 +39,9 @@ func main() {
 		svc = vservice.New(params)
 	}
 
-	srv := vservice.NewServer(svc, *addr)
+	srv := vservice.NewServer(svc)
 	log.Printf("ppiav-vservice listening on %s (orion=%q)", *addr, *orionDir)
-	if err := srv.ListenAndServe(); err != nil {
+	if err := srv.ListenAndServe(*addr); err != nil {
 		fmt.Fprintf(os.Stderr, "ppiav-vservice: %v\n", err)
 		os.Exit(1)
 	}

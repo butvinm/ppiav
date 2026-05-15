@@ -40,7 +40,7 @@ func newHTTPFixture(t *testing.T) (
 	t.Helper()
 	params = smallParams(t)
 	svc = vservice.New(params)
-	vsvcSrv = httptest.NewServer(vservice.NewServer(svc, "").Handler())
+	vsvcSrv = httptest.NewServer(vservice.NewServer(svc).Handler())
 	t.Cleanup(vsvcSrv.Close)
 
 	a, err := New(params)
@@ -77,23 +77,22 @@ func postOctet(t *testing.T, base, path string, body []byte) *http.Response {
 }
 
 func TestHTTPVAgent_PostSessions_AllocatesSidAndRegisters(t *testing.T) {
-	vagent, vagentSrv, _, svc, agent, _ := newHTTPFixture(t)
-	_ = vagent
+	_, vagentSrv, _, svc, agent, _ := newHTTPFixture(t)
 
 	sid := openSessionViaHTTP(t, vagentSrv)
 
-	// VService must know the sid (StoreEvalKeys would 404 otherwise).
-	// Sidestep: VService's session table is private — but the agent's
-	// OpenSession registered the sid in the agent, and the only way the
-	// sid is non-empty is via vsvc.OpenSession. We verify both:
+	// Agent side: OpenSession must have registered the sid.
 	_, err := agent.session(sid)
 	require.NoError(t, err, "agent must have registered the sid")
 
-	// And in-process: the VService Service must have the sid in its table.
-	// We can't check the map directly; we can check by issuing a second
-	// open that should not collide (sids are random) and ensuring the
-	// in-process count is at least 2.
-	_ = svc
+	// VService side: StoreEvalKeys with a nil rlk succeeds for known sids
+	// (it only checks the sessions map) and 404s with "unknown session"
+	// otherwise. Using it as a probe avoids reflecting into the private
+	// sessions map.
+	require.NoError(t, svc.StoreEvalKeys(sid, nil, nil),
+		"vservice must have the sid registered (StoreEvalKeys is the probe)")
+	require.ErrorContains(t, svc.StoreEvalKeys("never-allocated", nil, nil),
+		"unknown session", "control: probe distinguishes registered sids")
 }
 
 func TestHTTPVAgent_PostSessions_RejectsGet(t *testing.T) {
@@ -118,6 +117,69 @@ func TestHTTPVAgent_PostSessions_VServiceUnreachableReturns5xx(t *testing.T) {
 	// F4a (VService unreachable Stage 1) — VAgent returns 5xx so RService
 	// surfaces 5xx to the user (DESIGN.md §`Failure modes`).
 	assert.GreaterOrEqual(t, resp.StatusCode, 500)
+}
+
+// Task 22 (review iteration): F4a — VService returns malformed JSON for
+// POST /sessions ⇒ VAgent surfaces 502 (DESIGN.md §`Failure modes`).
+func TestHTTPVAgent_PostSessions_VServiceBadJSONReturns502(t *testing.T) {
+	params := smallParams(t)
+	agent, err := New(params)
+	require.NoError(t, err)
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("{not json"))
+	}))
+	t.Cleanup(stub.Close)
+	srv := httptest.NewServer(NewServer(agent, stub.URL, "", "").Handler())
+	t.Cleanup(srv.Close)
+	resp, err := http.Post(srv.URL+"/sessions", "application/json", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadGateway, resp.StatusCode)
+}
+
+// Task 22 (review iteration): F4a — VService returns empty SessionID.
+func TestHTTPVAgent_PostSessions_VServiceEmptySidReturns502(t *testing.T) {
+	params := smallParams(t)
+	agent, err := New(params)
+	require.NoError(t, err)
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"SessionID":""}`))
+	}))
+	t.Cleanup(stub.Close)
+	srv := httptest.NewServer(NewServer(agent, stub.URL, "", "").Handler())
+	t.Cleanup(srv.Close)
+	resp, err := http.Post(srv.URL+"/sessions", "application/json", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadGateway, resp.StatusCode)
+}
+
+// Task 22 (review iteration): agent.OpenSession fails when the same sid
+// is registered twice. We force VService to hand out the same sid for
+// two consecutive calls and assert the second POST returns 500.
+func TestHTTPVAgent_PostSessions_AgentOpenSessionFailureReturns500(t *testing.T) {
+	params := smallParams(t)
+	agent, err := New(params)
+	require.NoError(t, err)
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"SessionID":"sid-duplicate"}`))
+	}))
+	t.Cleanup(stub.Close)
+	srv := httptest.NewServer(NewServer(agent, stub.URL, "", "").Handler())
+	t.Cleanup(srv.Close)
+
+	resp1, err := http.Post(srv.URL+"/sessions", "application/json", nil)
+	require.NoError(t, err)
+	resp1.Body.Close()
+	require.Equal(t, http.StatusOK, resp1.StatusCode)
+
+	resp2, err := http.Post(srv.URL+"/sessions", "application/json", nil)
+	require.NoError(t, err)
+	defer resp2.Body.Close()
+	require.Equal(t, http.StatusInternalServerError, resp2.StatusCode, "duplicate sid registration must 500")
 }
 
 func TestHTTPVAgent_GetParams_ProxiesToVService(t *testing.T) {
@@ -567,9 +629,13 @@ func TestHTTPVAgent_ResultSSE_DeliversBase64Ciphertext(t *testing.T) {
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	frame := string(body)
-	require.True(t, strings.HasPrefix(frame, "data: "), "frame must start with `data: `: %q", frame)
+	// The handler prepends `retry: …` to suppress EventSource auto-
+	// reconnects on stream close; the data frame follows.
+	require.Contains(t, frame, "retry: ", "frame must contain a retry hint: %q", frame)
+	require.Contains(t, frame, "data: ", "frame must contain a `data: ` event: %q", frame)
 	require.True(t, strings.HasSuffix(frame, "\n\n"), "SSE event separator missing: %q", frame)
-	encoded := strings.TrimSuffix(strings.TrimPrefix(frame, "data: "), "\n\n")
+	dataIdx := strings.Index(frame, "data: ")
+	encoded := strings.TrimSuffix(frame[dataIdx+len("data: "):], "\n\n")
 	decoded, err := base64.StdEncoding.DecodeString(encoded)
 	require.NoError(t, err)
 
@@ -594,16 +660,21 @@ func TestHTTPVAgent_ResultSSE_CancelledOnClientDisconnect(t *testing.T) {
 	require.NoError(t, err)
 	start := time.Now()
 	resp, err := http.DefaultClient.Do(req)
-	// Either the read finishes after server-side cancellation or the
-	// client surfaces a context error — both are acceptable.
+	// The handler streams a one-shot retry hint before the data event, so
+	// the client receives an empty (post-retry-hint) body when its context
+	// fires. We accept either: (a) the client gets a partial body and a
+	// timely close, or (b) the http client surfaces context.DeadlineExceeded.
 	if err == nil {
-		// Drain body so the connection can be cleanly closed.
-		_, _ = io.Copy(io.Discard, resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		// Only the `retry:` SSE comment frame should arrive — no `data:`
+		// event since the ciphertext channel was never deposited into.
+		assert.NotContains(t, string(body), "data: ",
+			"SSE handler must not emit a data event before cancellation")
+	} else {
+		assert.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
 	}
 	elapsed := time.Since(start)
-	// The handler must not hang past the cancel deadline by more than a
-	// generous margin (network jitter on httptest.Server).
 	require.Less(t, elapsed, 2*time.Second, "SSE handler did not exit on client disconnect")
 }
 
@@ -667,7 +738,7 @@ func newHTTPFixtureWithRService(t *testing.T) (
 	t.Helper()
 	params = smallParams(t)
 	svc = vservice.New(params)
-	vsvcSrv = httptest.NewServer(vservice.NewServer(svc, "").Handler())
+	vsvcSrv = httptest.NewServer(vservice.NewServer(svc).Handler())
 	t.Cleanup(vsvcSrv.Close)
 
 	a, err := New(params)
@@ -730,21 +801,23 @@ func TestHTTPVAgent_Image_HappyPath(t *testing.T) {
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode, "body=%s", readAll(t, resp.Body))
 
-	// SSE channel must now carry ct_M (capacity-1 buffer captured it).
+	// SSE channel must now carry ct_M (capacity-1 buffer captured it). We
+	// wait up to a second rather than using a `default:` branch — the
+	// image handler's storeAuthenticatedCt → ch <- ctM happens after the
+	// VService /image RPC returns, so there is a small async window.
 	ch, ok := agent.SessionAuthResult(sid)
 	require.True(t, ok)
 	select {
 	case ct := <-ch:
 		require.NotNil(t, ct)
-	default:
+	case <-time.After(time.Second):
 		t.Fatal("authResult channel empty after image POST")
 	}
 	// authenticatedCt cache must also be populated for the partial-decryption
 	// handler to retrieve.
-	ct, populated, ok := agent.SessionAuthenticatedCt(sid)
+	ct, ok := agent.SessionAuthenticatedCt(sid)
 	require.True(t, ok)
-	require.True(t, populated, "image handler must cache ct_M")
-	require.NotNil(t, ct)
+	require.NotNil(t, ct, "image handler must cache ct_M")
 }
 
 func TestHTTPVAgent_Image_UnknownSidReturns404(t *testing.T) {
@@ -763,6 +836,57 @@ func TestHTTPVAgent_Image_MalformedBodyReturns400(t *testing.T) {
 	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/image", []byte{0xff, 0xff, 0xff})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+// Task 22 (review iteration): image handler F4a coverage — VService /image
+// 500s ⇒ VAgent surfaces 502. We stub VService to fail only on /image
+// while still issuing valid sids on /sessions so the agent reaches the
+// image POST.
+func TestHTTPVAgent_Image_VServiceImageFailureReturns502(t *testing.T) {
+	params := smallParams(t)
+	var sidCount atomic.Int64
+	stubVSvc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/sessions" {
+			n := sidCount.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"SessionID":"sid-img-fail-` + strings.Repeat("a", int(n)) + `"}`))
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/image") {
+			http.Error(w, "vservice image down", http.StatusInternalServerError)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(stubVSvc.Close)
+
+	agent, err := New(params)
+	require.NoError(t, err)
+	rstub := newRServiceStub()
+	rsvcSrv := httptest.NewServer(rstub.handler())
+	t.Cleanup(rsvcSrv.Close)
+	vagentSrv := httptest.NewServer(NewServer(agent, stubVSvc.URL, rsvcSrv.URL, "").Handler())
+	t.Cleanup(vagentSrv.Close)
+
+	sid := openSessionViaHTTP(t, vagentSrv)
+	// Encrypt a valid-looking ciphertext under fresh keys so the handler
+	// reaches the VService forward step rather than failing earlier on
+	// MalformedBody.
+	kgen := rlwe.NewKeyGenerator(params.CKKS)
+	_, pk := kgen.GenKeyPairNew()
+	encoder := ckks.NewEncoder(params.CKKS)
+	encryptor := rlwe.NewEncryptor(params.CKKS, pk)
+	values := make([]float64, params.CKKS.MaxSlots())
+	pt := ckks.NewPlaintext(params.CKKS, params.CKKS.MaxLevel())
+	require.NoError(t, encoder.Encode(values, pt))
+	ct, err := encryptor.EncryptNew(pt)
+	require.NoError(t, err)
+	body, err := ct.MarshalBinary()
+	require.NoError(t, err)
+
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/image", body)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadGateway, resp.StatusCode, "body=%s", readAll(t, resp.Body))
 }
 
 func TestHTTPVAgent_Image_RejectsGet(t *testing.T) {
@@ -802,7 +926,7 @@ func TestHTTPVAgent_PartialDecryption_AcceptVerdict(t *testing.T) {
 	imgResp.Body.Close()
 
 	// Build VClient's partial-decryption share under sk_c against the cached ct_M.
-	ctM, _, ok := agent.SessionAuthenticatedCt(sid)
+	ctM, ok := agent.SessionAuthenticatedCt(sid)
 	require.True(t, ok)
 	require.NotNil(t, ctM)
 
@@ -817,20 +941,17 @@ func TestHTTPVAgent_PartialDecryption_AcceptVerdict(t *testing.T) {
 	pdBytes, err := protocol.PartialDecryption{Share: clientShare}.MarshalBinary()
 	require.NoError(t, err)
 
-	// Disable redirect following so we can observe the 302 directly.
-	client := &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-	req, err := http.NewRequest(http.MethodPost, vagentSrv.URL+"/sessions/"+string(sid)+"/partial-decryption", bytes.NewReader(pdBytes))
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/octet-stream")
-	resp, err := client.Do(req)
+	resp, err := http.Post(vagentSrv.URL+"/sessions/"+string(sid)+"/partial-decryption", "application/octet-stream", bytes.NewReader(pdBytes))
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	require.Equal(t, http.StatusFound, resp.StatusCode, "body=%s", readAll(t, resp.Body))
-	assert.Equal(t, rsvcSrv.URL+"/protected", resp.Header.Get("Location"))
+	respBody, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "body=%s", respBody)
+	var redirectBody struct {
+		Redirect string `json:"redirect"`
+	}
+	require.NoError(t, json.Unmarshal(respBody, &redirectBody))
+	assert.Equal(t, rsvcSrv.URL+"/protected", redirectBody.Redirect)
 
 	calls, gotSid, gotVerd := rstub.snapshot()
 	assert.Equal(t, 1, calls, "RService must receive exactly one callback")
@@ -861,7 +982,7 @@ func TestHTTPVAgent_PartialDecryption_TamperedShareReject(t *testing.T) {
 	require.Equal(t, http.StatusOK, imgResp.StatusCode)
 	imgResp.Body.Close()
 
-	ctM, _, ok := agent.SessionAuthenticatedCt(sid)
+	ctM, ok := agent.SessionAuthenticatedCt(sid)
 	require.True(t, ok)
 
 	// Build the share under a WRONG sk — Ver must reject.
@@ -877,20 +998,12 @@ func TestHTTPVAgent_PartialDecryption_TamperedShareReject(t *testing.T) {
 	pdBytes, err := protocol.PartialDecryption{Share: clientShare}.MarshalBinary()
 	require.NoError(t, err)
 
-	client := &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-	req, err := http.NewRequest(http.MethodPost, vagentSrv.URL+"/sessions/"+string(sid)+"/partial-decryption", bytes.NewReader(pdBytes))
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/octet-stream")
-	resp, err := client.Do(req)
+	resp, err := http.Post(vagentSrv.URL+"/sessions/"+string(sid)+"/partial-decryption", "application/octet-stream", bytes.NewReader(pdBytes))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	// A clean Ver=false finalize is reported as Reject (no error); per
-	// docs/DESIGN.md the callback runs and the redirect is issued.
-	require.Equal(t, http.StatusFound, resp.StatusCode, "body=%s", readAll(t, resp.Body))
+	// docs/DESIGN.md the callback runs and a redirect URL is returned.
+	require.Equal(t, http.StatusOK, resp.StatusCode, "body=%s", readAll(t, resp.Body))
 
 	calls, _, gotVerd := rstub.snapshot()
 	assert.Equal(t, 1, calls)
@@ -961,6 +1074,52 @@ func TestHTTPVAgent_PartialDecryption_BeforeImageRejects(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// Task 22 (review iteration): RService callback failures must surface as
+// 502 even on a clean Accept finalize. The Stage-4b callback is fire-and-
+// matters: an upstream RService 5xx blocks the redirect.
+func TestHTTPVAgent_PartialDecryption_CallbackFailureReturns502(t *testing.T) {
+	vagentSrv, _, _, agent, rstub, _, params := newHTTPFixtureWithRService(t)
+	rstub.mu.Lock()
+	rstub.failStatus = http.StatusInternalServerError
+	rstub.mu.Unlock()
+	sid := openSessionViaHTTP(t, vagentSrv)
+	stub := newVClientStub(t, params, sid)
+
+	_, jointPK := runFullKeygenViaHTTPThenStore(t, vagentSrv.URL, sid, stub, agent, params)
+
+	encoder := ckks.NewEncoder(params.CKKS)
+	encryptor := rlwe.NewEncryptor(params.CKKS, jointPK)
+	values := make([]float64, params.CKKS.MaxSlots())
+	values[0] = 0.8366600265340756
+	pt := ckks.NewPlaintext(params.CKKS, params.CKKS.MaxLevel())
+	require.NoError(t, encoder.Encode(values, pt))
+	inputCt, err := encryptor.EncryptNew(pt)
+	require.NoError(t, err)
+	inputBytes, err := inputCt.MarshalBinary()
+	require.NoError(t, err)
+	imgResp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/image", inputBytes)
+	require.Equal(t, http.StatusOK, imgResp.StatusCode)
+	imgResp.Body.Close()
+
+	ctM, ok := agent.SessionAuthenticatedCt(sid)
+	require.True(t, ok)
+	clientProto, err := multiparty.NewKeySwitchProtocol(params.CKKS, ring.DiscreteGaussian{
+		Sigma: params.FloodSigma,
+		Bound: 6 * params.FloodSigma,
+	})
+	require.NoError(t, err)
+	zeroSk := rlwe.NewSecretKey(params.CKKS)
+	clientShare := clientProto.AllocateShare(ctM.Level())
+	clientProto.GenShare(stub.skC, zeroSk, ctM, &clientShare)
+	pdBytes, err := protocol.PartialDecryption{Share: clientShare}.MarshalBinary()
+	require.NoError(t, err)
+
+	resp, err := http.Post(vagentSrv.URL+"/sessions/"+string(sid)+"/partial-decryption", "application/octet-stream", bytes.NewReader(pdBytes))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadGateway, resp.StatusCode, "body=%s", readAll(t, resp.Body))
+}
+
 func TestHTTPVAgent_PartialDecryption_RejectsGet(t *testing.T) {
 	vagentSrv, _, _, _, _, _, _ := newHTTPFixtureWithRService(t)
 	sid := openSessionViaHTTP(t, vagentSrv)
@@ -1018,6 +1177,8 @@ func TestHTTPVAgent_VClientDist_ReturnsJS(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
+	// Go's http.FileServer sniffs Content-Type from the .js extension.
+	assert.Contains(t, resp.Header.Get("Content-Type"), "javascript")
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	assert.NotEmpty(t, body)
@@ -1030,6 +1191,7 @@ func TestHTTPVAgent_WasmExecJS_ReturnsJS(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, resp.Header.Get("Content-Type"), "javascript")
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	assert.NotEmpty(t, body)

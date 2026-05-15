@@ -18,9 +18,18 @@ func newTestServer() *Server {
 }
 
 // newTestServerWithVAgent returns a Server pointed at the given URL — used
-// to drive the Stage-1 redirect against an httptest VAgent stub.
+// to drive the Stage-1 redirect against an httptest VAgent stub. The
+// browser-visible vagentPublicURL is left empty so it falls back to
+// vagentURL — preserving the localhost test flow.
 func newTestServerWithVAgent(vagentURL string) *Server {
 	return NewServer(New(), vagentURL, "")
+}
+
+// newTestServerWithVAgentPublic exposes a different browser-visible URL
+// from the server-to-server URL, mirroring the docker-compose deployment
+// case.
+func newTestServerWithVAgentPublic(vagentURL, vagentPublicURL string) *Server {
+	return NewServer(New(), vagentURL, vagentPublicURL)
 }
 
 func TestHTTPGetProtected_CookieAccept(t *testing.T) {
@@ -135,6 +144,16 @@ func TestHTTPCallback_UnknownVerdictReturns400(t *testing.T) {
 	assert.NotEmpty(t, body.Error)
 }
 
+// Task 22 (review iteration): empty body on /api/callback ⇒ 400.
+func TestHTTPCallback_EmptyBodyReturns400(t *testing.T) {
+	srv := newTestServer()
+	req := httptest.NewRequest(http.MethodPost, "/api/callback/sid-empty", bytes.NewReader(nil))
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Equal(t, protocol.VerdictUnknown, srv.svc.CheckAccess("sid-empty"))
+}
+
 func TestHTTPCallback_RejectsGet(t *testing.T) {
 	srv := newTestServer()
 
@@ -199,6 +218,8 @@ func TestHTTPRClientDist_ReturnsJS(t *testing.T) {
 	srv.Handler().ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
+	// Go's http.FileServer sniffs Content-Type from the .js extension.
+	assert.Contains(t, w.Header().Get("Content-Type"), "javascript")
 	assert.NotEmpty(t, w.Body.Bytes())
 }
 
@@ -309,6 +330,40 @@ func TestHTTPGetProtected_NoCookieVAgentEmptySid_NoSetCookie(t *testing.T) {
 	require.GreaterOrEqual(t, w.Code, 500)
 	require.Less(t, w.Code, 600)
 	assert.Empty(t, w.Result().Cookies())
+}
+
+// Task 22 (review iteration): NewServer must trim trailing slashes on
+// vagentURL and vagentPublicURL so a `--vagent-url http://localhost:8081/`
+// flag does not produce a `//sessions` URL on the wire. Mirrors the
+// equivalent TrimRight in vagent.NewServer.
+func TestNewServerTrimsTrailingSlash(t *testing.T) {
+	srv := NewServer(New(), "http://vagent.local/", "http://public.local/")
+	assert.Equal(t, "http://vagent.local", srv.vagentURL)
+	assert.Equal(t, "http://public.local", srv.vagentPublicURL)
+}
+
+// Task 22: when vagentPublicURL differs from vagentURL, the redirect
+// Location must point at the public URL (browser-visible) and the
+// server-to-server POST must hit vagentURL.
+func TestHTTPGetProtected_UsesPublicURLInRedirect(t *testing.T) {
+	var calls int
+	vagent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(protocol.VerificationSession{SessionID: "sid-pub"})
+	}))
+	defer vagent.Close()
+
+	const browserURL = "http://browser.local:9999"
+	srv := newTestServerWithVAgentPublic(vagent.URL, browserURL)
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusFound, w.Code)
+	assert.Equal(t, 1, calls)
+	// Redirect must point at the public URL, not the docker-internal URL.
+	assert.Equal(t, browserURL+"/verify?sid=sid-pub", w.Header().Get("Location"))
 }
 
 func TestHTTPCallback_FollowedByProtected(t *testing.T) {
