@@ -81,7 +81,7 @@ When deploying behind a reverse proxy or in Docker, pass `--rservice-public-url`
 
 Browser flow: open `http://localhost:8082/protected`. RService 302s to VAgent's `/verify?sid=...`, the VClient SPA loads, upload an image, and on completion the SPA reads the JSON `{redirect: …}` reply from VAgent and navigates back to `/protected` with the verdict (Accept or Reject).
 
-For WASM debugging open the browser console: `globalThis.lattigo` and `globalThis.ppiav` expose the underlying CKKS and vclient namespaces.
+For WASM debugging open the browser console: `globalThis.ppiav` is the SPA bridge actually consumed by main.ts; `globalThis.lattigo` is registered for low-level CKKS debugging (not used by the Phase-3 SPAs).
 
 ## Training and evaluation
 

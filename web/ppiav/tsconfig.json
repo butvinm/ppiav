@@ -8,11 +8,7 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "noEmit": true,
-    "baseUrl": ".",
-    "paths": {
-      "@": ["ts/*"]
-    }
+    "noEmit": true
   },
   "include": ["ts/**/*.ts"]
 }

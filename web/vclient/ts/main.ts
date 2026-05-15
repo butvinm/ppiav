@@ -85,7 +85,7 @@ function unwrapBytes(v: Uint8Array | ErrorResult, op: string): Uint8Array {
 }
 
 function unwrapVoid(v: null | ErrorResult, op: string): void {
-  if (v !== null && isError(v)) {
+  if (isError(v)) {
     throw new Error("ppiav." + op + ": " + v.error);
   }
 }
@@ -171,16 +171,14 @@ async function fetchParams(sid: string): Promise<string> {
   return await resp.text();
 }
 
-async function postBinary(
-  url: string,
-  body: Uint8Array,
-  init?: { redirect?: RequestRedirect },
-): Promise<Response> {
+async function postBinary(url: string, body: Uint8Array): Promise<Response> {
+  // new Uint8Array(body) coerces Uint8Array<ArrayBufferLike> (the WASM
+  // bridge's return type) into the Uint8Array<ArrayBuffer> that Fetch
+  // BodyInit accepts under TS 5.9+.
   return await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/octet-stream" },
     body: new Uint8Array(body),
-    redirect: init?.redirect ?? "follow",
   });
 }
 
@@ -318,11 +316,18 @@ async function runProtocol(
   // `{"redirect": "<url>"}`. JSON 200 (rather than 302) is intentional —
   // see the file header for the spec-level rationale.
   setProgress("Stage 4b: Submitting partial decryption...");
-  const resp = await fetch("/sessions/" + sid + "/partial-decryption", {
-    method: "POST",
-    headers: { "Content-Type": "application/octet-stream" },
-    body: new Uint8Array(partial),
-  });
+  const redirect = await postPartialDecryption(sid, partial);
+  window.location.assign(redirect);
+}
+
+// postPartialDecryption returns the `redirect` URL from VAgent's JSON 200
+// reply. Distinct from `postBinary` because the response is JSON, not
+// Uint8Array — see the file header for why we don't use a 302.
+async function postPartialDecryption(
+  sid: string,
+  partial: Uint8Array,
+): Promise<string> {
+  const resp = await postBinary("/sessions/" + sid + "/partial-decryption", partial);
   if (!resp.ok) {
     const text = await resp.text();
     throw new Error("partial-decryption: HTTP " + resp.status + " " + text);
@@ -334,7 +339,7 @@ async function runProtocol(
         JSON.stringify(body),
     );
   }
-  window.location.assign(body.redirect);
+  return body.redirect;
 }
 
 async function main(): Promise<void> {

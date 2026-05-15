@@ -9,11 +9,7 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "outDir": "./dist",
-    "rootDir": "./ts",
-    "baseUrl": ".",
-    "paths": {
-      "@ppiav/*": ["../ppiav/ts/*"]
-    }
+    "rootDir": "./ts"
   },
   "include": ["ts/**/*.ts"]
 }

@@ -23,7 +23,7 @@ Phase 1 (multi-party CKKS + synthetic `x²` + MPD-Auth), Phase 2 (Orion-compiled
 
 - **Go**: simple, idiomatic, minimal comments. Comments only where the _why_ is non-obvious. No multi-paragraph docstrings.
 - **Python**: uv for environments — always activate the venv before any pip/python command. Never install deps to system Python. ruff format + lint, mypy strict.
-- **TypeScript** (Phase 3 SPAs in `web/vclient/`, `web/rclient/`, `web/ppiav/`): tsc strict, ES2022 target, DOM lib, no bundler — browsers load `dist/*.js` directly via ES module imports. Each SPA has a `package.json` declaring only `typescript` as a devDep; build with `npm run build` (== `tsc`). No emoji, no decorative comments. Type the raw `globalThis.ppiav` / `globalThis.lattigo` bridge inline in `main.ts` rather than importing wrappers — keeps the dist/main.js dependency surface to local relatives only.
+- **TypeScript** (Phase 3 SPAs in `web/vclient/`, `web/rclient/`, `web/ppiav/`): tsc strict, ES2022 target, DOM lib, no bundler — browsers load `dist/*.js` directly via ES module imports. Each SPA has a `package.json` declaring only `typescript` as a devDep; `web/vclient/` and `web/rclient/` build with `npm run build` (== `tsc`). `web/ppiav/` has no JS emit (the bridge ships as Go-compiled WASM) — its `npm run typecheck` runs `tsc` against the TS surface types. No emoji, no decorative comments. Type the raw `globalThis.ppiav` / `globalThis.lattigo` bridge inline in `main.ts` rather than importing wrappers — keeps the dist/main.js dependency surface to local relatives only.
 - **Atomic commits**: stage specific files (`git add path/to/file`), never `git add .`. Clear, concrete commit messages.
 
 ## Build system (Phase 3)
