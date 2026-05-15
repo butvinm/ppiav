@@ -26,6 +26,7 @@ import (
 type Server struct {
 	agent       *Agent
 	vserviceURL string
+	rserviceURL string
 	addr        string
 	httpClient  *http.Client
 	mux         *http.ServeMux
@@ -34,15 +35,19 @@ type Server struct {
 // NewServer wires a Server around `agent`. `vserviceURL` is the base URL
 // of the VService HTTP server (e.g., `http://localhost:8080`) — used both
 // for the Stage-1 `POST /sessions` proxy and for forwarding `InferEvalKeys`
-// at the end of Stage 2d. `addr` is forwarded verbatim to http.Server.Addr.
+// at the end of Stage 2d. `rserviceURL` is the base URL of the RService
+// HTTP server (e.g., `http://localhost:8082`) — used by the Stage-4b
+// verdict callback added in Task 7. `addr` is forwarded verbatim to
+// http.Server.Addr.
 //
 // The constructor is named `NewServer` (not `New`) to avoid shadowing the
 // existing `vagent.New(params)` Agent constructor — same convention as
 // `vservice.NewServer` and `rservice.NewServer`.
-func NewServer(agent *Agent, vserviceURL, addr string) *Server {
+func NewServer(agent *Agent, vserviceURL, rserviceURL, addr string) *Server {
 	s := &Server{
 		agent:       agent,
 		vserviceURL: strings.TrimRight(vserviceURL, "/"),
+		rserviceURL: strings.TrimRight(rserviceURL, "/"),
 		addr:        addr,
 		httpClient:  &http.Client{},
 		mux:         http.NewServeMux(),

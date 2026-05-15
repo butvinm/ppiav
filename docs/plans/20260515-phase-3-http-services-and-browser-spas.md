@@ -431,14 +431,14 @@ Scope notes:
 
 - Create: `cmd/ppiav-vagent/main.go`
 
-- [ ] create `cmd/ppiav-vagent/main.go` with flags: `--addr` (default `:8081`), `--vservice-url` (required, e.g., `http://localhost:8080`), `--orion` (Phase 2+, pass to VAgent `New` if set)
-- [ ] implement main: parse flags, load params (same --orion semantics as VService), construct `vagent.Agent` with forward to VService (via `DoSessionOpen` pattern — need to call VService `POST /sessions` to get sid, then `agent.OpenSession(sid)`), construct `vagent.New(agent, vserviceURL, addr)`, call `ListenAndServe()`
-- [ ] keep `vservice.OpenSession()` and `agent.OpenSession(sid)` separate (no new VAgent method). Stage-1 flow is: RService → VAgent `POST /sessions` handler → handler calls VService `POST /sessions` for sid → handler calls `agent.OpenSession(sid)` to register → returns `VerificationSession`. HTTP handler `/verify?sid` assumes sid already exists (came from the Stage-1 redirect).
-- [ ] implement `main.go` to not call `agent.OpenSession` in init; VService sid creation happens dynamically via RService → VAgent → VService flow (see DESIGN.md §`Protocol` Stage 1)
-- [ ] verify binary compiles: `go build ./cmd/ppiav-vagent`
-- [ ] add `--rservice-url` flag to `cmd/ppiav-vagent/main.go` (needed for the verdict callback in Task 7), set `vagent` Server `rserviceURL` field from it
-- [ ] manually smoke-test: start VAgent → curl `http://localhost:8081/sessions/12345/params` → verify params JSON returned (proxy test)
-- [ ] run tests — verify existing unit tests still green: `go test ./internal/vagent/... ./internal/vservice/... ./internal/rservice/...`
+- [x] create `cmd/ppiav-vagent/main.go` with flags: `--addr` (default `:8081`), `--vservice-url` (required, e.g., `http://localhost:8080`), `--orion` (Phase 2+, pass to VAgent `New` if set)
+- [x] implement main: parse flags, load params (same --orion semantics as VService), construct `vagent.Agent` with forward to VService (via `DoSessionOpen` pattern — need to call VService `POST /sessions` to get sid, then `agent.OpenSession(sid)`), construct `vagent.New(agent, vserviceURL, addr)`, call `ListenAndServe()`
+- [x] keep `vservice.OpenSession()` and `agent.OpenSession(sid)` separate (no new VAgent method). Stage-1 flow is: RService → VAgent `POST /sessions` handler → handler calls VService `POST /sessions` for sid → handler calls `agent.OpenSession(sid)` to register → returns `VerificationSession`. HTTP handler `/verify?sid` assumes sid already exists (came from the Stage-1 redirect).
+- [x] implement `main.go` to not call `agent.OpenSession` in init; VService sid creation happens dynamically via RService → VAgent → VService flow (see DESIGN.md §`Protocol` Stage 1)
+- [x] verify binary compiles: `go build ./cmd/ppiav-vagent`
+- [x] add `--rservice-url` flag to `cmd/ppiav-vagent/main.go` (needed for the verdict callback in Task 7), set `vagent` Server `rserviceURL` field from it (added `rserviceURL` field to `vagent.Server` struct and 4th param to `NewServer`; existing http_test.go callers updated to pass `""`)
+- [x] manually smoke-test: start VAgent → curl `http://localhost:8081/sessions/12345/params` → verify params JSON returned (proxy test) — verified live: `POST /sessions` returns sid JSON, `GET /sessions/test-sid/params` proxies CKKS JSON from VService
+- [x] run tests — verify existing unit tests still green: `go test ./internal/vagent/... ./internal/vservice/... ./internal/rservice/...` (TestFinalizeRejectsZeroLogit pre-existing failure, unrelated to Task 5)
 
 ### Task 6: Add SSE result streaming to `internal/vagent/http.go` (Stage 4a first half)
 

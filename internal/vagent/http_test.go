@@ -40,7 +40,7 @@ func newHTTPFixture(t *testing.T) (
 	require.NoError(t, err)
 	agent = a
 
-	vagent = NewServer(agent, vsvcSrv.URL, "")
+	vagent = NewServer(agent, vsvcSrv.URL, "", "")
 	vagentSrv = httptest.NewServer(vagent.Handler())
 	t.Cleanup(vagentSrv.Close)
 	return
@@ -102,7 +102,7 @@ func TestHTTPVAgent_PostSessions_VServiceUnreachableReturns5xx(t *testing.T) {
 	agent, err := New(params)
 	require.NoError(t, err)
 	// Point the agent at a dead URL so its outbound POST fails.
-	srv := httptest.NewServer(NewServer(agent, "http://127.0.0.1:1/", "").Handler())
+	srv := httptest.NewServer(NewServer(agent, "http://127.0.0.1:1/", "", "").Handler())
 	t.Cleanup(srv.Close)
 
 	resp, err := http.Post(srv.URL+"/sessions", "application/json", nil)
@@ -442,7 +442,7 @@ func TestHTTPVAgent_GKSShares_VServiceForwardFailure(t *testing.T) {
 
 	agent, err := New(params)
 	require.NoError(t, err)
-	vagentSrv := httptest.NewServer(NewServer(agent, stubVSvc.URL, "").Handler())
+	vagentSrv := httptest.NewServer(NewServer(agent, stubVSvc.URL, "", "").Handler())
 	t.Cleanup(vagentSrv.Close)
 
 	sid := openSessionViaHTTP(t, vagentSrv)
