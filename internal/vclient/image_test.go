@@ -2,6 +2,7 @@ package vclient
 
 import (
 	"math"
+	"os"
 	"testing"
 
 	"github.com/butvinm/ppiav/internal/authenticator"
@@ -12,6 +13,17 @@ import (
 	"github.com/tuneinsight/lattigo/v6/ring"
 	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
 )
+
+// requireHeavy skips the test unless PPIAV_RUN_HEAVY=1 is set. LogN=15
+// tests allocate enough working memory to OOM modest dev boxes; gating them
+// keeps the default `go test ./...` runnable locally while preserving full
+// coverage on the VPS / CI where PPIAV_RUN_HEAVY=1 is set.
+func requireHeavy(t *testing.T) {
+	t.Helper()
+	if os.Getenv("PPIAV_RUN_HEAVY") != "1" {
+		t.Skip("skipping LogN=15 heavy test; set PPIAV_RUN_HEAVY=1 to enable")
+	}
+}
 
 // imageParams is the LogN=15 profile used for the image round-trip test:
 // N/2 = 16384 slots ≥ ImageLen=12288. The smallParams() LogN=14 profile
@@ -66,6 +78,7 @@ func TestEncryptImageRequiresAggregatePK(t *testing.T) {
 }
 
 func TestEncryptImageRoundTripsUnderJointSk(t *testing.T) {
+	requireHeavy(t)
 	params := imageParams(t)
 	c, err := New(params, protocol.SessionID("img-sid-3"))
 	require.NoError(t, err)

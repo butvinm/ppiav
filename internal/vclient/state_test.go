@@ -22,6 +22,7 @@ import (
 // ciphertexts are NOT bit-for-bit identical; plaintext equivalence under
 // the joint sk is the strongest guarantee.
 func TestExportStateRoundTripEncrypt(t *testing.T) {
+	requireHeavy(t)
 	params := imageParams(t)
 	sid := protocol.SessionID("export-encrypt-sid")
 	a, err := New(params, sid)
