@@ -23,20 +23,40 @@ import (
 //
 // The authKey is single-use: regardless of the verdict, the session entry
 // is dropped after this call so a replay cannot reuse the same authKey.
+//
+// Production wrapper around FinalizeDecryptionVerbose: discards the
+// decoded slot vector. The bench `finalize` subcommand calls Verbose
+// directly to expose noise-per-slot for the eval pipeline.
 func (a *Agent) FinalizeDecryption(
 	sid protocol.SessionID,
 	authenticatedCt *rlwe.Ciphertext,
 	clientShare multiparty.KeySwitchShare,
 ) (protocol.Verdict, error) {
+	verdict, _, err := a.FinalizeDecryptionVerbose(sid, authenticatedCt, clientShare)
+	return verdict, err
+}
+
+// FinalizeDecryptionVerbose is the sibling that additionally returns the
+// decoded slot vector (length = params.CKKS.MaxSlots()) alongside the
+// verdict. Same semantics as FinalizeDecryption: single source of truth
+// for joint-decrypt + Ver, single-use authKey eviction, identical error
+// paths. The slot vector is the post-keyswitch decoded plaintext under
+// the zero sk; benchmarks compute noise_per_slot = slots[i] - ref_logit
+// over non-S slots.
+func (a *Agent) FinalizeDecryptionVerbose(
+	sid protocol.SessionID,
+	authenticatedCt *rlwe.Ciphertext,
+	clientShare multiparty.KeySwitchShare,
+) (protocol.Verdict, []float64, error) {
 	if authenticatedCt == nil {
-		return protocol.VerdictReject, fmt.Errorf("vagent: FinalizeDecryption authenticatedCt is nil")
+		return protocol.VerdictReject, nil, fmt.Errorf("vagent: FinalizeDecryption authenticatedCt is nil")
 	}
 
 	a.mu.Lock()
 	sess, err := a.sessionLocked(sid)
 	a.mu.Unlock()
 	if err != nil {
-		return protocol.VerdictReject, err
+		return protocol.VerdictReject, nil, err
 	}
 	// `sess.skShare` is populated by OpenSession; a nil here would be an
 	// invariant violation, not a runtime error.
@@ -60,7 +80,7 @@ func (a *Agent) FinalizeDecryption(
 	// never observes both VAgent's share and the recovered plaintext.
 	proto, err := multiparty.NewKeySwitchProtocol(a.params.CKKS, ring.DiscreteGaussian{Sigma: 0, Bound: 0})
 	if err != nil {
-		return protocol.VerdictReject, fmt.Errorf("vagent: build KeySwitchProtocol: %w", err)
+		return protocol.VerdictReject, nil, fmt.Errorf("vagent: build KeySwitchProtocol: %w", err)
 	}
 
 	zeroSk := rlwe.NewSecretKey(a.params.CKKS)
@@ -69,7 +89,7 @@ func (a *Agent) FinalizeDecryption(
 
 	combined := proto.AllocateShare(authenticatedCt.Level())
 	if err := proto.AggregateShares(clientShare, agentShare, &combined); err != nil {
-		return protocol.VerdictReject, fmt.Errorf("vagent: aggregate KeySwitch shares: %w", err)
+		return protocol.VerdictReject, nil, fmt.Errorf("vagent: aggregate KeySwitch shares: %w", err)
 	}
 
 	// Key-switch the ciphertext from (sk_c, sk_a) to (0, 0). Output decrypts
@@ -83,15 +103,15 @@ func (a *Agent) FinalizeDecryption(
 	dec := rlwe.NewDecryptor(a.params.CKKS, zeroSk)
 	slots := make([]float64, a.params.CKKS.MaxSlots())
 	if err := a.encoder.Decode(dec.DecryptNew(ksOut), slots); err != nil {
-		return protocol.VerdictReject, fmt.Errorf("vagent: decode plaintext: %w", err)
+		return protocol.VerdictReject, nil, fmt.Errorf("vagent: decode plaintext: %w", err)
 	}
 
 	m, ok := a.auth.Ver(sess.authKey, slots)
 	if !ok {
-		return protocol.VerdictReject, nil
+		return protocol.VerdictReject, slots, nil
 	}
 	if m > 0 {
-		return protocol.VerdictAccept, nil
+		return protocol.VerdictAccept, slots, nil
 	}
-	return protocol.VerdictReject, nil
+	return protocol.VerdictReject, slots, nil
 }

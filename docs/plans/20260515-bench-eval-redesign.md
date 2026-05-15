@@ -244,12 +244,12 @@ Stratified: exactly 5 entries with `label=0` (minors) and 5 with `label=1` (adul
 - Modify: `/home/butvinm/Dev/ppiav/internal/vagent/finalize.go`
 - Modify: `/home/butvinm/Dev/ppiav/internal/vagent/finalize_test.go`
 
-- [ ] add `FinalizeDecryptionVerbose(sid, authCt, clientShare) (Verdict, []float64, error)` returning the decoded plaintext vector alongside the verdict
-- [ ] refactor existing `FinalizeDecryption` to call `FinalizeDecryptionVerbose` and discard the slots — keeps single source of truth for the joint-decrypt + Ver inner path
-- [ ] both methods preserve the session-eviction behaviour (eviction stays in the shared inner path)
-- [ ] write test verifying `FinalizeDecryptionVerbose` returns the same verdict as `FinalizeDecryption` AND a non-nil non-empty `[]float64` of length `params.CKKS.MaxSlots()`
-- [ ] write test verifying noise_per_slot at non-S indices has small magnitude (e.g. < 0.1) when the input is a fresh honest authenticated ciphertext
-- [ ] run `go test ./internal/vagent/...` — must pass before next task
+- [x] add `FinalizeDecryptionVerbose(sid, authCt, clientShare) (Verdict, []float64, error)` returning the decoded plaintext vector alongside the verdict
+- [x] refactor existing `FinalizeDecryption` to call `FinalizeDecryptionVerbose` and discard the slots — keeps single source of truth for the joint-decrypt + Ver inner path
+- [x] both methods preserve the session-eviction behaviour (eviction stays in the shared inner path)
+- [x] write test verifying `FinalizeDecryptionVerbose` returns the same verdict as `FinalizeDecryption` AND a non-nil non-empty `[]float64` of length `params.CKKS.MaxSlots()`
+- [x] write test verifying noise_per_slot at non-S indices has small magnitude (e.g. < 0.1) when the input is a fresh honest authenticated ciphertext
+- [x] run `go test ./internal/vagent/...` — must pass before next task
 
 ### Task 3: VAgent state export/import
 

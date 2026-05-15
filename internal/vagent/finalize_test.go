@@ -1,6 +1,7 @@
 package vagent
 
 import (
+	"math"
 	"testing"
 
 	"github.com/butvinm/ppiav/internal/protocol"
@@ -168,4 +169,90 @@ func TestFinalizeRejectsNilCt(t *testing.T) {
 	require.NoError(t, err)
 	_, err = a.FinalizeDecryption(protocol.SessionID("nope"), nil, multiparty.KeySwitchShare{})
 	require.Error(t, err)
+}
+
+// runFinalizeVerboseWith mirrors runFinalizeWith but invokes the Verbose
+// variant so callers can inspect the decoded slot vector. The setup is
+// duplicated rather than refactored because the test wants direct access
+// to the authKey for noise-slot indexing — adding an out-parameter to
+// runFinalizeWith would noise up the existing tests.
+func runFinalizeVerboseWith(t *testing.T, m float64) (protocol.Verdict, []float64, protocol.Params, []int, error) {
+	t.Helper()
+	params := smallParams(t)
+	a, err := New(params)
+	require.NoError(t, err)
+	sid := protocol.SessionID("fin-verbose-sid")
+	require.NoError(t, a.OpenSession(sid))
+	stub := newVClientStub(t, params, sid)
+	_, _, _ = runFullKeygen(t, a, sid, stub)
+	sess := agentState(t, a, sid)
+	// Snapshot the S set before FinalizeDecryptionVerbose evicts the session.
+	sCopy := append([]int(nil), sess.authKey.S...)
+
+	encoder := ckks.NewEncoder(params.CKKS)
+	encryptor := rlwe.NewEncryptor(params.CKKS, sess.pkAgg)
+	values := make([]float64, params.CKKS.MaxSlots())
+	values[0] = m
+	pt := ckks.NewPlaintext(params.CKKS, params.CKKS.MaxLevel())
+	require.NoError(t, encoder.Encode(values, pt))
+	resultCt, err := encryptor.EncryptNew(pt)
+	require.NoError(t, err)
+
+	ctM, err := a.BuildAuthenticatedCt(sid, resultCt)
+	require.NoError(t, err)
+
+	clientProto, err := multiparty.NewKeySwitchProtocol(params.CKKS, ring.DiscreteGaussian{
+		Sigma: params.FloodSigma,
+		Bound: 6 * params.FloodSigma,
+	})
+	require.NoError(t, err)
+	zeroSk := rlwe.NewSecretKey(params.CKKS)
+	clientShare := clientProto.AllocateShare(ctM.Level())
+	clientProto.GenShare(stub.skC, zeroSk, ctM, &clientShare)
+
+	verdict, slots, err := a.FinalizeDecryptionVerbose(sid, ctM, clientShare)
+	return verdict, slots, params, sCopy, err
+}
+
+// FinalizeDecryptionVerbose must return the same verdict as
+// FinalizeDecryption (single-source inner path) AND a fully populated
+// slot vector at params.CKKS.MaxSlots() length.
+func TestFinalizeVerboseReturnsSlotsAndMatchesVerdict(t *testing.T) {
+	verdict, slots, params, _, err := runFinalizeVerboseWith(t, 0.7)
+	require.NoError(t, err)
+	assert.Equal(t, protocol.VerdictAccept, verdict, "positive m must Accept")
+	require.NotNil(t, slots)
+	assert.Len(t, slots, params.CKKS.MaxSlots(), "slot vector must span every CKKS slot")
+
+	rejVerdict, rejSlots, _, _, err := runFinalizeVerboseWith(t, -0.3)
+	require.NoError(t, err)
+	assert.Equal(t, protocol.VerdictReject, rejVerdict, "negative m must Reject")
+	require.NotNil(t, rejSlots)
+}
+
+// On a fresh honest authenticated ciphertext, the post-decode plaintext
+// at non-S slots should track the broadcast logit m to ≪ 0.1 absolute
+// error. This pins the eval pipeline's noise-per-slot baseline: anything
+// > 0.1 here on a clean run would indicate a regression in keyswitch /
+// flooding / Auth.
+func TestFinalizeVerboseNoiseAtNonSSlotsIsSmall(t *testing.T) {
+	m := 0.7
+	verdict, slots, params, sIdx, err := runFinalizeVerboseWith(t, m)
+	require.NoError(t, err)
+	require.Equal(t, protocol.VerdictAccept, verdict)
+	require.NotNil(t, slots)
+
+	lambda := params.Authenticator.Lambda
+	inS := buildSSet(sIdx, lambda)
+	// Non-S slot count = Lambda/2; check every one against m.
+	checked := 0
+	for i := 0; i < lambda; i++ {
+		if inS[i] {
+			continue
+		}
+		assert.Less(t, math.Abs(slots[i]-m), 0.1,
+			"non-S slot %d: |%f - %f| must be small under honest flooding", i, slots[i], m)
+		checked++
+	}
+	assert.Equal(t, lambda/2, checked, "must inspect exactly Lambda/2 non-S slots")
 }
