@@ -21,6 +21,16 @@
 // object — we unwrap inline.
 
 import { preprocessImage } from "./preprocess.js";
+import {
+  ProgressTracker,
+  type StepHandle,
+  type StepSpec,
+} from "./progress.js";
+import {
+  postBinaryFetch,
+  postBinaryFetchJSON,
+  postBinaryXHR,
+} from "./net.js";
 
 // wasm_exec.js installs this constructor on globalThis once loaded.
 interface GoRuntime {
@@ -68,6 +78,10 @@ declare global {
 const WASM_URL = "/ppiav.wasm";
 const READY_TIMEOUT_MS = 10_000;
 const READY_POLL_MS = 20;
+// XHR threshold: bodies larger than this go through XMLHttpRequest so the
+// upload bar can be driven by upload.onprogress. Below this, plain fetch
+// fills the bar to 100% on resolve — the byte total is still shown.
+const XHR_THRESHOLD = 1024 * 1024;
 
 function isError(v: unknown): v is ErrorResult {
   return (
@@ -90,22 +104,16 @@ function unwrapVoid(v: null | ErrorResult, op: string): void {
   }
 }
 
-function setStatus(msg: string): void {
+function setStatus(msg: string, error = false): void {
   const el = document.getElementById("status");
   if (el !== null) {
     el.textContent = msg;
-  }
-}
-
-function setProgress(msg: string): void {
-  const el = document.getElementById("progress");
-  if (el !== null) {
-    el.textContent = msg;
+    el.classList.toggle("error", error);
   }
 }
 
 function showError(msg: string): void {
-  setStatus("Error: " + msg);
+  setStatus("Error: " + msg, true);
   console.error("[vclient]", msg);
 }
 
@@ -171,41 +179,6 @@ async function fetchParams(sid: string): Promise<string> {
   return await resp.text();
 }
 
-async function postBinary(url: string, body: Uint8Array): Promise<Response> {
-  // new Uint8Array(body) coerces Uint8Array<ArrayBufferLike> (the WASM
-  // bridge's return type) into the Uint8Array<ArrayBuffer> that Fetch
-  // BodyInit accepts under TS 5.9+.
-  return await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/octet-stream" },
-    body: new Uint8Array(body),
-  });
-}
-
-async function expectOkBinary(
-  url: string,
-  body: Uint8Array,
-): Promise<Uint8Array> {
-  const resp = await postBinary(url, body);
-  if (!resp.ok) {
-    throw new Error(
-      "POST " + url + ": HTTP " + resp.status + " " + (await resp.text()),
-    );
-  }
-  return new Uint8Array(await resp.arrayBuffer());
-}
-
-async function expectOkAck(url: string, body: Uint8Array): Promise<void> {
-  const resp = await postBinary(url, body);
-  if (!resp.ok) {
-    throw new Error(
-      "POST " + url + ": HTTP " + resp.status + " " + (await resp.text()),
-    );
-  }
-  // Drain body so the connection can be reused.
-  await resp.arrayBuffer();
-}
-
 /**
  * Open the SSE result stream and resolve with the marshaled
  * AuthenticatedResult bytes when the single `data:` event arrives.
@@ -246,7 +219,164 @@ function openResultStream(sid: string): Promise<Uint8Array> {
   });
 }
 
+const STEP_SPECS: StepSpec[] = [
+  { id: "pk-gen", label: "Generate PK share", kind: "wasm" },
+  { id: "pk-exchange", label: "Exchange PK share", kind: "network" },
+  { id: "pk-aggregate", label: "Aggregate PK", kind: "wasm" },
+  { id: "rlk1-gen", label: "Generate RLK round-1 share", kind: "wasm" },
+  { id: "rlk1-exchange", label: "Exchange RLK round-1 share", kind: "network" },
+  { id: "rlk1-aggregate", label: "Aggregate RLK round-1", kind: "wasm" },
+  { id: "rlk2", label: "Send RLK round-2 share", kind: "network" },
+  { id: "gks", label: "Send Galois key shares", kind: "network" },
+  { id: "encrypt", label: "Preprocess and encrypt image", kind: "wasm" },
+  { id: "image", label: "Submit encrypted image", kind: "network" },
+  { id: "wait", label: "Awaiting authenticated result", kind: "sse" },
+  { id: "partial", label: "Compute partial decryption", kind: "wasm" },
+  { id: "redirect", label: "Submit partial decryption", kind: "network" },
+];
+
+async function runWasmStep<T>(
+  tracker: ProgressTracker,
+  id: string,
+  op: string,
+  fn: () => T,
+  summarize?: (out: T) => string,
+): Promise<T> {
+  const step = tracker.start(id);
+  try {
+    // Yield once so the bar renders before the (blocking) WASM call. Without
+    // this, large key-gen calls freeze the paint loop and the indeterminate
+    // animation looks dead.
+    await new Promise((r) => setTimeout(r, 0));
+    const out = fn();
+    if (summarize !== undefined) {
+      step.summarize(op + " · " + summarize(out));
+    } else {
+      step.summarize(op);
+    }
+    step.success();
+    return out;
+  } catch (e) {
+    step.error(e);
+    throw e;
+  }
+}
+
+async function uploadAndDownload(
+  tracker: ProgressTracker,
+  id: string,
+  url: string,
+  body: Uint8Array,
+): Promise<Uint8Array> {
+  const step = tracker.start(id);
+  step.setSize(body.byteLength, "out=");
+  try {
+    const resp =
+      body.byteLength > XHR_THRESHOLD
+        ? await postBinaryXHR(url, body, step)
+        : await postBinaryFetch(url, body, step);
+    if (resp.status < 200 || resp.status >= 300) {
+      throw new Error(
+        "POST " + url + ": HTTP " + resp.status + " " + resp.responseText(),
+      );
+    }
+    step.summarize(
+      "in=" +
+        fmtBytes(resp.body.byteLength) +
+        " out=" +
+        fmtBytes(body.byteLength),
+    );
+    step.success();
+    return resp.body;
+  } catch (e) {
+    step.error(e);
+    throw e;
+  }
+}
+
+async function uploadAck(
+  tracker: ProgressTracker,
+  id: string,
+  url: string,
+  body: Uint8Array,
+): Promise<void> {
+  const step = tracker.start(id);
+  step.setSize(body.byteLength, "out=");
+  try {
+    const resp =
+      body.byteLength > XHR_THRESHOLD
+        ? await postBinaryXHR(url, body, step)
+        : await postBinaryFetch(url, body, step);
+    if (resp.status < 200 || resp.status >= 300) {
+      throw new Error(
+        "POST " + url + ": HTTP " + resp.status + " " + resp.responseText(),
+      );
+    }
+    step.summarize("out=" + fmtBytes(body.byteLength));
+    step.success();
+  } catch (e) {
+    step.error(e);
+    throw e;
+  }
+}
+
+async function uploadJSON<T>(
+  tracker: ProgressTracker,
+  id: string,
+  url: string,
+  body: Uint8Array,
+): Promise<T> {
+  const step = tracker.start(id);
+  step.setSize(body.byteLength, "out=");
+  try {
+    const resp = await postBinaryFetchJSON<T>(url, body, step);
+    if (!resp.ok) {
+      throw new Error("POST " + url + ": HTTP " + resp.status + " " + resp.raw);
+    }
+    if (resp.body === null) {
+      throw new Error("POST " + url + ": non-JSON response: " + resp.raw);
+    }
+    step.summarize("out=" + fmtBytes(body.byteLength) + " · json");
+    step.success();
+    return resp.body;
+  } catch (e) {
+    step.error(e);
+    throw e;
+  }
+}
+
+function fmtBytes(n: number): string {
+  if (n < 1024) {
+    return n + " B";
+  }
+  if (n < 1024 * 1024) {
+    return (n / 1024).toFixed(1) + " KB";
+  }
+  if (n < 1024 * 1024 * 1024) {
+    return (n / (1024 * 1024)).toFixed(2) + " MB";
+  }
+  return (n / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+}
+
+async function awaitResult(
+  tracker: ProgressTracker,
+  resultPromise: Promise<Uint8Array>,
+): Promise<Uint8Array> {
+  const step = tracker.start("wait");
+  step.showElapsed();
+  try {
+    const out = await resultPromise;
+    step.summarize("in=" + fmtBytes(out.byteLength));
+    step.success();
+    return out;
+  } catch (e) {
+    step.error(e);
+    throw e;
+  }
+}
+
 async function runProtocol(
+  tracker: ProgressTracker,
   sid: string,
   handle: number,
   file: File,
@@ -254,92 +384,126 @@ async function runProtocol(
   const bridge = globalThis.ppiav;
 
   // Stage 2b — public key share.
-  setProgress("Stage 2b: Generating public key share...");
-  const pkShare = unwrapBytes(bridge.genPKShare(handle), "genPKShare");
-  const agentPK = await expectOkBinary(
+  const pkShare = await runWasmStep(
+    tracker,
+    "pk-gen",
+    "genPKShare",
+    () => unwrapBytes(bridge.genPKShare(handle), "genPKShare"),
+    (out) => "out=" + fmtBytes(out.byteLength),
+  );
+  const agentPK = await uploadAndDownload(
+    tracker,
+    "pk-exchange",
     "/sessions/" + sid + "/pk-share",
     pkShare,
   );
-  unwrapVoid(bridge.aggregatePK(handle, agentPK), "aggregatePK");
+  await runWasmStep(
+    tracker,
+    "pk-aggregate",
+    "aggregatePK",
+    () => unwrapVoid(bridge.aggregatePK(handle, agentPK), "aggregatePK"),
+  );
 
   // Stage 2c round 1.
-  setProgress("Stage 2c: Relinearization key round 1...");
-  const rlk1 = unwrapBytes(
-    bridge.genRLKShareRound1(handle),
+  const rlk1 = await runWasmStep(
+    tracker,
+    "rlk1-gen",
     "genRLKShareRound1",
+    () =>
+      unwrapBytes(bridge.genRLKShareRound1(handle), "genRLKShareRound1"),
+    (out) => "out=" + fmtBytes(out.byteLength),
   );
-  const agentRLK1 = await expectOkBinary(
+  const agentRLK1 = await uploadAndDownload(
+    tracker,
+    "rlk1-exchange",
     "/sessions/" + sid + "/rlk/round1",
     rlk1,
   );
-  unwrapVoid(
-    bridge.aggregateRLKRound1(handle, agentRLK1),
+  await runWasmStep(
+    tracker,
+    "rlk1-aggregate",
     "aggregateRLKRound1",
+    () =>
+      unwrapVoid(
+        bridge.aggregateRLKRound1(handle, agentRLK1),
+        "aggregateRLKRound1",
+      ),
   );
 
-  // Stage 2c round 2.
-  setProgress("Stage 2c: Relinearization key round 2...");
+  // Stage 2c round 2 (gen + send into one user-visible step).
   const rlk2 = unwrapBytes(
     bridge.genRLKShareRound2(handle),
     "genRLKShareRound2",
   );
-  await expectOkAck("/sessions/" + sid + "/rlk/round2", rlk2);
-
-  // Stage 2d — Galois key shares (single blob, all rotations).
-  setProgress("Stage 2d: Galois key shares...");
-  const gks = unwrapBytes(bridge.genGaloisShares(handle), "genGaloisShares");
-  await expectOkAck("/sessions/" + sid + "/gks-shares", gks);
-
-  // Stage 2e — open SSE before image POST (Stage 3) so ct_M cannot be lost
-  // to a pre-arrival race.
-  setProgress("Stage 2e: Opening result stream...");
-  const resultPromise = openResultStream(sid);
-
-  // Stage 3 — preprocess and encrypt the image, POST to VAgent.
-  setProgress("Stage 3: Preprocessing image...");
-  const tensor = await preprocessImage(file);
-  setProgress("Stage 3: Encrypting image...");
-  const ct = unwrapBytes(bridge.encryptImage(handle, tensor), "encryptImage");
-  setProgress("Stage 3: Submitting encrypted image...");
-  await expectOkAck("/sessions/" + sid + "/image", ct);
-
-  // Stage 4a — wait for AuthenticatedResult, run partial decryption.
-  setProgress("Stage 4a: Waiting for authenticated result...");
-  const authCt = await resultPromise;
-  setProgress("Stage 4a: Computing partial decryption...");
-  const partial = unwrapBytes(
-    bridge.partialDecrypt(handle, authCt),
-    "partialDecrypt",
+  await uploadAck(
+    tracker,
+    "rlk2",
+    "/sessions/" + sid + "/rlk/round2",
+    rlk2,
   );
 
-  // Stage 4b — POST partial decryption; server replies 200 with
-  // `{"redirect": "<url>"}`. JSON 200 (rather than 302) is intentional —
-  // see the file header for the spec-level rationale.
-  setProgress("Stage 4b: Submitting partial decryption...");
-  const redirect = await postPartialDecryption(sid, partial);
-  window.location.assign(redirect);
-}
+  // Stage 2d — Galois key shares (single blob).
+  const gks = unwrapBytes(bridge.genGaloisShares(handle), "genGaloisShares");
+  await uploadAck(tracker, "gks", "/sessions/" + sid + "/gks-shares", gks);
 
-// postPartialDecryption returns the `redirect` URL from VAgent's JSON 200
-// reply. Distinct from `postBinary` because the response is JSON, not
-// Uint8Array — see the file header for why we don't use a 302.
-async function postPartialDecryption(
-  sid: string,
-  partial: Uint8Array,
-): Promise<string> {
-  const resp = await postBinary("/sessions/" + sid + "/partial-decryption", partial);
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error("partial-decryption: HTTP " + resp.status + " " + text);
+  // Stage 2e — open SSE before image POST so ct_M can't be lost to a race.
+  const resultPromise = openResultStream(sid);
+
+  // Stage 3 — preprocess + encrypt + POST. preprocess is async (decode +
+  // canvas), so we drive this step manually instead of via runWasmStep.
+  const encryptStep = tracker.start("encrypt");
+  let ctReal: Uint8Array;
+  try {
+    const tensor = await preprocessImage(file);
+    ctReal = unwrapBytes(bridge.encryptImage(handle, tensor), "encryptImage");
+    encryptStep.summarize(
+      "tensor=" +
+        tensor.length +
+        " float64 · ct=" +
+        fmtBytes(ctReal.byteLength),
+    );
+    encryptStep.success();
+  } catch (e) {
+    encryptStep.error(e);
+    throw e;
   }
-  const body = (await resp.json()) as { redirect?: unknown };
+  await uploadAck(tracker, "image", "/sessions/" + sid + "/image", ctReal);
+
+  // Stage 4a — wait for AuthenticatedResult, then partial-decrypt.
+  const authCt = await awaitResult(tracker, resultPromise);
+  const partial = await runWasmStep(
+    tracker,
+    "partial",
+    "partialDecrypt",
+    () => unwrapBytes(bridge.partialDecrypt(handle, authCt), "partialDecrypt"),
+    (out) => "out=" + fmtBytes(out.byteLength),
+  );
+
+  // Stage 4b — POST partial decryption, expect JSON 200 with redirect.
+  const body = await uploadJSON<{ redirect?: unknown }>(
+    tracker,
+    "redirect",
+    "/sessions/" + sid + "/partial-decryption",
+    partial,
+  );
   if (typeof body.redirect !== "string" || body.redirect === "") {
     throw new Error(
       "partial-decryption: response missing 'redirect' field: " +
         JSON.stringify(body),
     );
   }
-  return body.redirect;
+  window.location.assign(body.redirect);
+}
+
+function mustElement<T extends HTMLElement>(
+  id: string,
+  ctor: new () => T,
+): T {
+  const el = document.getElementById(id);
+  if (!(el instanceof ctor)) {
+    throw new Error("missing or wrong-type element #" + id);
+  }
+  return el;
 }
 
 async function main(): Promise<void> {
@@ -377,13 +541,21 @@ async function main(): Promise<void> {
   }
   const handle = created.handle;
   setStatus("Ready. Select an image to verify.");
-  setProgress("");
 
-  const input = document.getElementById("image-input");
-  if (!(input instanceof HTMLInputElement)) {
-    showError("Missing #image-input file input");
-    return;
-  }
+  const stepsHost = mustElement("steps", HTMLDivElement);
+  const macroEl = mustElement("macro", HTMLParagraphElement);
+  const devlogHost = mustElement("devlog", HTMLElement);
+  const devlogToggle = mustElement("devlog-toggle", HTMLButtonElement);
+  const tracker = new ProgressTracker({
+    stepsHost,
+    macroEl,
+    devlogHost,
+    devlogToggle,
+    specs: STEP_SPECS,
+  });
+
+  const input = mustElement("image-input", HTMLInputElement);
+  input.disabled = false;
   input.addEventListener("change", () => {
     const file = input.files?.[0];
     if (file === undefined) {
@@ -391,7 +563,7 @@ async function main(): Promise<void> {
     }
     input.disabled = true;
     setStatus("Running verification protocol...");
-    runProtocol(sid, handle, file)
+    runProtocol(tracker, sid, handle, file)
       .catch((err: unknown) => {
         showError(
           "Protocol failed: " +
