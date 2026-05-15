@@ -48,6 +48,40 @@ def test_sample_wall_ms_and_heap_mib_derived() -> None:
     assert s0.heap_delta_mib == pytest.approx(16.0)
 
 
+def test_sample_pre_vm_hwm_defaults_zero_when_absent() -> None:
+    """Old phase1 JSONs without `pre_vm_hwm` must still parse with default 0."""
+    run = load_run(FIXTURE)
+    s0 = run.samples[0]
+    assert s0.pre_vm_hwm == 0
+    # delta_rss_mib falls back to vm_hwm in MiB when pre_vm_hwm is absent.
+    assert s0.delta_rss_mib == pytest.approx(s0.vm_hwm / (1024.0 * 1024.0))
+
+
+def test_sample_pre_vm_hwm_roundtrip(tmp_path: Path) -> None:
+    """New artifact-pipeline JSONs carry `pre_vm_hwm`; loader must round-trip it."""
+    raw = json.loads(FIXTURE.read_text())
+    # Stamp a realistic pre_vm_hwm: smaller than vm_hwm by ~32 MiB.
+    raw["samples"][0]["pre_vm_hwm"] = 100_663_296  # 96 MiB
+    raw["samples"][0]["vm_hwm"] = 134_217_728  # 128 MiB
+    fp = tmp_path / "with_pre_hwm.json"
+    fp.write_text(json.dumps(raw))
+    run = load_run(fp)
+    s0 = run.samples[0]
+    assert s0.pre_vm_hwm == 100_663_296
+    assert s0.vm_hwm == 134_217_728
+    assert s0.delta_rss_mib == pytest.approx(32.0)
+
+
+def test_sample_delta_rss_mib_clamps_at_zero(tmp_path: Path) -> None:
+    """If vm_hwm < pre_vm_hwm somehow lands on disk, clamp at 0 not negative."""
+    raw = json.loads(FIXTURE.read_text())
+    raw["samples"][0]["pre_vm_hwm"] = raw["samples"][0]["vm_hwm"] + 1
+    fp = tmp_path / "neg_delta.json"
+    fp.write_text(json.dumps(raw))
+    run = load_run(fp)
+    assert run.samples[0].delta_rss_mib == 0.0
+
+
 def test_load_run_rejects_empty_samples(tmp_path: Path) -> None:
     bad = tmp_path / "empty.json"
     raw = json.loads(FIXTURE.read_text())

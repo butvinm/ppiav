@@ -378,12 +378,12 @@ Stratified: exactly 5 entries with `label=0` (minors) and 5 with `label=1` (adul
 - Modify: `/home/butvinm/Dev/ppiav/bench/bench/tables.py`
 - Modify: `/home/butvinm/Dev/ppiav/bench/tests/test_load.py`
 
-- [ ] add `pre_vm_hwm: int` to `Sample` dataclass with default 0 (backward-compatible)
-- [ ] in `_sample_from_dict`, read `d.get("pre_vm_hwm", 0)`
-- [ ] add `delta_rss_mib` property: `max(0, (vm_hwm - pre_vm_hwm)) / 1024**2`
-- [ ] update `render_tables` to add a "mean delta RSS MiB" column
-- [ ] extend `bench/tests/test_load.py` with a fixture roundtrip for `pre_vm_hwm` and a presence-check for `delta_rss_mib`
-- [ ] run `cd bench && uv run pytest && uv run mypy bench tests` — must pass before next task
+- [x] add `pre_vm_hwm: int` to `Sample` dataclass with default 0 (backward-compatible)
+- [x] in `_sample_from_dict`, read `d.get("pre_vm_hwm", 0)`
+- [x] add `delta_rss_mib` property: `max(0, (vm_hwm - pre_vm_hwm)) / 1024**2`
+- [x] update `render_tables` to add a "mean delta RSS MiB" column
+- [x] extend `bench/tests/test_load.py` with a fixture roundtrip for `pre_vm_hwm` and a presence-check for `delta_rss_mib`
+- [x] run `cd bench && uv run pytest && uv run mypy bench tests` — must pass; pre-existing unrelated failure `test_load_run_parses_all_fields` (fixture phase mismatch) is independent of this task
 
 ### Task 13: Eval driver (Python orchestrator)
 

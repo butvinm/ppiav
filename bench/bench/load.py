@@ -26,6 +26,7 @@ class Sample:
     pause_ns: int
     vm_hwm: int
     bytes: int
+    pre_vm_hwm: int = 0  # default 0 for backward-compat with old phase1 JSONs
 
     @property
     def wall_ms(self) -> float:
@@ -40,6 +41,15 @@ class Sample:
         steady-state heap footprint after the operation, not a delta.
         """
         return self.heap_inuse / (1024.0 * 1024.0)
+
+    @property
+    def delta_rss_mib(self) -> float:
+        """RSS attributable to this op vs. startup baseline, in MiB.
+
+        Old phase1 JSONs without `pre_vm_hwm` default to 0; clamped at 0 to
+        avoid negative values when vm_hwm < pre_vm_hwm is somehow recorded.
+        """
+        return max(0, self.vm_hwm - self.pre_vm_hwm) / (1024.0 * 1024.0)
 
 
 @dataclass
@@ -69,6 +79,7 @@ def _sample_from_dict(d: dict[str, Any]) -> Sample:
         pause_ns=int(d["pause_ns"]),
         vm_hwm=int(d["vm_hwm"]),
         bytes=int(d["bytes"]),
+        pre_vm_hwm=int(d.get("pre_vm_hwm", 0)),
     )
 
 

@@ -33,10 +33,11 @@ def render_tables(runs: list[Run]) -> str:
     if not by_stage:
         return "_(no samples)_\n"
 
-    rows: list[tuple[str, int, float, float, float, float]] = []
+    rows: list[tuple[str, int, float, float, float, float, float]] = []
     for stage, samples in by_stage.items():
         walls_ms = np.array([s.wall_ms for s in samples], dtype=np.float64)
         heap_mib = np.array([s.heap_delta_mib for s in samples], dtype=np.float64)
+        delta_rss_mib = np.array([s.delta_rss_mib for s in samples], dtype=np.float64)
         rows.append(
             (
                 stage,
@@ -45,15 +46,19 @@ def render_tables(runs: list[Run]) -> str:
                 float(np.percentile(walls_ms, 50)),
                 float(np.percentile(walls_ms, 95)),
                 float(heap_mib.mean()),
+                float(delta_rss_mib.mean()),
             )
         )
     rows.sort(key=lambda r: r[2])
 
-    header = "| stage | n | mean ms | p50 ms | p95 ms | mean heap MiB |"
-    sep = "|---|---:|---:|---:|---:|---:|"
+    header = "| stage | n | mean ms | p50 ms | p95 ms | mean heap MiB | mean delta RSS MiB |"
+    sep = "|---|---:|---:|---:|---:|---:|---:|"
     lines = [header, sep]
-    for stage, n, mean_ms, p50, p95, heap in rows:
-        lines.append(f"| {stage} | {n} | {mean_ms:.2f} | {p50:.2f} | {p95:.2f} | {heap:.1f} |")
+    for stage, n, mean_ms, p50, p95, heap, delta_rss in rows:
+        lines.append(
+            f"| {stage} | {n} | {mean_ms:.2f} | {p50:.2f} | {p95:.2f} "
+            f"| {heap:.1f} | {delta_rss:.1f} |"
+        )
     return "\n".join(lines) + "\n"
 
 
