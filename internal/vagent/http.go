@@ -173,6 +173,12 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.agent.OpenSession(sess.SessionID); err != nil {
+		// TODO(phase-3-followup): VService allocated `sess.SessionID` but
+		// our local OpenSession rejected it (typically a duplicate sid),
+		// so the sid leaks into VService's sessions map. Not exploitable —
+		// no key material yet — but allows unbounded growth on repeated
+		// failure. Out of scope for Phase 3; a follow-up should add a
+		// `DELETE /sessions/:sid` route on VService and invoke it here.
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("agent open session: %s", err))
 		return
 	}
@@ -307,14 +313,14 @@ func (s *Server) handlePKShare(w http.ResponseWriter, r *http.Request, sid proto
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxCiphertextBody))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxShareBody))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("read body: %s", err))
+		s.rejectAndEvict(w, http.StatusBadRequest, sid, fmt.Sprintf("read body: %s", err))
 		return
 	}
 	var client protocol.VClientPKShare
 	if err := client.UnmarshalBinary(body); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("unmarshal VClientPKShare: %s", err))
+		s.rejectAndEvict(w, http.StatusBadRequest, sid, fmt.Sprintf("unmarshal VClientPKShare: %s", err))
 		return
 	}
 	// GenPKShare must run before AggregatePK to set up the protocol/CRP/local
@@ -325,7 +331,10 @@ func (s *Server) handlePKShare(w http.ResponseWriter, r *http.Request, sid proto
 		return
 	}
 	if err := s.agent.AggregatePK(sid, client.Share); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		// AggregatePK fails when the wire share is semantically malformed
+		// (wrong ring, wrong degree). Still F2 per DESIGN.md §`Failure modes`:
+		// "Malformed wire input … plus Verdict = Reject. Session torn down."
+		s.rejectAndEvict(w, http.StatusBadRequest, sid, err.Error())
 		return
 	}
 	writeBinary(w, protocol.VAgentPKShare{Share: agentShare})
@@ -340,14 +349,14 @@ func (s *Server) handleRLKRound1(w http.ResponseWriter, r *http.Request, sid pro
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxCiphertextBody))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxShareBody))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("read body: %s", err))
+		s.rejectAndEvict(w, http.StatusBadRequest, sid, fmt.Sprintf("read body: %s", err))
 		return
 	}
 	var client protocol.VClientRLKRound1
 	if err := client.UnmarshalBinary(body); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("unmarshal VClientRLKRound1: %s", err))
+		s.rejectAndEvict(w, http.StatusBadRequest, sid, fmt.Sprintf("unmarshal VClientRLKRound1: %s", err))
 		return
 	}
 	agentShare, err := s.agent.GenRLKShareRound1(sid)
@@ -356,7 +365,7 @@ func (s *Server) handleRLKRound1(w http.ResponseWriter, r *http.Request, sid pro
 		return
 	}
 	if err := s.agent.AggregateRLKRound1(sid, client.Share); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		s.rejectAndEvict(w, http.StatusBadRequest, sid, err.Error())
 		return
 	}
 	writeBinary(w, protocol.VAgentRLKRound1{Share: agentShare})
@@ -371,14 +380,14 @@ func (s *Server) handleRLKRound2(w http.ResponseWriter, r *http.Request, sid pro
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxCiphertextBody))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxShareBody))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("read body: %s", err))
+		s.rejectAndEvict(w, http.StatusBadRequest, sid, fmt.Sprintf("read body: %s", err))
 		return
 	}
 	var client protocol.VClientRLKRound2
 	if err := client.UnmarshalBinary(body); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("unmarshal VClientRLKRound2: %s", err))
+		s.rejectAndEvict(w, http.StatusBadRequest, sid, fmt.Sprintf("unmarshal VClientRLKRound2: %s", err))
 		return
 	}
 	// GenRLKShareRound2 sets up the agent's round-2 share state needed by
@@ -388,7 +397,7 @@ func (s *Server) handleRLKRound2(w http.ResponseWriter, r *http.Request, sid pro
 		return
 	}
 	if err := s.agent.AggregateRLKRound2(sid, client.Share); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		s.rejectAndEvict(w, http.StatusBadRequest, sid, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -403,14 +412,14 @@ func (s *Server) handleGKSShares(w http.ResponseWriter, r *http.Request, sid pro
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxCiphertextBody))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxGksSharesBody))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("read body: %s", err))
+		s.rejectAndEvict(w, http.StatusBadRequest, sid, fmt.Sprintf("read body: %s", err))
 		return
 	}
 	var client protocol.VClientGaloisKeyShare
 	if err := client.UnmarshalBinary(body); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("unmarshal VClientGaloisKeyShare: %s", err))
+		s.rejectAndEvict(w, http.StatusBadRequest, sid, fmt.Sprintf("unmarshal VClientGaloisKeyShare: %s", err))
 		return
 	}
 	// GenGaloisShares draws CRPs in canonical label order; the resulting
@@ -424,7 +433,8 @@ func (s *Server) handleGKSShares(w http.ResponseWriter, r *http.Request, sid pro
 	}
 	rlk, gks, err := s.agent.AggregateGaloisShares(sid, client.Shares, agentLabels)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		// Count-mismatch / share-shape mismatch is F2 (malformed wire input).
+		s.rejectAndEvict(w, http.StatusBadRequest, sid, err.Error())
 		return
 	}
 	keys := protocol.InferEvalKeys{RLK: rlk, GKS: gks}
@@ -436,18 +446,16 @@ func (s *Server) handleGKSShares(w http.ResponseWriter, r *http.Request, sid pro
 	url := s.vserviceURL + "/sessions/" + urlpath.PathEscape(string(sid)) + "/eval-keys"
 	resp, err := s.httpClient.Post(url, "application/octet-stream", bytes.NewReader(keysBytes))
 	if err != nil {
-		// AggregateGaloisShares already mutated session state; without
-		// VService-side keys the session is dead. Evict so the client gets
-		// 404 on subsequent retries rather than a half-live session.
-		s.agent.EvictSession(sid)
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("call vservice eval-keys: %s", err))
+		// F3: VService unreachable / inference layer unreachable mid-keygen.
+		// AggregateGaloisShares already mutated session state; rejectAndEvict
+		// fires the Verdict=Reject callback and tears down the session.
+		s.rejectAndEvict(w, http.StatusBadGateway, sid, fmt.Sprintf("call vservice eval-keys: %s", err))
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		s.agent.EvictSession(sid)
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("vservice eval-keys returned %d: %s", resp.StatusCode, respBody))
+		s.rejectAndEvict(w, http.StatusBadGateway, sid, fmt.Sprintf("vservice eval-keys returned %d: %s", resp.StatusCode, respBody))
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -475,14 +483,14 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, sid protoco
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxCiphertextBody))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxEvalKeysBody))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("read body: %s", err))
+		s.rejectAndEvict(w, http.StatusBadRequest, sid, fmt.Sprintf("read body: %s", err))
 		return
 	}
 	inCt := &rlwe.Ciphertext{}
 	if err := inCt.UnmarshalBinary(body); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("unmarshal EncryptedImage: %s", err))
+		s.rejectAndEvict(w, http.StatusBadRequest, sid, fmt.Sprintf("unmarshal EncryptedImage: %s", err))
 		return
 	}
 
@@ -491,28 +499,40 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, sid protoco
 	// validate, but the VService handler unmarshals from the bytes itself.
 	resp, err := s.httpClient.Post(url, "application/octet-stream", bytes.NewReader(body))
 	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("call vservice /image: %s", err))
+		// F3: inference unreachable.
+		s.rejectAndEvict(w, http.StatusBadGateway, sid, fmt.Sprintf("call vservice /image: %s", err))
 		return
 	}
 	defer resp.Body.Close()
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("read vservice /image: %s", err))
+		s.rejectAndEvict(w, http.StatusBadGateway, sid, fmt.Sprintf("read vservice /image: %s", err))
 		return
 	}
 	if resp.StatusCode != http.StatusOK {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("vservice /image returned %d: %s", resp.StatusCode, respBody))
+		// F3: VService returned an error during inference.
+		s.rejectAndEvict(w, http.StatusBadGateway, sid, fmt.Sprintf("vservice /image returned %d: %s", resp.StatusCode, respBody))
 		return
 	}
 	resultCt := &rlwe.Ciphertext{}
 	if err := resultCt.UnmarshalBinary(respBody); err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("unmarshal vservice /image response: %s", err))
+		// F3: VService returned a malformed ciphertext.
+		s.rejectAndEvict(w, http.StatusBadGateway, sid, fmt.Sprintf("unmarshal vservice /image response: %s", err))
 		return
 	}
 
 	ctM, err := s.agent.BuildAuthenticatedCt(sid, resultCt)
 	if err != nil {
-		writeError(w, sidErrorStatus(err), err.Error())
+		// `BuildAuthenticatedCt` only fails on unknown sid (404) or impossible-
+		// by-protocol nil authKey (would only happen if OpenSession was never
+		// called). The unknown-sid branch keeps writeError because there is no
+		// session to tear down.
+		status := sidErrorStatus(err)
+		if status == http.StatusNotFound {
+			writeError(w, status, err.Error())
+		} else {
+			s.rejectAndEvict(w, status, sid, err.Error())
+		}
 		return
 	}
 	// Cache ct_M for the upcoming partial-decryption call.
@@ -574,18 +594,17 @@ func (s *Server) handlePartialDecryption(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxCiphertextBody))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxShareBody))
 	if err != nil {
 		// Known sid + read failure → F2 (wire-shape violation): callback
-		// Reject, then 400.
-		_ = s.postVerdict(sid, protocol.VerdictReject)
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("read body: %s", err))
+		// Reject, then 400, plus evict the session so a follow-up valid
+		// retry cannot flip the upserted verdict back to Accept.
+		s.rejectAndEvict(w, http.StatusBadRequest, sid, fmt.Sprintf("read body: %s", err))
 		return
 	}
 	var pd protocol.PartialDecryption
 	if err := pd.UnmarshalBinary(body); err != nil {
-		_ = s.postVerdict(sid, protocol.VerdictReject)
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("unmarshal PartialDecryption: %s", err))
+		s.rejectAndEvict(w, http.StatusBadRequest, sid, fmt.Sprintf("unmarshal PartialDecryption: %s", err))
 		return
 	}
 	ctM, ok := s.agent.SessionAuthenticatedCt(sid)
@@ -597,13 +616,15 @@ func (s *Server) handlePartialDecryption(w http.ResponseWriter, r *http.Request,
 	if ctM == nil {
 		// F3: partial-decryption called before image POST stored ct_M.
 		// Known sid with no ct cached → callback Reject (F3 wire shape),
-		// then 400.
-		_ = s.postVerdict(sid, protocol.VerdictReject)
-		writeError(w, http.StatusBadRequest, "vagent: partial-decryption called before image submission")
+		// then 400. Evict so a subsequent valid retry cannot upsert Accept.
+		s.rejectAndEvict(w, http.StatusBadRequest, sid, "vagent: partial-decryption called before image submission")
 		return
 	}
 	verdict, err := s.agent.FinalizeDecryption(sid, ctM, pd.Share)
 	if err != nil {
+		// FinalizeDecryption already evicts via its deferred cleanup; we
+		// just post the Reject callback. Use postVerdict directly (not
+		// rejectAndEvict) to avoid a redundant EvictSession.
 		_ = s.postVerdict(sid, protocol.VerdictReject)
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("finalize decryption: %s", err))
 		return
@@ -621,6 +642,33 @@ func (s *Server) handlePartialDecryption(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"redirect": s.rservicePublicURL + "/protected"})
+}
+
+// rejectAndEvict is the centralised handler for F2 (malformed wire input)
+// and F3 (inference error) per docs/DESIGN.md §`Failure modes`:
+//
+//	"HTTP 4xx/5xx to the offending party plus Verdict = Reject to
+//	 RService. Session torn down."
+//
+// Order matters: post the Reject callback first (so RService records it
+// even if EvictSession races a concurrent request), then evict so the
+// authKey + skShare + cached ct_M cannot be re-used by a follow-up
+// request to flip RService's upserted verdict back to Accept (replay
+// weakness: rservice.Service.AcceptVerdict is last-write-wins). Finally
+// write the HTTP error response.
+//
+// Callback failure is logged best-effort — the session is still evicted
+// and the HTTP error still goes out. If RService is down, the session
+// state becomes Unknown (deny-by-default), which is the safest fallback.
+//
+// Callers must hold a known sid. For unknown sids the design says
+// "no session, nothing to tear down" — use writeError directly.
+func (s *Server) rejectAndEvict(w http.ResponseWriter, status int, sid protocol.SessionID, msg string) {
+	if err := s.postVerdict(sid, protocol.VerdictReject); err != nil {
+		log.Printf("vagent: post Reject callback for sid %q failed: %s", sid, err)
+	}
+	s.agent.EvictSession(sid)
+	writeError(w, status, msg)
 }
 
 // postVerdict POSTs `VerdictNotification{verdict}` to RService's

@@ -1069,9 +1069,12 @@ func TestHTTPVAgent_PartialDecryption_BeforeImageRejects(t *testing.T) {
 	assert.Equal(t, 1, calls)
 	assert.Equal(t, protocol.VerdictReject, gotVerd)
 
-	// Session should still exist (FinalizeDecryption did not run).
+	// F3 path must tear down the session (DESIGN.md §`Failure modes`:
+	// "Session torn down"). Without this, the session table still holds
+	// the authKey + skShare and a follow-up valid retry could upsert
+	// Accept on rservice (last-write-wins replay weakness).
 	_, err = agent.session(sid)
-	require.NoError(t, err)
+	require.Error(t, err, "F3 must evict the session")
 }
 
 // Task 22 (review iteration): RService callback failures must surface as
@@ -1195,4 +1198,277 @@ func TestHTTPVAgent_WasmExecJS_ReturnsJS(t *testing.T) {
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	assert.NotEmpty(t, body)
+}
+
+// --- F2/F3 rejectAndEvict contract tests -----------------------------------
+//
+// DESIGN.md §`Failure modes` rows F2 and F3 mandate:
+//
+//	"HTTP 4xx/5xx to the offending party plus Verdict = Reject to
+//	 RService. Session torn down."
+//
+// The tests below pin the contract at the wire for every keygen-stage
+// handler. Earlier iterations evicted only on the partial-decryption
+// path; the rest leaked authKey + skShare + (where present) cached ct_M
+// after the Reject callback, which combined with rservice.AcceptVerdict's
+// last-write-wins upsert allowed a replay to flip Reject → Accept.
+
+// TestHTTPVAgent_PKShare_MalformedBodyRejectAndEvicts: F2 on pk-share
+// must post Reject callback + evict the session.
+func TestHTTPVAgent_PKShare_MalformedBodyRejectAndEvicts(t *testing.T) {
+	vagentSrv, _, _, agent, rstub, _, _ := newHTTPFixtureWithRService(t)
+	sid := openSessionViaHTTP(t, vagentSrv)
+
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/pk-share", []byte{0xff, 0xff, 0xff})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	calls, gotSid, gotVerd := rstub.snapshot()
+	assert.Equal(t, 1, calls, "F2 must trigger Reject callback")
+	assert.Equal(t, sid, gotSid)
+	assert.Equal(t, protocol.VerdictReject, gotVerd)
+	_, err := agent.session(sid)
+	require.Error(t, err, "F2 must evict the session")
+}
+
+// TestHTTPVAgent_RLKRound1_MalformedBodyRejectAndEvicts: same for rlk/round1.
+func TestHTTPVAgent_RLKRound1_MalformedBodyRejectAndEvicts(t *testing.T) {
+	vagentSrv, _, _, agent, rstub, _, _ := newHTTPFixtureWithRService(t)
+	sid := openSessionViaHTTP(t, vagentSrv)
+
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/rlk/round1", []byte{0xff, 0xff})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	calls, _, gotVerd := rstub.snapshot()
+	assert.Equal(t, 1, calls)
+	assert.Equal(t, protocol.VerdictReject, gotVerd)
+	_, err := agent.session(sid)
+	require.Error(t, err)
+}
+
+// TestHTTPVAgent_RLKRound2_MalformedBodyRejectAndEvicts: same for rlk/round2.
+// rlk/round2 only checks for known sid + malformed body; we don't need to
+// drive PK/round1 first because the malformed-body branch fires before the
+// state-machine inspection.
+func TestHTTPVAgent_RLKRound2_MalformedBodyRejectAndEvicts(t *testing.T) {
+	vagentSrv, _, _, agent, rstub, _, _ := newHTTPFixtureWithRService(t)
+	sid := openSessionViaHTTP(t, vagentSrv)
+
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/rlk/round2", []byte{0xff, 0xff})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	calls, _, gotVerd := rstub.snapshot()
+	assert.Equal(t, 1, calls)
+	assert.Equal(t, protocol.VerdictReject, gotVerd)
+	_, err := agent.session(sid)
+	require.Error(t, err)
+}
+
+// TestHTTPVAgent_GKSShares_MalformedBodyRejectAndEvicts: gks-shares F2
+// (malformed body) must Reject + evict.
+func TestHTTPVAgent_GKSShares_MalformedBodyRejectAndEvicts(t *testing.T) {
+	vagentSrv, _, _, agent, rstub, _, _ := newHTTPFixtureWithRService(t)
+	sid := openSessionViaHTTP(t, vagentSrv)
+
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/gks-shares", []byte{0xff, 0xff, 0xff, 0xff, 0xff})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	calls, _, gotVerd := rstub.snapshot()
+	assert.Equal(t, 1, calls)
+	assert.Equal(t, protocol.VerdictReject, gotVerd)
+	_, err := agent.session(sid)
+	require.Error(t, err)
+}
+
+// TestHTTPVAgent_GKSShares_EvalKeysForwardFailureRejectsAndEvicts: F3 path
+// — VService /eval-keys returns 502 after a valid gks-shares POST. The
+// handler must Reject + evict. We reuse the VService failure stub pattern
+// from TestHTTPVAgent_GKSShares_VServiceForwardFailure but wire an RService
+// stub to observe the callback.
+func TestHTTPVAgent_GKSShares_EvalKeysForwardFailureRejectsAndEvicts(t *testing.T) {
+	params := smallParams(t)
+	var sidCount atomic.Int64
+	stubVSvc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/sessions" {
+			n := sidCount.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"SessionID":"sid-evk-` + strings.Repeat("a", int(n)) + `"}`))
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/eval-keys") {
+			http.Error(w, "vservice down", http.StatusInternalServerError)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(stubVSvc.Close)
+
+	agent, err := New(params)
+	require.NoError(t, err)
+	rstub := newRServiceStub()
+	rsvcSrv := httptest.NewServer(rstub.handler())
+	t.Cleanup(rsvcSrv.Close)
+	vagentSrv := httptest.NewServer(NewServer(agent, stubVSvc.URL, rsvcSrv.URL, "").Handler())
+	t.Cleanup(vagentSrv.Close)
+
+	sid := openSessionViaHTTP(t, vagentSrv)
+	stub := newVClientStub(t, params, sid)
+	runKeygenUpToGKS(t, vagentSrv.URL, sid, stub, params)
+
+	// Build valid gks shares so the handler reaches the VService forward.
+	gkg := multiparty.NewGaloisKeyGenProtocol(params.CKKS)
+	labels := params.RotationIndices()
+	clientGalShares := make([]multiparty.GaloisKeyGenShare, len(labels))
+	for i, j := range labels {
+		crp := gkg.SampleCRP(stub.crs)
+		s := gkg.AllocateShare()
+		galEl := params.CKKS.GaloisElement(-j)
+		require.NoError(t, gkg.GenShare(stub.skC, galEl, crp, &s))
+		clientGalShares[i] = s
+	}
+	gksBytes, err := protocol.VClientGaloisKeyShare{Shares: clientGalShares}.MarshalBinary()
+	require.NoError(t, err)
+
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/gks-shares", gksBytes)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadGateway, resp.StatusCode)
+
+	calls, gotSid, gotVerd := rstub.snapshot()
+	assert.Equal(t, 1, calls, "F3 on eval-keys forward failure must trigger Reject")
+	assert.Equal(t, sid, gotSid)
+	assert.Equal(t, protocol.VerdictReject, gotVerd)
+	_, err = agent.session(sid)
+	require.Error(t, err)
+}
+
+// TestHTTPVAgent_Image_MalformedBodyRejectAndEvicts: F2 on /image.
+func TestHTTPVAgent_Image_MalformedBodyRejectAndEvicts(t *testing.T) {
+	vagentSrv, _, _, agent, rstub, _, _ := newHTTPFixtureWithRService(t)
+	sid := openSessionViaHTTP(t, vagentSrv)
+
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/image", []byte{0xff, 0xff, 0xff})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	calls, _, gotVerd := rstub.snapshot()
+	assert.Equal(t, 1, calls)
+	assert.Equal(t, protocol.VerdictReject, gotVerd)
+	_, err := agent.session(sid)
+	require.Error(t, err)
+}
+
+// TestHTTPVAgent_Image_VServiceFailureRejectAndEvicts: F3 — VService /image
+// returns 500. VAgent must Reject + evict + surface 502.
+func TestHTTPVAgent_Image_VServiceFailureRejectAndEvicts(t *testing.T) {
+	params := smallParams(t)
+	var sidCount atomic.Int64
+	stubVSvc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/sessions" {
+			n := sidCount.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"SessionID":"sid-img-` + strings.Repeat("a", int(n)) + `"}`))
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/image") {
+			http.Error(w, "vservice image down", http.StatusInternalServerError)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(stubVSvc.Close)
+
+	agent, err := New(params)
+	require.NoError(t, err)
+	rstub := newRServiceStub()
+	rsvcSrv := httptest.NewServer(rstub.handler())
+	t.Cleanup(rsvcSrv.Close)
+	vagentSrv := httptest.NewServer(NewServer(agent, stubVSvc.URL, rsvcSrv.URL, "").Handler())
+	t.Cleanup(vagentSrv.Close)
+
+	sid := openSessionViaHTTP(t, vagentSrv)
+	// Build a valid-looking ciphertext under throwaway keys so the handler
+	// reaches the VService forward step rather than failing on F2.
+	kgen := rlwe.NewKeyGenerator(params.CKKS)
+	_, pk := kgen.GenKeyPairNew()
+	encoder := ckks.NewEncoder(params.CKKS)
+	encryptor := rlwe.NewEncryptor(params.CKKS, pk)
+	values := make([]float64, params.CKKS.MaxSlots())
+	pt := ckks.NewPlaintext(params.CKKS, params.CKKS.MaxLevel())
+	require.NoError(t, encoder.Encode(values, pt))
+	ct, err := encryptor.EncryptNew(pt)
+	require.NoError(t, err)
+	body, err := ct.MarshalBinary()
+	require.NoError(t, err)
+
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/image", body)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadGateway, resp.StatusCode)
+
+	calls, _, gotVerd := rstub.snapshot()
+	assert.Equal(t, 1, calls, "F3 on /image VService failure must trigger Reject")
+	assert.Equal(t, protocol.VerdictReject, gotVerd)
+	_, err = agent.session(sid)
+	require.Error(t, err)
+}
+
+// TestHTTPVAgent_PartialDecryption_MalformedBodyEvicts: re-affirms that
+// the existing F2 partial-decryption callback also evicts now (was the
+// concrete replay weakness the iteration-3 finding called out).
+func TestHTTPVAgent_PartialDecryption_MalformedBodyEvicts(t *testing.T) {
+	vagentSrv, _, _, agent, rstub, _, _ := newHTTPFixtureWithRService(t)
+	sid := openSessionViaHTTP(t, vagentSrv)
+
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/partial-decryption", []byte{0xff, 0xff, 0xff})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	calls, _, gotVerd := rstub.snapshot()
+	assert.Equal(t, 1, calls)
+	assert.Equal(t, protocol.VerdictReject, gotVerd)
+	_, err := agent.session(sid)
+	require.Error(t, err, "F2 must evict so a retry cannot upsert Accept")
+}
+
+// runKeygenUpToGKS drives PK + RLK round1 + round2 against the VAgent HTTP
+// server so callers can then POST a custom gks-shares body. Mirrors the
+// inline preamble in TestHTTPVAgent_GKSShares_VServiceForwardFailure; kept
+// as a helper because two new tests need the same prefix.
+func runKeygenUpToGKS(t *testing.T, base string, sid protocol.SessionID, stub *vclientStub, params protocol.Params) {
+	t.Helper()
+	pkProto := multiparty.NewPublicKeyGenProtocol(params.CKKS)
+	clientCRP := pkProto.SampleCRP(stub.crs)
+	clientPKShare := pkProto.AllocateShare()
+	pkProto.GenShare(stub.skC, clientCRP, &clientPKShare)
+	pkBytes, err := protocol.VClientPKShare{Share: clientPKShare}.MarshalBinary()
+	require.NoError(t, err)
+	r := postOctet(t, base, "/sessions/"+string(sid)+"/pk-share", pkBytes)
+	require.Equal(t, http.StatusOK, r.StatusCode)
+	pkRespBody, _ := io.ReadAll(r.Body)
+	r.Body.Close()
+	var agentPK protocol.VAgentPKShare
+	require.NoError(t, agentPK.UnmarshalBinary(pkRespBody))
+
+	rlkProto := multiparty.NewRelinearizationKeyGenProtocol(params.CKKS)
+	clientRLKCRP := rlkProto.SampleCRP(stub.crs)
+	ephSk, share1, share2 := rlkProto.AllocateShare()
+	rlkProto.GenShareRoundOne(stub.skC, clientRLKCRP, ephSk, &share1)
+	r1b, err := protocol.VClientRLKRound1{Share: share1}.MarshalBinary()
+	require.NoError(t, err)
+	r1 := postOctet(t, base, "/sessions/"+string(sid)+"/rlk/round1", r1b)
+	require.Equal(t, http.StatusOK, r1.StatusCode)
+	r1RespBody, _ := io.ReadAll(r1.Body)
+	r1.Body.Close()
+	var agentR1 protocol.VAgentRLKRound1
+	require.NoError(t, agentR1.UnmarshalBinary(r1RespBody))
+	_, share1Agg, _ := rlkProto.AllocateShare()
+	rlkProto.AggregateShares(share1, agentR1.Share, &share1Agg)
+	rlkProto.GenShareRoundTwo(ephSk, stub.skC, share1Agg, &share2)
+	r2b, err := protocol.VClientRLKRound2{Share: share2}.MarshalBinary()
+	require.NoError(t, err)
+	r2 := postOctet(t, base, "/sessions/"+string(sid)+"/rlk/round2", r2b)
+	require.Equal(t, http.StatusOK, r2.StatusCode)
+	r2.Body.Close()
 }

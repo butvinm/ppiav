@@ -38,18 +38,39 @@ func WriteError(w http.ResponseWriter, status int, msg string) {
 //   - VClientGaloisKeyShare: ~Lambda shares × per-rotation share size
 //   - InferEvalKeys: aggregated RLK + per-rotation GaloisKey
 //
-// 1 GiB covers Phase-3 LogN=16 with Lambda=128 (default): the GaloisKey
-// set at that ring degree dominates and runs into the hundreds of MiB.
-// The earlier 64 MiB cap was set when only Lambda<=16 was exercised and
-// rejected legitimate default-config payloads. Phase-4 hierkeys cuts
-// the GKS down to a single master and will let us tighten this again.
+// We split the cap by route shape so a concurrent attacker can't bank
+// the same 1 GiB allocation on a small-share endpoint. The 1 GiB ceiling
+// is preserved only for routes that legitimately need it (eval-keys, the
+// encrypted image, and the aggregated Galois shares payload at LogN=16
+// × Lambda=128). DESIGN.md says rate limiting is out of scope, but
+// per-route caps cost nothing and keep the worst-case allocation bounded
+// to what the protocol actually demands. Phase-4 hierkeys cuts the GKS
+// down to a single master and will let us tighten the largest cap.
 const (
 	// MaxJSONBody is the cap for JSON control endpoints (sessions,
 	// params, callback, redirect-reply).
 	MaxJSONBody int64 = 64 * 1024
 
-	// MaxCiphertextBody is the cap for octet-stream ciphertext/share
-	// endpoints (image, pk-share, rlk/*, gks-shares, eval-keys,
-	// partial-decryption). Sized for LogN=16 × Lambda=128 GaloisKey set.
-	MaxCiphertextBody int64 = 1024 * 1024 * 1024
+	// MaxShareBody covers single-share octet-stream endpoints whose
+	// payload is one CKKS share or one key-switch share (pk-share,
+	// rlk/round1, rlk/round2, partial-decryption). Sized for LogN=16
+	// with a comfortable head-room over the largest per-share encoding.
+	MaxShareBody int64 = 16 * 1024 * 1024
+
+	// MaxGksSharesBody covers the aggregated Galois-share blob
+	// (gks-shares): Lambda × per-rotation share. At LogN=16 × Lambda=128
+	// this stays under 512 MiB with margin.
+	MaxGksSharesBody int64 = 512 * 1024 * 1024
+
+	// MaxEvalKeysBody covers the largest octet-stream payloads — the
+	// aggregated eval-keys forwarded to VService and the encrypted image
+	// ciphertext. Sized for LogN=16 × Lambda=128 (GaloisKey set
+	// dominates).
+	MaxEvalKeysBody int64 = 1024 * 1024 * 1024
+
+	// MaxCiphertextBody is an alias kept for back-compat with callers
+	// that haven't been migrated to the per-route caps yet. New code
+	// should use one of MaxShareBody / MaxGksSharesBody / MaxEvalKeysBody
+	// instead.
+	MaxCiphertextBody int64 = MaxEvalKeysBody
 )
