@@ -12,7 +12,7 @@ import (
 // orionTestDirEnv is the env var that points at a built Orion model
 // directory containing `model.orion`. Empty/unset → the smoke test skips
 // so CI without Orion artifacts still passes. Local dev points it at
-// e.g. `/home/butvinm/Dev/orion/examples/c3ae-demo/out/logn15`.
+// e.g. `/home/butvinm/Dev/ppiav/models/out/logn16`.
 const orionTestDirEnv = "PPIAV_ORION_DIR"
 
 func TestLoadOrionModelSmoke(t *testing.T) {

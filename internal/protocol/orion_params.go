@@ -127,8 +127,8 @@ func LoadOrionParams(manifestPath string) (Params, error) {
 
 // parseOrionRingType maps Orion's `ring_type` strings to Lattigo's ring
 // constants. Orion accepts {"standard", "conjugate_invariant"} (see
-// `CKKSParams.__post_init__`); both Phase-2 C3AE profiles
-// (`logn15`/`logn16`) use "standard".
+// `CKKSParams.__post_init__`); the Phase-2 C3AE profile (`logn16`)
+// uses "standard".
 func parseOrionRingType(s string) (ring.Type, error) {
 	switch s {
 	case "standard":

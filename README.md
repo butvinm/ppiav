@@ -16,7 +16,7 @@ uv run python -m models.utkface --target ./data/UTKFace
 uv run python -m models.train --variant fhe --data-dir ./data/UTKFace --epochs 60
 
 # 3. Compile for FHE inference
-uv run python -m models.compile --variant fhe --config logn15 --weights ./out/weights_fhe.pth --output ./out/logn15/model.orion
+uv run python -m models.compile --variant fhe --config logn16 --weights ./out/weights_fhe.pth --output ./out/logn16/model.orion
 
 # 4. Prepare test sample
 uv run python -m models.prepare_samples --idx 0 --data-dir ./data/UTKFace --out-dir ./out/inputs
@@ -24,7 +24,7 @@ uv run python -m models.prepare_samples --idx 0 --data-dir ./data/UTKFace --out-
 # 5. Run end-to-end protocol (requires VPS with sufficient RAM for inference)
 cd ..
 go run ./cmd/ppiav-cli e2e \
-    --orion ./models/out/logn15 \
+    --orion ./models/out/logn16 \
     --image ./models/out/inputs/sample_0.bin \
     --n 5
 ```
@@ -58,12 +58,9 @@ See `models/README.md` for detailed documentation.
 
 ## Hardware requirements
 
-FHE inference requires significant memory:
+FHE inference at `logn16` peaks at ~114 GB RSS — use `cpu.16.256.240` or larger.
 
-- `logn15` config: ~54 GB peak RSS — use `cpu.16.128.240` or larger
-- `logn16` config: ~114 GB peak RSS — use `cpu.16.256.240` or larger
-
-Training and compilation can run on a dev box (32+ GB RAM), but the full e2e protocol including inference requires a VPS with sufficient RAM.
+Training and compilation can run on a dev box (32+ GB RAM), but the full e2e protocol including inference requires a VPS with sufficient RAM for inference.
 
 ## Development
 

@@ -15,17 +15,16 @@ cd models
 uv sync
 uv run python -m models.utkface --target ./data/UTKFace
 uv run python -m models.train --variant fhe --data-dir ./data/UTKFace --epochs 60 --output ./out/weights_fhe.pth
-uv run python -m models.compile --variant fhe --config logn15 --weights ./out/weights_fhe.pth --output ./out/logn15/model.orion
+uv run python -m models.compile --variant fhe --config logn16 --weights ./out/weights_fhe.pth --output ./out/logn16/model.orion
 uv run python -m models.prepare_samples --idx 0 --data-dir ./data/UTKFace --out-dir ./out/inputs
 cd ..
-go run ./cmd/ppiav-cli e2e --orion ./models/out/logn15 --image ./models/out/inputs/sample_0.bin --n 1
+go run ./cmd/ppiav-cli e2e --orion ./models/out/logn16 --image ./models/out/inputs/sample_0.bin --n 1
 ```
 
 ## Hardware requirements
 
-FHE inference requires ~54 GB peak RSS (logn15). Training + compilation can run on a 38 GB dev box, but the full pipeline must run on a rented VPS:
+FHE inference at `logn16` peaks at ~114 GB RSS. Training + compilation can run on a 38 GB dev box, but the full pipeline must run on a rented VPS:
 
-- `logn15` (128 GB RAM): `cpu.16.128.240` or larger.
 - `logn16` (256 GB RAM): `cpu.16.256.240` or larger.
 
 The dev box (38 GB) can only run `utkface`, `train`, and `compile` locally. The final `prepare_samples` + `ppiav-cli e2e` requires a VPS with sufficient RAM for inference.
