@@ -301,11 +301,11 @@ Stratified: exactly 5 entries with `label=0` (minors) and 5 with `label=1` (adul
 - Delete: `/home/butvinm/Dev/ppiav/cmd/ppiav-cli/steps.go`
 - Modify: `/home/butvinm/Dev/ppiav/cmd/ppiav-cli/main.go`
 
-- [ ] delete `e2e.go` and `steps.go` (the seven old in-process bench subcommands)
-- [ ] rewrite `main.go` dispatch to the six new subcommands: `keygen | encrypt | infer | mac | partial-decrypt | finalize`
-- [ ] each handler is initially a stub returning `fmt.Errorf("unimplemented")` so the package compiles
-- [ ] update usage/help text; remove all references to deleted subcommands
-- [ ] run `go build ./... && go vet ./...` — must succeed before next task (package stays green even though subcommands are stubs)
+- [x] delete `e2e.go` and `steps.go` (the seven old in-process bench subcommands)
+- [x] rewrite `main.go` dispatch to the six new subcommands: `keygen | encrypt | infer | mac | partial-decrypt | finalize`
+- [x] each handler is initially a stub returning `fmt.Errorf("unimplemented")` so the package compiles
+- [x] update usage/help text; remove all references to deleted subcommands
+- [x] run `go build ./... && go vet ./...` — must succeed before next task (package stays green even though subcommands are stubs)
 
 ### Task 7: Implement `ppiav-cli keygen`
 
