@@ -422,7 +422,7 @@ Stratified: exactly 5 entries with `label=0` (minors) and 5 with `label=1` (adul
 
 - Create: `/home/butvinm/Dev/ppiav/bench/bench/plots_eval.py`
 
-- [ ] implement `write_plots(batch_dir, agg_data)` writing 7 PNGs to `<batch>/plots/`:
+- [x] implement `write_plots(batch_dir, agg_data)` writing 7 PNGs to `<batch>/plots/`:
   - `e2e_timeline.png` — horizontal Gantt of one mean e2e session, compute-only; sections in protocol order, color-coded by macro-phase (setup/inference/verify); section width = mean wall ms
   - `rss_per_step.png` — bar chart, mean delta_rss MiB per step
   - `bytes_per_message.png` — bar chart, log y, one bar per message
@@ -430,8 +430,8 @@ Stratified: exactly 5 entries with `label=0` (minors) and 5 with `label=1` (adul
   - `snr_per_image.png` — strip plot of 10 SNR values (one dot per image)
   - `bandwidth_per_message.png` — grouped bar chart, three bars (1/10/100 Mbps) per message
   - `session_timeline_10mbps.png` — horizontal Gantt with compute + transfer sections interleaved at 10 Mbps; same color coding as `e2e_timeline.png`; compute vs transfer distinguished by hatching/shade
-- [ ] use `matplotlib` (already a dep) with `Agg` backend (headless)
-- [ ] no tests — benchmark harness
+- [x] use `matplotlib` (already a dep) with `Agg` backend (headless)
+- [x] no tests — benchmark harness
 
 ### Task 16: Local sanity gate
 
