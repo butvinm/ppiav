@@ -364,11 +364,11 @@ Stratified: exactly 5 entries with `label=0` (minors) and 5 with `label=1` (adul
 
 - Modify: `/home/butvinm/Dev/ppiav/models/models/prepare_samples.py`
 
-- [ ] add `--batch N --stratified --with-ref-logit --out-manifest <path>` flags
-- [ ] in batch mode: load `out/weights_fhe.pth`, pick N stratified UTKFace test samples (N/2 minors with label=0, N/2 adults with label=1), write each as `sample_<idx>.bin`, compute the cleartext FHE-quad logit for each
-- [ ] write `eval_inputs.json` to `--out-manifest` with `{config, weights, generated_at, images: [{idx, path, age, label, ref_logit}, ...]}`
-- [ ] keep the existing single-sample mode intact (backward-compatible)
-- [ ] no tests per `feedback_no_ml_harness_tests.md`
+- [x] add `--batch N --stratified --with-ref-logit --out-manifest <path>` flags
+- [x] in batch mode: load `out/weights_fhe.pth`, pick N stratified UTKFace test samples (N/2 minors with label=0, N/2 adults with label=1), write each as `sample_<idx>.bin`, compute the cleartext FHE-quad logit for each
+- [x] write `eval_inputs.json` to `--out-manifest` with `{config, weights, generated_at, images: [{idx, path, age, label, ref_logit}, ...]}`
+- [x] keep the existing single-sample mode intact (backward-compatible)
+- [x] no tests per `feedback_no_ml_harness_tests.md`
 
 ### Task 12: Update Python bench loader + tables for `pre_vm_hwm`
 
