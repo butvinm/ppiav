@@ -1,6 +1,8 @@
 package protocol
 
 import (
+	"fmt"
+
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 	"github.com/tuneinsight/lattigo/v6/multiparty"
 	"github.com/tuneinsight/lattigo/v6/utils/structs"
@@ -25,9 +27,15 @@ type VClientPKShare struct {
 	Share multiparty.PublicKeyGenShare
 }
 
+func (s VClientPKShare) MarshalBinary() ([]byte, error)     { return s.Share.MarshalBinary() }
+func (s *VClientPKShare) UnmarshalBinary(data []byte) error { return s.Share.UnmarshalBinary(data) }
+
 type VAgentPKShare struct {
 	Share multiparty.PublicKeyGenShare
 }
+
+func (s VAgentPKShare) MarshalBinary() ([]byte, error)     { return s.Share.MarshalBinary() }
+func (s *VAgentPKShare) UnmarshalBinary(data []byte) error { return s.Share.UnmarshalBinary(data) }
 
 // Stage 2c: rlk share exchange, two rounds (VClient ↔ VAgent). Round 2
 // has no reply share — it just acks completion.
@@ -35,19 +43,86 @@ type VClientRLKRound1 struct {
 	Share multiparty.RelinearizationKeyGenShare
 }
 
+func (s VClientRLKRound1) MarshalBinary() ([]byte, error)     { return s.Share.MarshalBinary() }
+func (s *VClientRLKRound1) UnmarshalBinary(data []byte) error { return s.Share.UnmarshalBinary(data) }
+
 type VAgentRLKRound1 struct {
 	Share multiparty.RelinearizationKeyGenShare
 }
+
+func (s VAgentRLKRound1) MarshalBinary() ([]byte, error)     { return s.Share.MarshalBinary() }
+func (s *VAgentRLKRound1) UnmarshalBinary(data []byte) error { return s.Share.UnmarshalBinary(data) }
 
 type VClientRLKRound2 struct {
 	Share multiparty.RelinearizationKeyGenShare
 }
 
+func (s VClientRLKRound2) MarshalBinary() ([]byte, error)     { return s.Share.MarshalBinary() }
+func (s *VClientRLKRound2) UnmarshalBinary(data []byte) error { return s.Share.UnmarshalBinary(data) }
+
 // Stage 2d: Galois-key share exchange (VClient → VAgent) and forward to
 // VService. Phase 1–3 emits one share per rotation; Phase 4 collapses
 // these into a single gks_master share via lattigo-hierkeys.
+//
+// The wire layout is: 4-byte big-endian count, then for each share a
+// 4-byte big-endian length prefix followed by the share's MarshalBinary
+// bytes. Counts and lengths are uint32; the protocol uses on the order of
+// ~hundreds of rotation keys at most.
 type VClientGaloisKeyShare struct {
 	Shares []multiparty.GaloisKeyGenShare
+}
+
+func (s VClientGaloisKeyShare) MarshalBinary() ([]byte, error) {
+	parts := make([][]byte, len(s.Shares))
+	total := 4
+	for i := range s.Shares {
+		b, err := s.Shares[i].MarshalBinary()
+		if err != nil {
+			return nil, fmt.Errorf("VClientGaloisKeyShare: marshal share %d: %w", i, err)
+		}
+		parts[i] = b
+		total += 4 + len(b)
+	}
+	out := make([]byte, 0, total)
+	out = appendUint32(out, uint32(len(s.Shares)))
+	for _, p := range parts {
+		out = appendUint32(out, uint32(len(p)))
+		out = append(out, p...)
+	}
+	return out, nil
+}
+
+func (s *VClientGaloisKeyShare) UnmarshalBinary(data []byte) error {
+	if len(data) < 4 {
+		return fmt.Errorf("VClientGaloisKeyShare: short header")
+	}
+	count := readUint32(data[0:4])
+	off := 4
+	shares := make([]multiparty.GaloisKeyGenShare, count)
+	for i := uint32(0); i < count; i++ {
+		if off+4 > len(data) {
+			return fmt.Errorf("VClientGaloisKeyShare: short length prefix at share %d", i)
+		}
+		n := int(readUint32(data[off : off+4]))
+		off += 4
+		if off+n > len(data) {
+			return fmt.Errorf("VClientGaloisKeyShare: short body at share %d", i)
+		}
+		if err := shares[i].UnmarshalBinary(data[off : off+n]); err != nil {
+			return fmt.Errorf("VClientGaloisKeyShare: unmarshal share %d: %w", i, err)
+		}
+		off += n
+	}
+	s.Shares = shares
+	return nil
+}
+
+func appendUint32(dst []byte, v uint32) []byte {
+	return append(dst, byte(v>>24), byte(v>>16), byte(v>>8), byte(v))
+}
+
+func readUint32(b []byte) uint32 {
+	return uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
 }
 
 // InferEvalKeys carries the aggregated relinearization key and the full
