@@ -11,11 +11,12 @@
 # the host browser (localhost:<port>) — the docker-DNS names are not.
 #
 # --orion and the compiled model directory are not mounted here. To run
-# end-to-end with the compiled FHE model, override the vservice command
-# with `--orion /opt/orion` and mount your local
-# `models/out/logn16/` into the container at /opt/orion (see the commented
-# example below the vservice service). The default Phase-1 synthetic x²
-# circuit completes the protocol without the model.
+# end-to-end with the compiled FHE model, override BOTH vservice and
+# vagent commands with `--orion /opt/orion` (so VAgent and VService agree
+# on the CKKS profile) and mount your local `models/out/logn16/` into
+# both containers at /opt/orion (see the commented examples below). The
+# default Phase-1 synthetic x² circuit completes the protocol without
+# the model.
 
 services:
   vservice:
@@ -48,6 +49,10 @@ services:
       - "http://rservice:8082"
       - "--rservice-public-url"
       - "http://localhost:8082"
+    # To run with the compiled Orion model, append `--orion /opt/orion`
+    # to the command above and add the same volume mount as vservice:
+    #   volumes:
+    #     - ../models/out/logn16:/opt/orion:ro
     depends_on:
       - vservice
 
