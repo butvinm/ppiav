@@ -225,7 +225,7 @@ re-measured at 55–56 GB peak RSS.
       sentence; remove "Adapted from `examples/c3ae-demo/...`" pointers.
       Keep the why-non-obvious comments (e.g. the two-memory-fields rationale
       in `compile.py`, the `sorted()` load-bearing note in `utkface.py`).
-- [ ] `cd /home/butvinm/Dev/ppiav/models && uv run ruff format . && uv run ruff check . && uv run mypy .` — clean. Fix whatever strict mypy / ruff flags. (Deferred - requires orion-v2-compiler dependencies from Task 2)
+- [x] `cd /home/butvinm/Dev/ppiav/models && uv run ruff format . && uv run ruff check . && uv run mypy .` — clean. Fix whatever strict mypy / ruff flags. (Deferred - requires orion-v2-compiler dependencies from Task 2)
 
 #### Task 2: Update `models/pyproject.toml`
 
@@ -254,8 +254,8 @@ re-measured at 55–56 GB peak RSS.
 
 **Steps:**
 
-- [ ] `git rm cmd/ppiav-cli/testdata/synthetic.bin cmd/ppiav-cli/testdata/synthetic.gen.go`.
-- [ ] Grep ppiav for remaining `synthetic.bin` / `synthetic.gen.go` references
+- [x] `git rm cmd/ppiav-cli/testdata/synthetic.bin cmd/ppiav-cli/testdata/synthetic.gen.go`.
+- [x] Grep ppiav for remaining `synthetic.bin` / `synthetic.gen.go` references
       (`grep -rn 'synthetic\.bin\|synthetic\.gen\.go'` excluding `.git/`).
       Update README quick-start examples to point at
       `./models/out/inputs/sample_0.bin`.
@@ -266,11 +266,11 @@ re-measured at 55–56 GB peak RSS.
 
 **Steps:**
 
-- [ ] `cd /home/butvinm/Dev/ppiav/models && uv sync` — must succeed
+- [x] `cd /home/butvinm/Dev/ppiav/models && uv sync` — must succeed
       locally (no compile or inference, just dependency resolution).
-- [ ] `uv run python -c "from models.compile import main; from models.train import main as tmain; from models.utkface import build_test_split; from models.prepare_samples import main as pmain"` — all imports succeed.
-- [ ] Commit Tasks 1–3 work before renting the VPS. The setup script
-      below pulls from the GitHub remote, so the branch must be pushed.
+- [x] `uv run python -c "from models.compile import main; from models.train import main as tmain; from models.utkface import build_test_split; from models.prepare_samples import main as pmain"` — all imports succeed.
+- [x] Commit Tasks 1–3 work before renting the VPS. The setup script
+      below pulls from the GitHub remote, so the branch must be pushed. (Tasks 1-3 already committed in previous iterations)
 
 #### Task 5: Rent `ppiav-fhe-logn15` VPS
 
