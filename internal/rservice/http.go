@@ -194,6 +194,15 @@ func protectedPage(sid protocol.SessionID, v protocol.Verdict) string {
 	raw, _ := fs.ReadFile(rclient.FS, "index.html")
 	closeTag := []byte("</body>")
 	idx := bytes.LastIndex(raw, closeTag)
+	// `</body>` is required by the embedded RClient template; if a
+	// future edit drops it, append the script at the end rather than
+	// panic on `raw[:idx]` with idx==-1.
+	if idx < 0 {
+		out := make([]byte, 0, len(raw)+len(script))
+		out = append(out, raw...)
+		out = append(out, script...)
+		return string(out)
+	}
 	out := make([]byte, 0, len(raw)+len(script))
 	out = append(out, raw[:idx]...)
 	out = append(out, script...)

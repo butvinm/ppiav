@@ -1,6 +1,7 @@
 package vservice
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/butvinm/ppiav/internal/protocol"
@@ -8,6 +9,16 @@ import (
 	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
 
 	orioneval "github.com/butvinm/orion/v2/evaluator"
+)
+
+// Sentinel errors surfaced by Infer / evaluatorFor / orionEvaluatorFor.
+// The HTTP layer maps both to 404 (caller error: unknown sid, or
+// Stage-2d not yet completed). Use `errors.Is` rather than substring
+// matches — the Phase-1 ("no evaluator") and Phase-2 ("no Orion
+// evaluator") messages differ.
+var (
+	ErrUnknownSession = errors.New("vservice: unknown session id")
+	ErrNoEvaluator    = errors.New("vservice: session has no evaluator; call StoreEvalKeys first")
 )
 
 // Infer runs the session's inference circuit. Phase 1 (Service built via
@@ -60,10 +71,10 @@ func (s *Service) evaluatorFor(sid protocol.SessionID) (*ckks.Evaluator, error) 
 	defer s.mu.Unlock()
 	sess, ok := s.sessions[sid]
 	if !ok {
-		return nil, fmt.Errorf("vservice: unknown session id %q", sid)
+		return nil, fmt.Errorf("%w: %q", ErrUnknownSession, sid)
 	}
 	if sess.eval == nil {
-		return nil, fmt.Errorf("vservice: session %q has no evaluator; call StoreEvalKeys first", sid)
+		return nil, fmt.Errorf("%w (sid %q)", ErrNoEvaluator, sid)
 	}
 	return sess.eval, nil
 }
@@ -73,10 +84,10 @@ func (s *Service) orionEvaluatorFor(sid protocol.SessionID) (*orioneval.Evaluato
 	defer s.mu.Unlock()
 	sess, ok := s.sessions[sid]
 	if !ok {
-		return nil, fmt.Errorf("vservice: unknown session id %q", sid)
+		return nil, fmt.Errorf("%w: %q", ErrUnknownSession, sid)
 	}
 	if sess.orionEval == nil {
-		return nil, fmt.Errorf("vservice: session %q has no Orion evaluator; call StoreEvalKeys first", sid)
+		return nil, fmt.Errorf("%w (Orion, sid %q)", ErrNoEvaluator, sid)
 	}
 	return sess.orionEval, nil
 }

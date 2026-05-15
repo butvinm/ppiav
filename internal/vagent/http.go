@@ -11,6 +11,7 @@ import (
 	"net/http"
 	urlpath "net/url"
 	"strings"
+	"time"
 
 	"github.com/butvinm/ppiav/internal/httputil"
 	"github.com/butvinm/ppiav/internal/protocol"
@@ -69,8 +70,11 @@ func NewServer(agent *Agent, vserviceURL, rserviceURL, rservicePublicURL string)
 		vserviceURL:       strings.TrimRight(vserviceURL, "/"),
 		rserviceURL:       rsvcURL,
 		rservicePublicURL: rsvcPubURL,
-		httpClient:        &http.Client{},
-		mux:               http.NewServeMux(),
+		// 30s is well above the longest legitimate VService /image
+		// turnaround (Phase-2 Orion inference) but bounds hung
+		// peers so handler goroutines do not leak.
+		httpClient: &http.Client{Timeout: 30 * time.Second},
+		mux:        http.NewServeMux(),
 	}
 	s.register()
 	return s
@@ -570,7 +574,7 @@ func (s *Server) handlePartialDecryption(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxCiphertextBody))
 	if err != nil {
 		// Known sid + read failure → F2 (wire-shape violation): callback
 		// Reject, then 400.

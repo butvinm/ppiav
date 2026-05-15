@@ -99,6 +99,13 @@ func (s *VClientGaloisKeyShare) UnmarshalBinary(data []byte) error {
 		return fmt.Errorf("VClientGaloisKeyShare: short header")
 	}
 	count := binary.BigEndian.Uint32(data[0:4])
+	// Bound `count` against the remaining payload before allocating: each
+	// share contributes at least a 4-byte length prefix, so a body that
+	// claims more shares than (remaining/4) is malformed. Without this
+	// cap a 5-byte payload could request ~96 GiB via make().
+	if uint64(count) > uint64((len(data)-4)/4) {
+		return fmt.Errorf("VClientGaloisKeyShare: count %d exceeds remaining bytes %d", count, len(data)-4)
+	}
 	off := 4
 	shares := make([]multiparty.GaloisKeyGenShare, count)
 	for i := uint32(0); i < count; i++ {

@@ -2,6 +2,7 @@ package vservice
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -117,7 +118,7 @@ func (s *Server) handleEvalKeys(w http.ResponseWriter, r *http.Request, sid prot
 	}
 	if err := s.svc.StoreEvalKeys(sid, keys.RLK, keys.GKS); err != nil {
 		// Unknown sid is the only common error path here.
-		if strings.Contains(err.Error(), "unknown session") {
+		if errors.Is(err, ErrUnknownSession) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
@@ -153,7 +154,11 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, sid protoco
 	}
 	out, err := s.svc.Infer(sid, ct)
 	if err != nil {
-		if strings.Contains(err.Error(), "unknown session") || strings.Contains(err.Error(), "no evaluator") {
+		// Map both sentinel errors to 404: caller error (sid unknown,
+		// or Stage-2d not yet completed). errors.Is — not substring —
+		// because Phase-1 and Phase-2 wrap the same sentinel with
+		// different messages ("no evaluator" vs "no Orion evaluator").
+		if errors.Is(err, ErrUnknownSession) || errors.Is(err, ErrNoEvaluator) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}

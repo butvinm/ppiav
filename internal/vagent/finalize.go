@@ -41,6 +41,19 @@ func (a *Agent) FinalizeDecryption(
 	// `sess.skShare` is populated by OpenSession; a nil here would be an
 	// invariant violation, not a runtime error.
 
+	// authKey is single-use: drop the session now, before any work that
+	// might fail. A deferred eviction guarantees the same replay
+	// protection on every exit path (AggregateShares error, Decode
+	// error, verdict-true accept, verdict-false reject). Without this,
+	// errors in proto.AggregateShares / encoder.Decode left the entry
+	// in place and let an adversary re-attack the same authKey with
+	// fresh shares.
+	defer func() {
+		a.mu.Lock()
+		delete(a.sessions, sid)
+		a.mu.Unlock()
+	}()
+
 	// VAgent's KeySwitchProtocol with σ=0 smudging. The NoiseFreshSK term
 	// is folded in automatically by Lattigo; per DESIGN.md eFresh is
 	// sufficient because VClient (the only other party that sees a share)
@@ -72,13 +85,6 @@ func (a *Agent) FinalizeDecryption(
 	if err := a.encoder.Decode(dec.DecryptNew(ksOut), slots); err != nil {
 		return protocol.VerdictReject, fmt.Errorf("vagent: decode plaintext: %w", err)
 	}
-
-	// authKey is single-use: drop the session before returning regardless of
-	// the verdict (a replay of the same authKey would let an adversary
-	// re-attack the same `v` values).
-	a.mu.Lock()
-	delete(a.sessions, sid)
-	a.mu.Unlock()
 
 	m, ok := a.auth.Ver(sess.authKey, slots)
 	if !ok {

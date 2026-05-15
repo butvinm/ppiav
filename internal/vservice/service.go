@@ -140,7 +140,7 @@ func (s *Service) StoreEvalKeys(
 	defer s.mu.Unlock()
 	sess, ok := s.sessions[sid]
 	if !ok {
-		return fmt.Errorf("vservice: unknown session id %q", sid)
+		return fmt.Errorf("%w: %q", ErrUnknownSession, sid)
 	}
 	evk := rlwe.NewMemEvaluationKeySet(rlk, gks...)
 	if s.orionModel != nil {

@@ -37,8 +37,12 @@ func WriteError(w http.ResponseWriter, status int, msg string) {
 // The big ones are the CKKS share/key blobs at LogN=16:
 //   - VClientGaloisKeyShare: ~Lambda shares × per-rotation share size
 //   - InferEvalKeys: aggregated RLK + per-rotation GaloisKey
-// 64 MiB covers Phase-3 LogN=16 with Lambda<=16; Phase-4 hierkeys cuts
-// the GKS down to a single master.
+//
+// 1 GiB covers Phase-3 LogN=16 with Lambda=128 (default): the GaloisKey
+// set at that ring degree dominates and runs into the hundreds of MiB.
+// The earlier 64 MiB cap was set when only Lambda<=16 was exercised and
+// rejected legitimate default-config payloads. Phase-4 hierkeys cuts
+// the GKS down to a single master and will let us tighten this again.
 const (
 	// MaxJSONBody is the cap for JSON control endpoints (sessions,
 	// params, callback, redirect-reply).
@@ -46,6 +50,6 @@ const (
 
 	// MaxCiphertextBody is the cap for octet-stream ciphertext/share
 	// endpoints (image, pk-share, rlk/*, gks-shares, eval-keys,
-	// partial-decryption).
-	MaxCiphertextBody int64 = 64 * 1024 * 1024
+	// partial-decryption). Sized for LogN=16 × Lambda=128 GaloisKey set.
+	MaxCiphertextBody int64 = 1024 * 1024 * 1024
 )

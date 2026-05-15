@@ -205,6 +205,17 @@ func TestVClientGaloisKeyShareUnmarshalEmpty(t *testing.T) {
 	assert.Empty(t, got.Shares)
 }
 
+// A malicious header that claims many more shares than the remaining
+// payload can possibly contain must be rejected before the
+// `make([]GaloisKeyGenShare, count)` allocation runs. Without the
+// upper-bound guard a 5-byte body could request a multi-GiB slice.
+func TestVClientGaloisKeyShareUnmarshalCountExceedsPayload(t *testing.T) {
+	// count = 0xFFFFFFFF, no further bytes → 1 byte after the header.
+	data := []byte{0xff, 0xff, 0xff, 0xff, 0x00}
+	var got VClientGaloisKeyShare
+	require.Error(t, got.UnmarshalBinary(data))
+}
+
 func TestInferEvalKeysBinaryRoundTrip(t *testing.T) {
 	// LogN=10 keeps the test fast; the marshaling code is the same for
 	// production LogN=16. Two small rotation indices are enough to exercise
