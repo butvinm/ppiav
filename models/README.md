@@ -25,9 +25,9 @@ go run ./cmd/ppiav-cli e2e --orion ./models/out/logn16 --image ./models/out/inpu
 
 FHE inference at `logn16` peaks at ~114 GB RSS. Training + compilation can run on a 38 GB dev box, but the full pipeline must run on a rented VPS:
 
-- `logn16` (256 GB RAM): `cpu.16.256.240` or larger.
+- `logn16` (128 GB RAM): `cpu.16.128.240`. ~10 GB headroom at the measured peak; verified by Orion's c3ae `logn16` run (see `~/Dev/orion/docs/plans/completed/2026-05-09-c3ae-vps-runs.md` Task 16).
 
-The dev box (38 GB) can only run `utkface`, `train`, and `compile` locally. The final `prepare_samples` + `ppiav-cli e2e` requires a VPS with sufficient RAM for inference.
+The dev box (38 GB) can only run `utkface`, `train`, and `compile` locally. The final `prepare_samples` + `ppiav-cli` evaluation requires a VPS with sufficient RAM for inference.
 
 ## Dependencies
 

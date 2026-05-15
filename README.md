@@ -79,7 +79,7 @@ See `models/README.md` for detailed documentation.
 
 ## Hardware requirements
 
-FHE inference at `logn16` peaks at ~114 GB RSS — use a host with at least 128 GB RAM (e.g., `cpu.16.256.240` or larger). Training and compilation can run on a dev box with 32+ GB RAM.
+FHE inference at `logn16` peaks at ~114 GB RSS — use a host with at least 128 GB RAM (e.g., `cpu.16.128.240`). Training and compilation can run on a dev box with 32+ GB RAM.
 
 ## Benchmarks
 

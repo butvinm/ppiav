@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Provisioning script for ppiav FHE benchmark VPS.
-# Run as ubuntu user on a fresh Ubuntu 22.04 VPS from immers.cloud (cpu.16.256.240 for logn16).
+# Run as ubuntu user on a fresh Ubuntu 22.04 VPS from immers.cloud (cpu.16.128.240 for logn16).
 set -euxo pipefail
 
 # Wait for cloud-init to finish before touching apt
