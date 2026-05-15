@@ -498,18 +498,18 @@ Scope: confirm everything builds and unit tests pass on the dev box. Full chain 
 
 **Files:** none
 
-- [ ] rent the 128 GB CPU VPS: `vps create --name ppiav-bench-eval-fhe --flavor cpu.16.128.240`
-- [ ] **manual verify**: status `ACTIVE`, IP noted, ~125 GiB free RAM reported by `free -h`
-- [ ] record rental start time
+- [x] rent the 128 GB CPU VPS: `openstack server create --flavor cpu.16.128.240 --image "Ubuntu 22.04 (Apr 2026) [BIOS]" ...` (the vps skill's hard-coded "Ubuntu 22.04 (Aug 2024) [BIOS]" name is stale on immers.cloud as of 2026-05; image list now offers the "Apr 2026" build)
+- [x] **manual verify**: status `ACTIVE`, IP `195.209.216.203` (same address recycled from the deleted train VPS), `free -h` reports 125 Gi total / 124 Gi available
+- [x] record rental start time — `launched_at = 2026-05-15T22:13:33Z` UTC
 
 ### Task 22: Bootstrap FHE VPS + scp local artifacts
 
 **Files:** none on local; outputs land on the VPS
 
-- [ ] scp `setup.sh` to the FHE VPS (same script reused from Task 19, possibly with the same branch fix)
-- [ ] run `setup.sh` on the FHE VPS
-- [ ] scp `models/out/weights_fhe.pth` from local to `~/ppiav/models/out/weights_fhe.pth` on the VPS (avoids re-training on the CPU box)
-- [ ] **manual verify** over SSH: `python -c "import torch, orion_compiler; print('python ok')"`, `go version`, `ls -la ~/ppiav/models/out/weights_fhe.pth`, `free -h | head -2`
+- [x] scp `setup.sh` to the FHE VPS (same script reused from Task 19, branch line already updated to `phase-3-http-services-and-browser-spas`); also pre-wrote `~/.kaggle/kaggle.json` with full `{username, key}` JSON before running setup.sh so the kagglehub step did not need recovery this time
+- [x] run `setup.sh` on the FHE VPS — apt/Go/uv/git-clone/uv-sync/UTKFace-download all completed; script exited at the trailing `ls -la ... | head -2` line because `set -o pipefail` propagates SIGPIPE from `head` to `ls` and `set -e` aborts before the `echo PROVISIONING DONE`. Functionally complete; cosmetic shell bug in setup.sh
+- [x] scp `models/out/weights_fhe.pth` (136,347 B) from local to `~/ppiav/models/out/weights_fhe.pth` on the VPS — avoids re-training on the CPU box
+- [x] **manual verify** over SSH: `import torch, orion_compiler` succeeds; `torch 2.12.0+cu130 cuda: False` (expected on CPU VPS); `go version go1.24.0 linux/amd64`; weights file 136,347 B present; `free -h`: 125 Gi total / 124 Gi available
 
 ### Task 23: Compile model + prepare stratified batch on FHE VPS
 
