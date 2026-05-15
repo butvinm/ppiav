@@ -15,7 +15,7 @@ Phase 1 (multi-party CKKS + synthetic `x²` + MPD-Auth) and Phase 2 (Orion-compi
 ## Implementation Phases
 
 1. **Phase 1** — done. Synthetic CKKS circuit (`x²`), in-process protocol with collaborative keygen + MPD-Auth + joint decryption, CLI + benchmark harness, no model, no Orion.
-2. **Phase 2** — done. Orion-compiled C3AE inference swaps in for `x²` when the CLI is pointed at an Orion build directory via `--orion`. `models/` Python project owns the image-preprocessing pipeline (training/compilation reused from Orion's reference artifacts).
+2. **Phase 2** — done. Training and compilation are in-tree under `models/`. `orion-v2-compiler` is consumed from PyPI. Acceptance runs on a rented `cpu.16.128.240` VPS via the `vps` skill.
 3. **Phase 3** — pending. Verification Service / Verification Agent / Resource Service Go HTTP services + browser SPAs (vanilla JS + WASM, copy of Orion's `js/lattigo`).
 4. **Phase 4** — pending. lattigo-hierkeys for compressed key transmission.
 
