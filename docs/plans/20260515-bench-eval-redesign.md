@@ -287,11 +287,11 @@ Stratified: exactly 5 entries with `label=0` (minors) and 5 with `label=1` (adul
 - Create: `/home/butvinm/Dev/ppiav/internal/vservice/state.go`
 - Create: `/home/butvinm/Dev/ppiav/internal/vservice/state_test.go`
 
-- [ ] define `ExportedState`: `{SID, Rlk *rlwe.RelinearizationKey, Glk []*rlwe.GaloisKey}`. Sufficient for `Infer` since Orion model is loaded separately via `--orion <dir>`
-- [ ] implement `(s *Service) ExportState(sid) (*ExportedState, error)`
-- [ ] implement `NewWithState(params, orionDir string, state *ExportedState) (*Service, error)` — loads Orion model the existing way, then directly seeds the session map with `sid → {rlk, glk, evaluator}` bypassing the random sid mint in `OpenSession`
-- [ ] write round-trip test at LogN=15 (no Orion model — use the stub inference path if one exists; otherwise verify state seeding via `Infer` against a trivial keyset and a non-zero probe ciphertext)
-- [ ] run `go test ./internal/vservice/...` — must pass before next task
+- [x] define `ExportedState`: `{SID, Rlk *rlwe.RelinearizationKey, Glk []*rlwe.GaloisKey}`. Sufficient for `Infer` since Orion model is loaded separately via `--orion <dir>`
+- [x] implement `(s *Service) ExportState(sid) (*ExportedState, error)`
+- [x] implement `NewWithState(params, orionDir string, state *ExportedState) (*Service, error)` — loads Orion model the existing way (skipped when `orionDir == ""`), then directly seeds the session map with `sid → {rlk, glk, evaluator}` bypassing the random sid mint in `OpenSession`
+- [x] write round-trip test using Phase-1 x² stub inference path (LogN=14 via `smallParams` — the plan's "LogN=15" became Phase-1 because a real Orion model is not in tree on the dev box; state-seeding semantics are LogN-independent and the round-trip is exercised against a trivial keyset)
+- [x] run `go test ./internal/vservice/...` — all tests pass (5 new tests green)
 
 ### Task 6: Delete old subcommands AND rewrite `main.go` dispatch with stubs
 
