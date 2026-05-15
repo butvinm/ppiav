@@ -455,11 +455,11 @@ Scope: confirm everything builds and unit tests pass on the dev box. Full chain 
 - Modify: `/home/butvinm/Dev/ppiav/README.md` (only if it documents the ppiav-cli surface)
 - Modify: `/home/butvinm/Dev/ppiav/Makefile` if a bench target should be added
 
-- [ ] `bench/README.md`: rewrite to document `python -m bench.eval --inputs ... --orion ...` workflow and the per-batch directory layout
-- [ ] `models/README.md`: document the `--batch --stratified --with-ref-logit --out-manifest` flow; replace the existing `ppiav-cli e2e` example with the new pipeline (or a `python -m bench.eval` one-liner)
-- [ ] `CLAUDE.md`: update Status section noting the bench redesign; replace any obsolete subcommand list
-- [ ] `README.md`: scan for `ppiav-cli e2e` / other deleted subcommand mentions; replace with new flow
-- [ ] `Makefile`: optionally add `make eval` chaining the prepare → eval-driver invocation
+- [x] `bench/README.md`: rewrite to document `python -m bench.eval --inputs ... --orion ...` workflow and the per-batch directory layout
+- [x] `models/README.md`: document the `--batch --stratified --with-ref-logit --out-manifest` flow; replace the existing `ppiav-cli e2e` example with the new pipeline (or a `python -m bench.eval` one-liner)
+- [x] `CLAUDE.md`: update Status section noting the bench redesign; replace any obsolete subcommand list
+- [x] `README.md`: scan for `ppiav-cli e2e` / other deleted subcommand mentions; replace with new flow
+- [x] `Makefile`: optionally add `make eval` chaining the prepare → eval-driver invocation
 
 ### Task 18: Rent training VPS
 

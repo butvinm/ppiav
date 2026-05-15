@@ -83,26 +83,25 @@ FHE inference at `logn16` peaks at ~114 GB RSS — use a host with at least 128 
 
 ## Benchmarks
 
-Per-stage protocol timings and key sizes are produced by the in-process CLI orchestrator (a separate code path from the HTTP services in the demo):
+Per-stage protocol timings, per-message wire bytes, RSS, and protocol-level FPR/FNR are produced by the `ppiav-cli` artifact pipeline (six per-stage subcommands chained by a Python driver) — a separate code path from the HTTP services in the demo:
 
 ```sh
-# Prepare a real UTKFace sample
-uv run python -m models.prepare_samples --idx 0 --data-dir ./data/UTKFace --out-dir ./out/inputs
+# Prepare a stratified UTKFace batch + cleartext reference logits.
+cd models
+uv run python -m models.prepare_samples \
+    --batch 10 --stratified --with-ref-logit \
+    --data-dir ./data/UTKFace \
+    --out-dir ./out/inputs \
+    --out-manifest ./out/eval_inputs.json
 
-# Run end-to-end protocol with N repetitions
-go run ./cmd/ppiav-cli e2e \
-    --orion ./models/out/logn16 \
-    --image ./models/out/inputs/sample_0.bin \
-    --n 5
+# Drive the full pipeline: keygen runs once, then 10× encrypt → infer → mac → partial → finalize.
+cd ../bench
+uv run python -m bench.eval \
+    --inputs ../models/out/eval_inputs.json \
+    --orion  ../models/out/logn16
 ```
 
-Output: `results/phase2/e2e.json`. Visualize with the `bench/` scripts:
-
-```sh
-cd bench
-uv run python -m bench.tables ../results/phase2
-uv run python -m bench.plot ../results/phase2
-```
+The driver creates `results/phase2/eval-<UTC-ts>/` containing `keys/`, per-image `img_<idx>/` directories, `keygen.json`, `eval_inputs.json`, `summary.md` (per-step timing / RSS / bytes / FPR-FNR / noise / SNR / network tables), and `plots/` (7 PNGs). See `bench/README.md` for the layout.
 
 ## Development
 

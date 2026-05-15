@@ -10,7 +10,11 @@ Companion thesis context lives at `~/Dev/ITMO/thesis/`.
 
 ## Status
 
-Phase 1 (multi-party CKKS + synthetic `x²` + MPD-Auth), Phase 2 (Orion-compiled C3AE inference), and Phase 3 (HTTP services + browser SPAs) complete. An in-process orchestrator (`internal/orchestrator`) drives the full §3 protocol via `cmd/ppiav-cli`, emitting per-stage benchmark JSON consumed by the Python `bench/` project. Three Go HTTP services (`ppiav-vservice`, `ppiav-vagent`, `ppiav-rservice`) plus browser SPAs (vclient, rclient) demonstrate the protocol over a network using a WASM build of `internal/vclient`. Phase 4 (lattigo-hierkeys) is outstanding.
+Phase 1 (multi-party CKKS + synthetic `x²` + MPD-Auth), Phase 2 (Orion-compiled C3AE inference), and Phase 3 (HTTP services + browser SPAs) complete. Three Go HTTP services (`ppiav-vservice`, `ppiav-vagent`, `ppiav-rservice`) plus browser SPAs (vclient, rclient) demonstrate the protocol over a network using a WASM build of `internal/vclient`. Phase 4 (lattigo-hierkeys) is outstanding.
+
+`cmd/ppiav-cli` is now an **artifact pipeline**: six per-stage subcommands (`keygen | encrypt | infer | mac | partial-decrypt | finalize`) each load inputs from disk, run one cryptographic op, and write the resulting artifact plus a single-sample timing JSON. The old in-process `e2e` / seven step subcommands and the in-process orchestrator-driven bench harness are gone. A Python driver — `python -m bench.eval --inputs ... --orion ...` — chains the subcommands across a stratified UTKFace batch (single shared keygen) into `results/phase2/eval-<UTC-ts>/{keys/, img_<idx>/, eval_inputs.json, keygen.json, summary.md, plots/}`. Per-step peak RSS is now correct (each subcommand is a fresh process) and per-message wire bytes come straight from `os.Stat`. See `docs/plans/20260515-bench-eval-redesign.md` for the design.
+
+Heavy `LogN=15` round-trip tests under `internal/` are gated behind `PPIAV_RUN_HEAVY=1` to keep `go test ./...` viable on a 38 GB dev box; CI and VPS runs export the flag.
 
 ## Implementation Phases
 

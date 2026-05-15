@@ -1,4 +1,4 @@
-.PHONY: all phase3 wasm wasm_exec spas spa_vclient spa_rclient services test clean
+.PHONY: all phase3 wasm wasm_exec spas spa_vclient spa_rclient services test clean prepare-samples eval
 
 GOROOT := $(shell go env GOROOT)
 
@@ -30,6 +30,22 @@ services: wasm spas
 
 test:
 	go test ./...
+
+# Stratified UTKFace batch + cleartext ref logits → models/out/eval_inputs.json.
+# Requires ./models/data/UTKFace and ./models/out/weights_fhe.pth.
+prepare-samples:
+	cd models && uv run python -m models.prepare_samples \
+	    --batch 10 --stratified --with-ref-logit \
+	    --data-dir ./data/UTKFace \
+	    --out-dir ./out/inputs \
+	    --out-manifest ./out/eval_inputs.json
+
+# Drive the full protocol across the prepared batch.
+# Requires a compiled Orion model at ./models/out/logn16.
+eval: prepare-samples
+	cd bench && uv run python -m bench.eval \
+	    --inputs ../models/out/eval_inputs.json \
+	    --orion  ../models/out/logn16
 
 clean:
 	rm -rf bin/
