@@ -10,14 +10,15 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, random_split
 
-from models.c3ae_fhe import C3AE
+from models.c3ae_fhe import C3AE as C3AE_FHE
+from models.c3ae import C3AE as C3AE_ReLU
 from models.metrics import compute_metrics
 from models.utkface import UTKFaceDataset
 
-VARIANTS = {"fhe": C3AE}
+VARIANTS: dict[str, type[torch.nn.Module]] = {"relu": C3AE_ReLU, "fhe": C3AE_FHE}
 
 
-def asymmetric_loss(pred, target, fpr_weight):
+def asymmetric_loss(pred: torch.Tensor, target: torch.Tensor, fpr_weight: float) -> torch.Tensor:
     """Asymmetric BCE: penalizes false positives more heavily."""
     pred = pred.clamp(1e-7, 1 - 1e-7)
     bce = F.binary_cross_entropy(pred, target, reduction="none")
@@ -25,7 +26,12 @@ def asymmetric_loss(pred, target, fpr_weight):
     return (bce * weights).mean()
 
 
-def evaluate(model, loader, device, fpr_weight):
+def evaluate(
+    model: torch.nn.Module,
+    loader: DataLoader[tuple[torch.Tensor, torch.Tensor, int]],
+    device: torch.device,
+    fpr_weight: float,
+) -> dict[str, float]:
     model.eval()
     all_probs, all_targets = [], []
     total_loss, n = 0, 0
@@ -49,7 +55,7 @@ def evaluate(model, loader, device, fpr_weight):
     }
 
 
-def load_variant(variant: str):
+def load_variant(variant: str) -> type[torch.nn.Module]:
     """Return the requested C3AE class for the given variant name."""
     try:
         return VARIANTS[variant]
@@ -57,11 +63,11 @@ def load_variant(variant: str):
         raise ValueError(f"Unknown variant: {variant!r}") from exc
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--variant",
-        choices=["fhe"],
+        choices=["relu", "fhe"],
         required=True,
         help="Model variant: only 'fhe' (orion_compiler.nn + Quad) is supported.",
     )
@@ -112,7 +118,7 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs)
 
-    best_acc, best_state = -1.0, None
+    best_acc, best_state = -1.0, None  # type: tuple[float, dict[str, torch.Tensor] | None]
     t0 = time.time()
 
     for epoch in range(args.epochs):
@@ -123,7 +129,7 @@ def main():
             optimizer.zero_grad()
             probs = torch.sigmoid(model(images))
             loss = asymmetric_loss(probs, targets, args.fpr_weight)
-            loss.backward()
+            loss.backward()  # type: ignore[no-untyped-call]
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.max_grad_norm)
             optimizer.step()
             train_loss += loss.item() * images.size(0)
@@ -151,7 +157,7 @@ def main():
     print(f"Saved best model to {args.output}")
 
     # Test
-    model.load_state_dict(best_state)
+    model.load_state_dict(best_state)  # type: ignore[arg-type]
     model = model.to(device)
     test = evaluate(model, test_loader, device, args.fpr_weight)
     print(
