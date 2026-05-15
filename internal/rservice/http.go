@@ -84,7 +84,7 @@ func (s *Server) register() {
 // served at `/protected`.
 func (s *Server) handleRClientAsset(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	http.FileServer(http.FS(rclient.FS)).ServeHTTP(w, r)
@@ -92,7 +92,7 @@ func (s *Server) handleRClientAsset(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleProtected(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	c, err := r.Cookie("sid")
@@ -116,26 +116,26 @@ func (s *Server) handleProtected(w http.ResponseWriter, r *http.Request) {
 func (s *Server) beginStage1(w http.ResponseWriter, r *http.Request) {
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, s.vagentURL+"/sessions", nil)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("build vagent request: %s", err))
+		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("build vagent request: %s", err))
 		return
 	}
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("call vagent /sessions: %s", err))
+		httputil.WriteError(w, http.StatusBadGateway, fmt.Sprintf("call vagent /sessions: %s", err))
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("vagent /sessions returned %d", resp.StatusCode))
+		httputil.WriteError(w, http.StatusBadGateway, fmt.Sprintf("vagent /sessions returned %d", resp.StatusCode))
 		return
 	}
 	var sess protocol.VerificationSession
 	if err := json.NewDecoder(resp.Body).Decode(&sess); err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("decode VerificationSession: %s", err))
+		httputil.WriteError(w, http.StatusBadGateway, fmt.Sprintf("decode VerificationSession: %s", err))
 		return
 	}
 	if sess.SessionID == "" {
-		writeError(w, http.StatusBadGateway, "vagent returned empty sid")
+		httputil.WriteError(w, http.StatusBadGateway, "vagent returned empty sid")
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
@@ -149,25 +149,25 @@ func (s *Server) beginStage1(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	rest := strings.TrimPrefix(r.URL.Path, "/api/callback/")
 	if rest == "" || strings.Contains(rest, "/") {
-		writeError(w, http.StatusNotFound, "not found")
+		httputil.WriteError(w, http.StatusNotFound, "not found")
 		return
 	}
 	sid := protocol.SessionID(rest)
 
 	var notif protocol.VerdictNotification
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, httputil.MaxJSONBody)).Decode(&notif); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("decode VerdictNotification: %s", err))
+		httputil.WriteError(w, http.StatusBadRequest, fmt.Sprintf("decode VerdictNotification: %s", err))
 		return
 	}
 	if err := s.svc.AcceptVerdict(sid, notif.Verdict); err != nil {
 		// AcceptVerdict only errors on VerdictUnknown — a wire-shape
 		// violation per DESIGN.md (callback never delivers Unknown).
-		writeError(w, http.StatusBadRequest, err.Error())
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -209,13 +209,6 @@ func protectedPage(sid protocol.SessionID, v protocol.Verdict) string {
 	out = append(out, raw[idx:]...)
 	return string(out)
 }
-
-// errorBody re-exports the shared JSON error wire shape for tests that
-// previously unmarshaled `errorBody` directly. Implementation now lives
-// in internal/httputil.
-type errorBody = httputil.ErrorBody
-
-var writeError = httputil.WriteError
 
 func writeHTML(w http.ResponseWriter, status int, body string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

@@ -67,10 +67,4 @@ const (
 	// ciphertext. Sized for LogN=16 × Lambda=128 (GaloisKey set
 	// dominates).
 	MaxEvalKeysBody int64 = 1024 * 1024 * 1024
-
-	// MaxCiphertextBody is an alias kept for back-compat with callers
-	// that haven't been migrated to the per-route caps yet. New code
-	// should use one of MaxShareBody / MaxGksSharesBody / MaxEvalKeysBody
-	// instead.
-	MaxCiphertextBody int64 = MaxEvalKeysBody
 )

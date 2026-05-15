@@ -13,24 +13,13 @@ import (
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 )
 
-// Server wraps a *Service with the HTTP handlers VAgent uses to drive
-// inference. Routes mirror docs/DESIGN.md §`Protocol` exactly:
-//
-//	GET  /params
-//	POST /sessions
-//	POST /sessions/:sid/eval-keys
-//	POST /sessions/:sid/image
-//
-// JSON for control endpoints, application/octet-stream for share- and
-// key-bearing endpoints (see docs/plans Technical Details).
+// Server exposes the VService HTTP routes. See docs/DESIGN.md §`Protocol`.
 type Server struct {
 	svc *Service
 	mux *http.ServeMux
 }
 
-// NewServer wires a Server around `svc`. The constructor is named
-// `NewServer` rather than `New` to avoid shadowing the existing
-// `vservice.New(params)` Service constructor.
+// NewServer is named NewServer (not New) to avoid shadowing vservice.New.
 func NewServer(svc *Service) *Server {
 	s := &Server{svc: svc, mux: http.NewServeMux()}
 	s.register()
@@ -56,26 +45,26 @@ func (s *Server) register() {
 
 func (s *Server) handleParams(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if err := writeParams(w, s.svc.Params()); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 }
 
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	sid, err := s.svc.OpenSession()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, protocol.VerificationSession{SessionID: sid})
+	httputil.WriteJSON(w, http.StatusOK, protocol.VerificationSession{SessionID: sid})
 }
 
 // handleSession dispatches /sessions/:sid/<sub>. Stdlib ServeMux gives us
@@ -83,12 +72,12 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/sessions/")
 	if rest == "" || rest == r.URL.Path {
-		writeError(w, http.StatusNotFound, "not found")
+		httputil.WriteError(w, http.StatusNotFound, "not found")
 		return
 	}
 	sid, sub, ok := strings.Cut(rest, "/")
 	if !ok || sid == "" || sub == "" {
-		writeError(w, http.StatusNotFound, "not found")
+		httputil.WriteError(w, http.StatusNotFound, "not found")
 		return
 	}
 	switch sub {
@@ -97,77 +86,67 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	case "image":
 		s.handleImage(w, r, protocol.SessionID(sid))
 	default:
-		writeError(w, http.StatusNotFound, "not found")
+		httputil.WriteError(w, http.StatusNotFound, "not found")
 	}
 }
 
 func (s *Server) handleEvalKeys(w http.ResponseWriter, r *http.Request, sid protocol.SessionID) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxCiphertextBody))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxEvalKeysBody))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("read body: %s", err))
+		httputil.WriteError(w, http.StatusBadRequest, fmt.Sprintf("read body: %s", err))
 		return
 	}
 	var keys protocol.InferEvalKeys
 	if err := keys.UnmarshalBinary(body); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("unmarshal InferEvalKeys: %s", err))
+		httputil.WriteError(w, http.StatusBadRequest, fmt.Sprintf("unmarshal InferEvalKeys: %s", err))
 		return
 	}
 	if err := s.svc.StoreEvalKeys(sid, keys.RLK, keys.GKS); err != nil {
 		// Unknown sid is the only common error path here.
 		if errors.Is(err, ErrUnknownSession) {
-			writeError(w, http.StatusNotFound, err.Error())
+			httputil.WriteError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusOK)
 }
 
-// handleImage runs Stage 3: read the client's `EncryptedImage.Ct` bytes,
-// unmarshal into an *rlwe.Ciphertext, run `svc.Infer` to produce the
-// result ciphertext, and write its MarshalBinary back as
-// application/octet-stream. The wire encoding is the bare ciphertext (no
-// JSON envelope) — same convention as the keygen handlers in VAgent's
-// http.go. Errors map per docs/DESIGN.md §`Failure modes`:
-//   - unknown sid → 404 (no evaluator → caller hasn't completed Stage 2d)
-//   - malformed body → 400 (F2 wire-shape violation)
-//   - infer failure (level exhaustion, Orion graph error) → 500
+// handleImage runs Stage 3 inference and returns the result ciphertext.
 func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, sid protocol.SessionID) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxCiphertextBody))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxEvalKeysBody))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("read body: %s", err))
+		httputil.WriteError(w, http.StatusBadRequest, fmt.Sprintf("read body: %s", err))
 		return
 	}
 	ct := &rlwe.Ciphertext{}
 	if err := ct.UnmarshalBinary(body); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("unmarshal EncryptedImage: %s", err))
+		httputil.WriteError(w, http.StatusBadRequest, fmt.Sprintf("unmarshal EncryptedImage: %s", err))
 		return
 	}
 	out, err := s.svc.Infer(sid, ct)
 	if err != nil {
-		// Map both sentinel errors to 404: caller error (sid unknown,
-		// or Stage-2d not yet completed). errors.Is — not substring —
-		// because Phase-1 and Phase-2 wrap the same sentinel with
-		// different messages ("no evaluator" vs "no Orion evaluator").
+		// errors.Is (not strings.Contains) because Phase-1 and Phase-2
+		// wrap ErrNoEvaluator with different messages.
 		if errors.Is(err, ErrUnknownSession) || errors.Is(err, ErrNoEvaluator) {
-			writeError(w, http.StatusNotFound, err.Error())
+			httputil.WriteError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	outBytes, err := out.MarshalBinary()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("marshal result ciphertext: %s", err))
+		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("marshal result ciphertext: %s", err))
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
@@ -175,10 +154,8 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, sid protoco
 	_, _ = w.Write(outBytes)
 }
 
-// paramsWire is the JSON representation of protocol.Params on the wire.
-// `ckks.Parameters` is JSON-marshaled directly (Lattigo provides the codec);
-// the rest of Params is small scalar config that survives `encoding/json`
-// untouched. Phase 4 may swap CKKS for a precomputed manifest.
+// paramsWire is the JSON representation of protocol.Params. CKKS uses
+// Lattigo's codec; the rest survives encoding/json untouched.
 type paramsWire struct {
 	CKKS                 json.RawMessage `json:"ckks"`
 	AuthenticatorLambda  int             `json:"authenticator_lambda"`
@@ -201,19 +178,7 @@ func writeParams(w http.ResponseWriter, p protocol.Params) error {
 		ExtraRotationIndices: p.ExtraRotationIndices,
 		InputLevel:           p.InputLevel,
 	}
-	writeJSON(w, http.StatusOK, pw)
+	httputil.WriteJSON(w, http.StatusOK, pw)
 	return nil
 }
 
-// errorBody re-exports the shared JSON error wire shape for tests that
-// previously unmarshaled `errorBody` directly. Implementation now lives
-// in internal/httputil.
-type errorBody = httputil.ErrorBody
-
-var (
-	writeJSON  = httputil.WriteJSON
-	writeError = httputil.WriteError
-)
-
-// Compile-time check that handler functions match http.HandlerFunc.
-var _ http.HandlerFunc = (&Server{}).handleParams

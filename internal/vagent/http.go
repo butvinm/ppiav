@@ -9,7 +9,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
-	urlpath "net/url"
+	"net/url"
 	"strings"
 	"time"
 
@@ -20,24 +20,16 @@ import (
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 )
 
-// Server wraps an *Agent with the HTTP routes VClient and RService drive.
-// Routes follow docs/DESIGN.md §`Protocol` exactly; share- and key-bearing
-// endpoints use application/octet-stream per Task-4 Technical Details
-// (`pk-share`, `rlk/round1`, `rlk/round2`, `gks-shares` — and the outbound
-// `InferEvalKeys` POST to VService `/sessions/:sid/eval-keys`). Control
-// endpoints (`POST /sessions`, `GET /sessions/:sid/params`) use JSON.
-//
-// Image (`POST /sessions/:sid/image`), SSE result (`GET
-// /sessions/:sid/result`) and partial-decryption
-// (`POST /sessions/:sid/partial-decryption`) handlers are wired in this
-// file (added in Tasks 6 and 7). The `/verify` SPA handler is added in
-// Task 16.
-//
-// `rservicePublicURL` is a browser-visible base URL distinct from
-// `rserviceURL` (which is the server-to-server URL). In a docker-compose
-// deployment the server-to-server URL might be `http://rservice:8082`
-// (Docker DNS) while the public URL is `http://localhost:8082` (host
-// port mapping). When unset, falls back to `rserviceURL`.
+// sseRetryHintMs is the `retry:` SSE field value emitted before closing the
+// single-shot result stream — set to 24h so the browser does not auto-
+// reconnect against an evicted session.
+const sseRetryHintMs = 24 * 60 * 60 * 1000
+
+// Server exposes the VAgent HTTP routes. See docs/DESIGN.md §`Protocol`.
+// `rservicePublicURL` is the browser-visible RService URL (distinct from
+// `rserviceURL`, which is server-to-server). Falls back to `rserviceURL`
+// when unset — covers the docker-compose case where Docker DNS hostnames
+// are not reachable from the host browser.
 type Server struct {
 	agent             *Agent
 	vserviceURL       string
@@ -47,18 +39,7 @@ type Server struct {
 	mux               *http.ServeMux
 }
 
-// NewServer wires a Server around `agent`. `vserviceURL` is the base URL
-// of the VService HTTP server (e.g., `http://localhost:8080`) — used both
-// for the Stage-1 `POST /sessions` proxy and for forwarding `InferEvalKeys`
-// at the end of Stage 2d. `rserviceURL` is the base URL of the RService
-// HTTP server (e.g., `http://localhost:8082`) — used by the Stage-4b
-// verdict callback added in Task 7. `rservicePublicURL` is the
-// browser-visible RService URL emitted in Stage-4b redirect bodies; when
-// empty it defaults to `rserviceURL` (preserving the localhost case).
-//
-// The constructor is named `NewServer` (not `New`) to avoid shadowing the
-// existing `vagent.New(params)` Agent constructor — same convention as
-// `vservice.NewServer` and `rservice.NewServer`.
+// NewServer is named NewServer (not New) to avoid shadowing vagent.New.
 func NewServer(agent *Agent, vserviceURL, rserviceURL, rservicePublicURL string) *Server {
 	rsvcURL := strings.TrimRight(rserviceURL, "/")
 	rsvcPubURL := strings.TrimRight(rservicePublicURL, "/")
@@ -98,19 +79,15 @@ func (s *Server) register() {
 	s.mux.HandleFunc("/sessions/", s.handleSession)
 }
 
-// handleVerify serves the VClient SPA's index.html (embedded via
-// web/vclient/embed.go). The browser lands here after RService's Stage-1
-// 302 (URL carries `?sid=<sid>`). Companion assets — `/dist/*`,
-// `/wasm_exec.js`, `/ppiav.wasm` — live on sibling routes so the SPA can
-// fetch them with absolute paths.
+// handleVerify serves the embedded VClient SPA index.html.
 func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	data, err := fs.ReadFile(vclient.FS, "index.html")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("read vclient index.html: %s", err))
+		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("read vclient index.html: %s", err))
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -118,24 +95,20 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
-// handleVClientAsset serves files from the embedded VClient FS — namely
-// `/dist/*` (compiled TS bundle) and `/wasm_exec.js` (the Go runtime
-// shim). The file path inside the FS is the request path with the leading
-// slash stripped. Missing files return 404 via http.FileServer.
+// handleVClientAsset serves `/dist/*` and `/wasm_exec.js` from the embedded VClient FS.
 func (s *Server) handleVClientAsset(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	http.FileServer(http.FS(vclient.FS)).ServeHTTP(w, r)
 }
 
-// handlePpiavWASM serves the embedded compiled WASM blob at
-// `/ppiav.wasm`. Browsers require `application/wasm` for the streaming
-// `WebAssembly.instantiateStreaming` path used by the VClient main.ts.
+// handlePpiavWASM serves the embedded compiled WASM blob with the
+// `application/wasm` MIME required by WebAssembly.instantiateStreaming.
 func (s *Server) handlePpiavWASM(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	w.Header().Set("Content-Type", "application/wasm")
@@ -143,33 +116,31 @@ func (s *Server) handlePpiavWASM(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(ppiav.WASM)
 }
 
-// handleSessions is the Stage-1 entry point. Called server-to-server by
-// RService's `GET /protected` handler (not the browser). Allocates a sid
-// via VService, registers it locally, returns VerificationSession{sid} as
-// JSON. F4a (VService unreachable) surfaces as a 5xx to RService.
+// handleSessions is the Stage-1 entry point: server-to-server call from
+// RService that allocates a sid via VService and registers it locally.
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	resp, err := s.httpClient.Post(s.vserviceURL+"/sessions", "application/json", nil)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("call vservice /sessions: %s", err))
+		httputil.WriteError(w, http.StatusBadGateway, fmt.Sprintf("call vservice /sessions: %s", err))
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("vservice /sessions returned %d: %s", resp.StatusCode, body))
+		httputil.WriteError(w, http.StatusBadGateway, fmt.Sprintf("vservice /sessions returned %d: %s", resp.StatusCode, body))
 		return
 	}
 	var sess protocol.VerificationSession
 	if err := json.NewDecoder(resp.Body).Decode(&sess); err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("decode VerificationSession: %s", err))
+		httputil.WriteError(w, http.StatusBadGateway, fmt.Sprintf("decode VerificationSession: %s", err))
 		return
 	}
 	if sess.SessionID == "" {
-		writeError(w, http.StatusBadGateway, "vservice returned empty sid")
+		httputil.WriteError(w, http.StatusBadGateway, "vservice returned empty sid")
 		return
 	}
 	if err := s.agent.OpenSession(sess.SessionID); err != nil {
@@ -179,23 +150,23 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		// no key material yet — but allows unbounded growth on repeated
 		// failure. Out of scope for Phase 3; a follow-up should add a
 		// `DELETE /sessions/:sid` route on VService and invoke it here.
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("agent open session: %s", err))
+		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("agent open session: %s", err))
 		return
 	}
-	writeJSON(w, http.StatusOK, sess)
+	httputil.WriteJSON(w, http.StatusOK, sess)
 }
 
-// handleSession dispatches `/sessions/:sid/<sub>` and `/sessions/:sid/rlk/<round>`.
-// stdlib ServeMux only gives us the prefix; we parse the rest ourselves.
+// handleSession dispatches `/sessions/:sid/<sub>` (stdlib ServeMux gives
+// only the prefix, so we parse the rest ourselves).
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/sessions/")
 	if rest == "" || rest == r.URL.Path {
-		writeError(w, http.StatusNotFound, "not found")
+		httputil.WriteError(w, http.StatusNotFound, "not found")
 		return
 	}
 	sid, sub, ok := strings.Cut(rest, "/")
 	if !ok || sid == "" || sub == "" {
-		writeError(w, http.StatusNotFound, "not found")
+		httputil.WriteError(w, http.StatusNotFound, "not found")
 		return
 	}
 	sessID := protocol.SessionID(sid)
@@ -217,32 +188,25 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	case sub == "partial-decryption":
 		s.handlePartialDecryption(w, r, sessID)
 	default:
-		writeError(w, http.StatusNotFound, "not found")
+		httputil.WriteError(w, http.StatusNotFound, "not found")
 	}
 }
 
-// handleResultSSE implements `GET /sessions/:sid/result` (Stage 4a SSE).
-// Opens before the image POST so the ct_M deposit can never miss the
-// receiver (capacity-1 channel covers the pre-arrival case too). Streams a
-// single base64-encoded AuthenticatedResult event, then closes — SSE
-// framing is text-only by spec, so we eat ~33% inflation on this one event
-// in exchange for the simplest "open before image POST" semantics.
-//
-// Cancellable: a `select` on `r.Context().Done()` ends the handler cleanly
-// when the browser disconnects, which `sync.Cond.Wait` cannot.
+// handleResultSSE streams a single base64 AuthenticatedResult event over
+// SSE so the client can race the image POST without missing the deposit.
 func (s *Server) handleResultSSE(w http.ResponseWriter, r *http.Request, sid protocol.SessionID) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	ch, ok := s.agent.SessionAuthResult(sid)
 	if !ok {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("vagent: unknown session id %q", sid))
+		httputil.WriteError(w, http.StatusNotFound, fmt.Sprintf("vagent: unknown session id %q", sid))
 		return
 	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "response writer does not support flushing")
+		httputil.WriteError(w, http.StatusInternalServerError, "response writer does not support flushing")
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -252,7 +216,7 @@ func (s *Server) handleResultSSE(w http.ResponseWriter, r *http.Request, sid pro
 	// Tell the EventSource not to reconnect after we close. Without this
 	// hint the browser auto-reconnects in ~3s, leaving a stray request
 	// against a now-evicted session — wasteful and noisy.
-	_, _ = fmt.Fprintf(w, "retry: %d\n\n", 86_400_000)
+	_, _ = fmt.Fprintf(w, "retry: %d\n\n", sseRetryHintMs)
 	flusher.Flush()
 
 	select {
@@ -277,22 +241,20 @@ func (s *Server) handleResultSSE(w http.ResponseWriter, r *http.Request, sid pro
 }
 
 // handleParams proxies `GET /sessions/:sid/params` to VService `/params`.
-// Phase 3 returns one params set for all sessions; the sid is in the URL
-// for symmetry with the rest of the protocol and forward-compatibility.
 func (s *Server) handleParams(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	resp, err := s.httpClient.Get(s.vserviceURL + "/params")
 	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("call vservice /params: %s", err))
+		httputil.WriteError(w, http.StatusBadGateway, fmt.Sprintf("call vservice /params: %s", err))
 		return
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("read vservice /params: %s", err))
+		httputil.WriteError(w, http.StatusBadGateway, fmt.Sprintf("read vservice /params: %s", err))
 		return
 	}
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
@@ -304,13 +266,13 @@ func (s *Server) handleParams(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePKShare(w http.ResponseWriter, r *http.Request, sid protocol.SessionID) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	// Check sid existence before reading the body so unknown-sid is
 	// surfaced as 404 regardless of body well-formedness.
 	if _, err := s.agent.session(sid); err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		httputil.WriteError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxShareBody))
@@ -327,7 +289,7 @@ func (s *Server) handlePKShare(w http.ResponseWriter, r *http.Request, sid proto
 	// share. The order mirrors orchestrator.runner's keygen sequence.
 	agentShare, err := s.agent.GenPKShare(sid)
 	if err != nil {
-		writeError(w, sidErrorStatus(err), err.Error())
+		httputil.WriteError(w, sidErrorStatus(err), err.Error())
 		return
 	}
 	if err := s.agent.AggregatePK(sid, client.Share); err != nil {
@@ -342,11 +304,11 @@ func (s *Server) handlePKShare(w http.ResponseWriter, r *http.Request, sid proto
 
 func (s *Server) handleRLKRound1(w http.ResponseWriter, r *http.Request, sid protocol.SessionID) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if _, err := s.agent.session(sid); err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		httputil.WriteError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxShareBody))
@@ -361,7 +323,7 @@ func (s *Server) handleRLKRound1(w http.ResponseWriter, r *http.Request, sid pro
 	}
 	agentShare, err := s.agent.GenRLKShareRound1(sid)
 	if err != nil {
-		writeError(w, sidErrorStatus(err), err.Error())
+		httputil.WriteError(w, sidErrorStatus(err), err.Error())
 		return
 	}
 	if err := s.agent.AggregateRLKRound1(sid, client.Share); err != nil {
@@ -373,11 +335,11 @@ func (s *Server) handleRLKRound1(w http.ResponseWriter, r *http.Request, sid pro
 
 func (s *Server) handleRLKRound2(w http.ResponseWriter, r *http.Request, sid protocol.SessionID) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if _, err := s.agent.session(sid); err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		httputil.WriteError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxShareBody))
@@ -393,7 +355,7 @@ func (s *Server) handleRLKRound2(w http.ResponseWriter, r *http.Request, sid pro
 	// GenRLKShareRound2 sets up the agent's round-2 share state needed by
 	// AggregateRLKRound2 — same gen-then-aggregate ordering as Round 1 / PK.
 	if _, err := s.agent.GenRLKShareRound2(sid); err != nil {
-		writeError(w, sidErrorStatus(err), err.Error())
+		httputil.WriteError(w, sidErrorStatus(err), err.Error())
 		return
 	}
 	if err := s.agent.AggregateRLKRound2(sid, client.Share); err != nil {
@@ -405,11 +367,11 @@ func (s *Server) handleRLKRound2(w http.ResponseWriter, r *http.Request, sid pro
 
 func (s *Server) handleGKSShares(w http.ResponseWriter, r *http.Request, sid protocol.SessionID) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if _, err := s.agent.session(sid); err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		httputil.WriteError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxGksSharesBody))
@@ -428,7 +390,7 @@ func (s *Server) handleGKSShares(w http.ResponseWriter, r *http.Request, sid pro
 	// `params.RotationIndices()` so the agent slice is authoritative).
 	_, agentLabels, err := s.agent.GenGaloisShares(sid)
 	if err != nil {
-		writeError(w, sidErrorStatus(err), err.Error())
+		httputil.WriteError(w, sidErrorStatus(err), err.Error())
 		return
 	}
 	rlk, gks, err := s.agent.AggregateGaloisShares(sid, client.Shares, agentLabels)
@@ -440,11 +402,11 @@ func (s *Server) handleGKSShares(w http.ResponseWriter, r *http.Request, sid pro
 	keys := protocol.InferEvalKeys{RLK: rlk, GKS: gks}
 	keysBytes, err := keys.MarshalBinary()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("marshal InferEvalKeys: %s", err))
+		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("marshal InferEvalKeys: %s", err))
 		return
 	}
-	url := s.vserviceURL + "/sessions/" + urlpath.PathEscape(string(sid)) + "/eval-keys"
-	resp, err := s.httpClient.Post(url, "application/octet-stream", bytes.NewReader(keysBytes))
+	targetURL := s.vserviceURL + "/sessions/" + url.PathEscape(string(sid)) + "/eval-keys"
+	resp, err := s.httpClient.Post(targetURL, "application/octet-stream", bytes.NewReader(keysBytes))
 	if err != nil {
 		// F3: VService unreachable / inference layer unreachable mid-keygen.
 		// AggregateGaloisShares already mutated session state; rejectAndEvict
@@ -461,26 +423,15 @@ func (s *Server) handleGKSShares(w http.ResponseWriter, r *http.Request, sid pro
 	w.WriteHeader(http.StatusOK)
 }
 
-// handleImage runs Stages 3 and the first half of 4a. Reads the marshaled
-// encrypted image from the request body, forwards the bytes to VService's
-// matching `POST /sessions/:sid/image` route, parses the returned
-// ciphertext, calls `BuildAuthenticatedCt` to fold in MPD-Auth's random
-// values, deposits the resulting ct_M into the SSE channel for the
-// already-opened result GET, and caches it in the session so the
-// subsequent partial-decryption call can pass it to FinalizeDecryption.
-//
-// Error mapping:
-//   - unknown sid → 404 (handled implicitly by `agent.session` + BuildAuthenticatedCt)
-//   - malformed body → 400
-//   - VService unreachable / non-200 → 502 (F4a wire shape)
-//   - BuildAuthenticatedCt failure → 500 (impossible-by-protocol once Stage 2d completed)
+// handleImage forwards the encrypted image to VService, folds the result
+// through MPD-Auth, and gates Stage-4a SSE delivery.
 func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, sid protocol.SessionID) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if _, err := s.agent.session(sid); err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		httputil.WriteError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxEvalKeysBody))
@@ -494,10 +445,10 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, sid protoco
 		return
 	}
 
-	url := s.vserviceURL + "/sessions/" + urlpath.PathEscape(string(sid)) + "/image"
+	targetURL := s.vserviceURL + "/sessions/" + url.PathEscape(string(sid)) + "/image"
 	// Forward the original bytes verbatim — we already unmarshaled to
 	// validate, but the VService handler unmarshals from the bytes itself.
-	resp, err := s.httpClient.Post(url, "application/octet-stream", bytes.NewReader(body))
+	resp, err := s.httpClient.Post(targetURL, "application/octet-stream", bytes.NewReader(body))
 	if err != nil {
 		// F3: inference unreachable.
 		s.rejectAndEvict(w, http.StatusBadGateway, sid, fmt.Sprintf("call vservice /image: %s", err))
@@ -525,11 +476,11 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, sid protoco
 	if err != nil {
 		// `BuildAuthenticatedCt` only fails on unknown sid (404) or impossible-
 		// by-protocol nil authKey (would only happen if OpenSession was never
-		// called). The unknown-sid branch keeps writeError because there is no
+		// called). The unknown-sid branch keeps httputil.WriteError because there is no
 		// session to tear down.
 		status := sidErrorStatus(err)
 		if status == http.StatusNotFound {
-			writeError(w, status, err.Error())
+			httputil.WriteError(w, status, err.Error())
 		} else {
 			s.rejectAndEvict(w, status, sid, err.Error())
 		}
@@ -540,7 +491,7 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, sid protoco
 		// Sid was deleted between session() and storeAuthenticatedCt — race
 		// only possible from a concurrent FinalizeDecryption, which we don't
 		// expect on this code path. Surface as 404 for consistency.
-		writeError(w, http.StatusNotFound, fmt.Sprintf("vagent: unknown session id %q", sid))
+		httputil.WriteError(w, http.StatusNotFound, fmt.Sprintf("vagent: unknown session id %q", sid))
 		return
 	}
 	// Non-blocking SSE deposit: covers both the pre-arrival case (SSE handler
@@ -549,7 +500,7 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, sid protoco
 	// sessionState.authResult.
 	ch, ok := s.agent.SessionAuthResult(sid)
 	if !ok {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("vagent: unknown session id %q", sid))
+		httputil.WriteError(w, http.StatusNotFound, fmt.Sprintf("vagent: unknown session id %q", sid))
 		return
 	}
 	select {
@@ -564,34 +515,18 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, sid protoco
 	w.WriteHeader(http.StatusOK)
 }
 
-// handlePartialDecryption runs Stage 4a/b: receives VClient's smudged
-// KeySwitchShare, calls FinalizeDecryption against the cached ct_M, posts
-// the resulting verdict back to RService, and tells the browser where to
-// navigate next. Per docs/DESIGN.md §`Failure modes`:
-//
-//   - unknown sid → 404, no callback (no session means no RService cookie)
-//   - malformed share (known sid) → callback Reject (F2) **then** 4xx
-//   - Ver=false / FinalizeDecryption error → callback Reject **then** 4xx
-//   - clean Accept/Reject verdict → callback verdict **then** 200 + JSON
-//     `{"redirect":"<rservicePublicURL>/protected"}`
-//
-// We return JSON + 200 instead of a 302: browsers strip headers from
-// `fetch(redirect: "manual")` responses (opaqueredirect), and using
-// `redirect: "follow"` would force the browser to re-POST partial-
-// decryption (which is single-shot — second POST 404s). JSON 200 lets the
-// SPA explicitly call `window.location.assign(body.redirect)`.
-//
-// The verdict callback always runs **before** the HTTP response is
-// written so RService stores it regardless of whether the client reads
-// our body.
+// handlePartialDecryption runs Stage 4b: finalize the verdict, push it to
+// RService, then return a JSON `{redirect}` reply. JSON 200 (not 302)
+// because `fetch(redirect: "manual")` yields an unreadable opaqueredirect
+// and `redirect: "follow"` would force a second POST that 404s.
 func (s *Server) handlePartialDecryption(w http.ResponseWriter, r *http.Request, sid protocol.SessionID) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	// Unknown sid is 404 with no callback.
 	if _, err := s.agent.session(sid); err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		httputil.WriteError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httputil.MaxShareBody))
@@ -610,7 +545,7 @@ func (s *Server) handlePartialDecryption(w http.ResponseWriter, r *http.Request,
 	ctM, ok := s.agent.SessionAuthenticatedCt(sid)
 	if !ok {
 		// Race: session vanished between the initial check and now.
-		writeError(w, http.StatusNotFound, fmt.Sprintf("vagent: unknown session id %q", sid))
+		httputil.WriteError(w, http.StatusNotFound, fmt.Sprintf("vagent: unknown session id %q", sid))
 		return
 	}
 	if ctM == nil {
@@ -626,54 +561,32 @@ func (s *Server) handlePartialDecryption(w http.ResponseWriter, r *http.Request,
 		// just post the Reject callback. Use postVerdict directly (not
 		// rejectAndEvict) to avoid a redundant EvictSession.
 		_ = s.postVerdict(sid, protocol.VerdictReject)
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("finalize decryption: %s", err))
+		httputil.WriteError(w, http.StatusBadRequest, fmt.Sprintf("finalize decryption: %s", err))
 		return
 	}
 	// Clean finalize: callback the actual verdict (Accept or Reject).
 	if err := s.postVerdict(sid, verdict); err != nil {
 		// Callback failed: surface 502 so the operator can see the wire
 		// fault. The session is already evicted by FinalizeDecryption.
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("rservice callback: %s", err))
+		httputil.WriteError(w, http.StatusBadGateway, fmt.Sprintf("rservice callback: %s", err))
 		return
 	}
-	if s.rservicePublicURL == "" {
-		// No place to redirect to. Treat as misconfiguration → 500.
-		writeError(w, http.StatusInternalServerError, "vagent: rservicePublicURL not configured")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"redirect": s.rservicePublicURL + "/protected"})
+	httputil.WriteJSON(w, http.StatusOK, map[string]string{"redirect": s.rservicePublicURL + "/protected"})
 }
 
-// rejectAndEvict is the centralised handler for F2 (malformed wire input)
-// and F3 (inference error) per docs/DESIGN.md §`Failure modes`:
-//
-//	"HTTP 4xx/5xx to the offending party plus Verdict = Reject to
-//	 RService. Session torn down."
-//
-// Order matters: post the Reject callback first (so RService records it
-// even if EvictSession races a concurrent request), then evict so the
-// authKey + skShare + cached ct_M cannot be re-used by a follow-up
-// request to flip RService's upserted verdict back to Accept (replay
-// weakness: rservice.Service.AcceptVerdict is last-write-wins). Finally
-// write the HTTP error response.
-//
-// Callback failure is logged best-effort — the session is still evicted
-// and the HTTP error still goes out. If RService is down, the session
-// state becomes Unknown (deny-by-default), which is the safest fallback.
-//
-// Callers must hold a known sid. For unknown sids the design says
-// "no session, nothing to tear down" — use writeError directly.
+// rejectAndEvict handles F2 (malformed wire) and F3 (inference error) per
+// DESIGN.md §`Failure modes`. Order is callback → evict → error so a
+// retry cannot replay-upsert Accept (AcceptVerdict is last-write-wins).
+// Callers must hold a known sid; for unknown sids use WriteError directly.
 func (s *Server) rejectAndEvict(w http.ResponseWriter, status int, sid protocol.SessionID, msg string) {
 	if err := s.postVerdict(sid, protocol.VerdictReject); err != nil {
 		log.Printf("vagent: post Reject callback for sid %q failed: %s", sid, err)
 	}
 	s.agent.EvictSession(sid)
-	writeError(w, status, msg)
+	httputil.WriteError(w, status, msg)
 }
 
-// postVerdict POSTs `VerdictNotification{verdict}` to RService's
-// `/api/callback/:sid` route. Returns an error if the RService URL is
-// unset or the call fails; callers decide whether to surface it.
+// postVerdict POSTs VerdictNotification{verdict} to RService.
 func (s *Server) postVerdict(sid protocol.SessionID, verdict protocol.Verdict) error {
 	if s.rserviceURL == "" {
 		return fmt.Errorf("vagent: rserviceURL not configured")
@@ -683,8 +596,8 @@ func (s *Server) postVerdict(sid protocol.SessionID, verdict protocol.Verdict) e
 	if err != nil {
 		return fmt.Errorf("marshal VerdictNotification: %w", err)
 	}
-	url := s.rserviceURL + "/api/callback/" + urlpath.PathEscape(string(sid))
-	resp, err := s.httpClient.Post(url, "application/json", bytes.NewReader(notifBytes))
+	targetURL := s.rserviceURL + "/api/callback/" + url.PathEscape(string(sid))
+	resp, err := s.httpClient.Post(targetURL, "application/json", bytes.NewReader(notifBytes))
 	if err != nil {
 		return fmt.Errorf("post: %w", err)
 	}
@@ -707,16 +620,6 @@ func sidErrorStatus(err error) int {
 	return http.StatusBadRequest
 }
 
-// errorBody re-exports the shared JSON error wire shape for tests that
-// previously unmarshaled `errorBody` directly. Implementation now lives
-// in internal/httputil.
-type errorBody = httputil.ErrorBody
-
-var (
-	writeJSON  = httputil.WriteJSON
-	writeError = httputil.WriteError
-)
-
 // writeBinary marshals `m` and writes the bytes with
 // `application/octet-stream`. Errors during MarshalBinary become 500.
 type binaryMarshaler interface {
@@ -726,7 +629,7 @@ type binaryMarshaler interface {
 func writeBinary(w http.ResponseWriter, m binaryMarshaler) {
 	data, err := m.MarshalBinary()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("marshal response: %s", err))
+		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("marshal response: %s", err))
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
