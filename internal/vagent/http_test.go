@@ -969,3 +969,26 @@ func TestHTTPVAgent_PartialDecryption_RejectsGet(t *testing.T) {
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
 }
+
+// Task 16: `GET /verify` placeholder handler. The actual VClient SPA
+// (served from embed.FS) lands in Task 17; for now the handler returns a
+// fixed HTML stub so the route exists and the request method is enforced.
+func TestHTTPVAgent_Verify_ReturnsPlaceholderHTML(t *testing.T) {
+	_, vagentSrv, _, _, _, _ := newHTTPFixture(t)
+	resp, err := http.Get(vagentSrv.URL + "/verify?sid=anything")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, "text/html; charset=utf-8", resp.Header.Get("Content-Type"))
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "VClient SPA not embedded yet")
+}
+
+func TestHTTPVAgent_Verify_RejectsPost(t *testing.T) {
+	_, vagentSrv, _, _, _, _ := newHTTPFixture(t)
+	resp, err := http.Post(vagentSrv.URL+"/verify", "text/plain", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
+}

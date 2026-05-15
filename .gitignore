@@ -12,6 +12,8 @@ web/ppiav/node_modules/
 web/vclient/node_modules/
 web/vclient/dist/
 web/vclient/wasm_exec.js
+web/rclient/node_modules/
+web/rclient/dist/
 
 # Python (bench/, models/)
 **/.venv/

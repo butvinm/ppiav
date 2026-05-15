@@ -100,15 +100,33 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// protectedPage renders a minimal HTML page reflecting the verdict for
-// the given sid. Task 16/18 will replace this with the embedded RClient
-// SPA; the stub keeps the cookie-gated read path testable.
+// protectedPage renders the RClient SPA shell with the verdict injected
+// as JSON via `<script>window.verdict = {...}</script>` before the closing
+// `</body>` tag. The RClient `main.ts` reads `window.verdict` and renders
+// it into `#status`. Task 17 will swap the inline HTML for embed.FS-served
+// `web/rclient/index.html` + `web/rclient/dist/main.js`; for now the page
+// is self-contained so the cookie-gated read path stays testable.
+//
+// sid and verdict are passed through `encoding/json` rather than spliced
+// directly so any future field changes propagate without manual escaping.
 func protectedPage(sid protocol.SessionID, v protocol.Verdict) string {
-	body := fmt.Sprintf(
-		`<!doctype html><html><head><title>RService</title></head><body><h1>Protected resource</h1><p>sid: %s</p><p>verdict: %s</p></body></html>`,
-		sid, v,
+	injection := struct {
+		Sid     string `json:"sid"`
+		Verdict string `json:"verdict"`
+	}{Sid: string(sid), Verdict: v.String()}
+	// json.Marshal handles escaping; both sid and verdict are server-trusted
+	// (sid comes from the cookie which we set; verdict is an enum).
+	payload, err := json.Marshal(injection)
+	if err != nil {
+		// Marshaling a flat struct of strings cannot fail in practice;
+		// fall back to a minimal escape-free shell so the handler still
+		// returns valid HTML.
+		payload = []byte(`{"sid":"","verdict":"unknown"}`)
+	}
+	return fmt.Sprintf(
+		`<!doctype html><html><head><title>RClient</title></head><body><h1>Protected resource</h1><div id="status">Loading...</div><script>window.verdict = %s;</script></body></html>`,
+		payload,
 	)
-	return body
 }
 
 // errorBody is the wire shape of all 4xx/5xx JSON responses, mirroring

@@ -27,7 +27,8 @@ func TestHTTPGetProtected_NoCookie(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, w.Code)
 	require.Equal(t, "text/html; charset=utf-8", w.Header().Get("Content-Type"))
 	body := w.Body.String()
-	assert.Contains(t, body, "verdict: unknown")
+	assert.Contains(t, body, `"verdict":"unknown"`)
+	assert.Contains(t, body, `"sid":""`)
 }
 
 func TestHTTPGetProtected_CookieAccept(t *testing.T) {
@@ -41,8 +42,8 @@ func TestHTTPGetProtected_CookieAccept(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, w.Code)
 	body := w.Body.String()
-	assert.Contains(t, body, "verdict: accept")
-	assert.Contains(t, body, "sid-1")
+	assert.Contains(t, body, `"verdict":"accept"`)
+	assert.Contains(t, body, `"sid":"sid-1"`)
 }
 
 func TestHTTPGetProtected_CookieReject(t *testing.T) {
@@ -55,7 +56,8 @@ func TestHTTPGetProtected_CookieReject(t *testing.T) {
 	srv.Handler().ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusForbidden, w.Code)
-	assert.Contains(t, w.Body.String(), "verdict: reject")
+	assert.Contains(t, w.Body.String(), `"verdict":"reject"`)
+	assert.Contains(t, w.Body.String(), `"sid":"sid-2"`)
 }
 
 func TestHTTPGetProtected_CookieUnknownSid(t *testing.T) {
@@ -67,7 +69,8 @@ func TestHTTPGetProtected_CookieUnknownSid(t *testing.T) {
 	srv.Handler().ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusForbidden, w.Code)
-	assert.Contains(t, w.Body.String(), "verdict: unknown")
+	assert.Contains(t, w.Body.String(), `"verdict":"unknown"`)
+	assert.Contains(t, w.Body.String(), `"sid":"not-seen-before"`)
 }
 
 func TestHTTPGetProtected_RejectsPost(t *testing.T) {
@@ -189,5 +192,6 @@ func TestHTTPCallback_FollowedByProtected(t *testing.T) {
 	getW := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(getW, getReq)
 	require.Equal(t, http.StatusOK, getW.Code)
-	assert.Contains(t, getW.Body.String(), "verdict: accept")
+	assert.Contains(t, getW.Body.String(), `"verdict":"accept"`)
+	assert.Contains(t, getW.Body.String(), `"sid":"sid-e2e"`)
 }

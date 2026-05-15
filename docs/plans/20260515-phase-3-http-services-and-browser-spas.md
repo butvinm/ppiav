@@ -643,14 +643,14 @@ Implementation note: main.ts uses the raw `globalThis.ppiav` bridge directly (wi
 - Modify: `internal/vagent/http.go` (add `GET /verify` handler serving VClient SPA)
 - Modify: `internal/rservice/http.go` (modify `GET /protected` to serve RClient SPA instead of stub)
 
-- [ ] create `web/rclient/package.json`: same as `web/vclient/package.json`
-- [ ] create `web/rclient/tsconfig.json`: same as `web/vclient/tsconfig.json`
-- [ ] create `web/rclient/index.html`: title "RClient", status div (`#status`), shows verdict details (sid, Verdict, timestamp on receipt)
-- [ ] create `web/rclient/ts/main.ts`: on load, request `/api/status` (TODO: add this to RService? or use existing `/protected` which flows through session table). Actually RService `/protected` already checks verdict based on sid cookie. Simplest: RClient reads verdict from page initialization (RService injects verdict into HTML or as JSON embedded in page). Decision: RService `/protected` returns HTML with embedded JSON: `<script>window.verdict = {"sid":"...", "verdict":"Accept"};</script>`. RClient reads `window.verdict` and displays it.
-- [ ] modify `internal/rservice/http.go` `GET /protected`: return HTML from RClient SPA with verdict injected as JSON response: read `web/rclient/index.html`, inject `<script>window.verdict = {sid, verdict}; </script>` before `</body>`, return as text/html. (Need to embed RClient assets via `embed.FS` in next step; for now return inline HTML template.)
-- [ ] modify `internal/vagent/http.go` `GET /verify`: return VClient HTML from `web/vclient/index.html` via `embed.FS`. For now, return simple HTML with redirect hint: "VClient SPA not embedded yet".
-- [ ] verify TypeScript compiles: `cd web/rclient && npm install && npm run build`
-- [ ] **No automated browser test** — RClient SPA verified manually
+- [x] create `web/rclient/package.json`: same as `web/vclient/package.json`
+- [x] create `web/rclient/tsconfig.json`: same as `web/vclient/tsconfig.json` (no `@ppiav/*` path alias since rclient doesn't import the WASM bridge)
+- [x] create `web/rclient/index.html`: title "RClient", status div (`#status`), shows verdict details (sid, Verdict, timestamp on receipt)
+- [x] create `web/rclient/ts/main.ts`: on load, request `/api/status` (TODO: add this to RService? or use existing `/protected` which flows through session table). Actually RService `/protected` already checks verdict based on sid cookie. Simplest: RClient reads verdict from page initialization (RService injects verdict into HTML or as JSON embedded in page). Decision: RService `/protected` returns HTML with embedded JSON: `<script>window.verdict = {"sid":"...", "verdict":"Accept"};</script>`. RClient reads `window.verdict` and displays it.
+- [x] modify `internal/rservice/http.go` `GET /protected`: return HTML from RClient SPA with verdict injected as JSON response (deviation: instead of reading `web/rclient/index.html` from disk and injecting before `</body>`, the handler builds a self-contained inline template via `fmt.Sprintf` with `json.Marshal` for safe escaping — Task 17 will swap this for embed.FS-based serving with proper injection). Existing `http_test.go` assertions updated from `verdict: accept` → `"verdict":"accept"` to match the new JSON-in-script wire shape.
+- [x] modify `internal/vagent/http.go` `GET /verify`: return VClient HTML from `web/vclient/index.html` via `embed.FS`. For now, return simple HTML with redirect hint: "VClient SPA not embedded yet". Two new tests cover the placeholder route (`TestHTTPVAgent_Verify_ReturnsPlaceholderHTML`, `TestHTTPVAgent_Verify_RejectsPost`).
+- [x] verify TypeScript compiles: `cd web/rclient && npm install && npm run build` (required `export {}` at the top of `ts/main.ts` so the `declare global` block is valid in a module file)
+- [x] **No automated browser test** — RClient SPA verified manually
 
 ### Task 17: Embed SPAs and WASM into Go services via `embed.FS`
 

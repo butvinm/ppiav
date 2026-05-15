@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RClient</title>
+  </head>
+  <body>
+    <h1>Protected resource</h1>
+    <div id="status">Loading...</div>
+    <!--
+      RService injects `<script>window.verdict = {"sid":"...", "verdict":"..."};</script>`
+      before </body> when serving this page. main.ts reads window.verdict and
+      renders it into #status.
+    -->
+    <script type="module" src="./dist/main.js"></script>
+  </body>
+</html>

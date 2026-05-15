@@ -68,8 +68,23 @@ func (s *Server) ListenAndServe() error {
 }
 
 func (s *Server) register() {
+	s.mux.HandleFunc("/verify", s.handleVerify)
 	s.mux.HandleFunc("/sessions", s.handleSessions)
 	s.mux.HandleFunc("/sessions/", s.handleSession)
+}
+
+// handleVerify serves the VClient SPA. The browser lands here after
+// RService's Stage-1 302 (URL carries `?sid=<sid>`). Task 16 returns a
+// placeholder; Task 17 swaps in `web/vclient/index.html` served via
+// embed.FS, alongside `/wasm_exec.js` and `/ppiav.wasm`.
+func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`<!doctype html><html><head><title>VClient</title></head><body><p>VClient SPA not embedded yet</p></body></html>`))
 }
 
 // handleSessions is the Stage-1 entry point. Called server-to-server by
