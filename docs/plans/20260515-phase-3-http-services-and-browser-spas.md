@@ -719,18 +719,11 @@ Implementation note: main.ts uses the raw `globalThis.ppiav` bridge directly (wi
 - Create: `Makefile` (repo root)
 - Create: `.github/workflows/ci.yml` (optional, for CI)
 
-- [ ] create repo-top `Makefile` with targets (single Go module — every Go invocation is from the repo root, no `cd`):
-  - `all`: `go build ./cmd/...`
-  - `phase3`: `make wasm && make spas && make services` (order matters — WASM blob must exist before `web/ppiav/embed.go` is built into the VAgent binary)
-  - `wasm`: `GOOS=js GOARCH=wasm go build -o web/ppiav/ppiav.wasm ./web/ppiav/bridge`
-  - `spas`: `cd web/vclient && npm run build && cd ../rclient && npm run build`
-  - `services`: `go build -o bin/ppiav-vservice ./cmd/ppiav-vservice && go build -o bin/ppiav-vagent ./cmd/ppiav-vagent && go build -o bin/ppiav-rservice ./cmd/ppiav-rservice`
-  - `test`: `go test ./...`
-  - `clean`: `rm -rf bin/ && rm -f web/ppiav/ppiav.wasm && rm -rf web/*/dist`
-- [ ] verify `make phase3` succeeds from repo root
-- [ ] verify binaries exist: `ls -la bin/`
-- [ ] verify WASM exists: `ls -la web/ppiav/ppiav.wasm`
-- [ ] verify TypeScript dists: `ls -la web/vclient/dist/main.js web/rclient/dist/main.js`
+- [x] create repo-top `Makefile` with targets (single Go module — every Go invocation is from the repo root, no `cd` for Go). Implemented targets: `all` (depends on `phase3` so a fresh checkout builds), `phase3` (`wasm spas services`), `wasm` (depends on `wasm_exec`, runs `GOOS=js GOARCH=wasm go build -o web/ppiav/ppiav.wasm ./web/ppiav/bridge`), `wasm_exec` (`cp $(go env GOROOT)/lib/wasm/wasm_exec.js web/vclient/wasm_exec.js`), `spas` (`spa_vclient spa_rclient`, each `npm install && npm run build` so first run in a fresh checkout works), `services` (`go build` the three cmd binaries), `test` (`go test ./...`), `clean` (removes `bin/`, `web/ppiav/ppiav.wasm`, `web/vclient/wasm_exec.js`, `web/*/dist`). `services` depends on `wasm spas`. All commands use tab indentation; all non-file targets are `.PHONY`.
+- [x] verify `make phase3` succeeds from repo root (ran `make clean && make phase3` end-to-end — green)
+- [x] verify binaries exist: `ls -la bin/` (ppiav-vservice 15M, ppiav-vagent 28M, ppiav-rservice 10M)
+- [x] verify WASM exists: `ls -la web/ppiav/ppiav.wasm` (12.8M)
+- [x] verify TypeScript dists: `ls -la web/vclient/dist/main.js web/rclient/dist/main.js` (both present)
 
 ### Task 20: Create Dockerfiles for VService, VAgent, RService
 
