@@ -292,7 +292,30 @@ func TestAuthenticatedResultBinaryRoundTrip(t *testing.T) {
 }
 
 func TestPartialDecryptionBinaryRoundTrip(t *testing.T) {
-	t.Skip("binary round-trip is a Phase-3 HTTP-transport concern; Phase 1–2 pass these structs in-process")
+	params := smallCKKS(t)
+	kgen := rlwe.NewKeyGenerator(params)
+	sk := kgen.GenSecretKeyNew()
+	zeroSk := rlwe.NewSecretKey(params)
+
+	// Build a dummy ciphertext at the max level so the KeySwitchProtocol
+	// can allocate a level-matching share — Lattigo's GenShare consumes
+	// the ciphertext's level when sampling.
+	ct := rlwe.NewCiphertext(params, 1, params.MaxLevel())
+	proto, err := multiparty.NewKeySwitchProtocol(params, ring.DiscreteGaussian{Sigma: 0, Bound: 0})
+	require.NoError(t, err)
+	share := proto.AllocateShare(ct.Level())
+	proto.GenShare(sk, zeroSk, ct, &share)
+
+	original := PartialDecryption{Share: share}
+	data, err := original.MarshalBinary()
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
+
+	var got PartialDecryption
+	require.NoError(t, got.UnmarshalBinary(data))
+	again, err := got.MarshalBinary()
+	require.NoError(t, err)
+	assert.Equal(t, data, again)
 }
 
 func TestVerdictNotificationBinaryRoundTrip(t *testing.T) {

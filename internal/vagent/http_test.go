@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,6 +20,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 	"github.com/tuneinsight/lattigo/v6/multiparty"
+	"github.com/tuneinsight/lattigo/v6/ring"
+	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
 )
 
 // newHTTPFixture spins up a real VService HTTP server (backed by an
@@ -602,4 +605,367 @@ func TestHTTPVAgent_ResultSSE_CancelledOnClientDisconnect(t *testing.T) {
 	// The handler must not hang past the cancel deadline by more than a
 	// generous margin (network jitter on httptest.Server).
 	require.Less(t, elapsed, 2*time.Second, "SSE handler did not exit on client disconnect")
+}
+
+// rserviceStub records the callback POSTs the VAgent makes, exposing the
+// last seen verdict for assertion. Listens on /api/callback/:sid and
+// matches RService's real wire shape (VerdictNotification JSON body).
+type rserviceStub struct {
+	mu         sync.Mutex
+	calls      int
+	lastSid    protocol.SessionID
+	lastVerd   protocol.Verdict
+	failStatus int // when non-zero, the stub returns this status code instead of 200
+}
+
+func newRServiceStub() *rserviceStub { return &rserviceStub{} }
+
+func (rs *rserviceStub) handler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/callback/") {
+			http.NotFound(w, r)
+			return
+		}
+		sid := strings.TrimPrefix(r.URL.Path, "/api/callback/")
+		var notif protocol.VerdictNotification
+		if err := json.NewDecoder(r.Body).Decode(&notif); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		rs.mu.Lock()
+		rs.calls++
+		rs.lastSid = protocol.SessionID(sid)
+		rs.lastVerd = notif.Verdict
+		fail := rs.failStatus
+		rs.mu.Unlock()
+		if fail != 0 {
+			http.Error(w, "rservice stub forced failure", fail)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+}
+
+func (rs *rserviceStub) snapshot() (int, protocol.SessionID, protocol.Verdict) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.calls, rs.lastSid, rs.lastVerd
+}
+
+// newHTTPFixtureWithRService extends newHTTPFixture with an additional
+// RService stub. Use for image/partial-decryption tests that exercise the
+// verdict callback.
+func newHTTPFixtureWithRService(t *testing.T) (
+	vagentSrv *httptest.Server,
+	vsvcSrv *httptest.Server,
+	svc *vservice.Service,
+	agent *Agent,
+	rstub *rserviceStub,
+	rsvcSrv *httptest.Server,
+	params protocol.Params,
+) {
+	t.Helper()
+	params = smallParams(t)
+	svc = vservice.New(params)
+	vsvcSrv = httptest.NewServer(vservice.NewServer(svc, "").Handler())
+	t.Cleanup(vsvcSrv.Close)
+
+	a, err := New(params)
+	require.NoError(t, err)
+	agent = a
+
+	rstub = newRServiceStub()
+	rsvcSrv = httptest.NewServer(rstub.handler())
+	t.Cleanup(rsvcSrv.Close)
+
+	vagentSrv = httptest.NewServer(NewServer(agent, vsvcSrv.URL, rsvcSrv.URL, "").Handler())
+	t.Cleanup(vagentSrv.Close)
+	return
+}
+
+// runFullKeygenAndStore runs the Stage-2 multi-party handshake against
+// the Agent via the HTTP routes, then makes sure VService has the eval
+// keys for the sid by issuing a single in-process StoreEvalKeys (the gks
+// handler already POSTed them; we just need it idempotently for the test
+// to also have a usable joint sk and pk).
+//
+// Returns the joint sk (for assembling the partial-decryption share) and
+// the aggregated pk (for encrypting the image input).
+func runFullKeygenViaHTTPThenStore(
+	t *testing.T,
+	vagentBase string,
+	sid protocol.SessionID,
+	stub *vclientStub,
+	agent *Agent,
+	params protocol.Params,
+) (jointSecret *rlwe.SecretKey, jointPK *rlwe.PublicKey) {
+	t.Helper()
+	runKeygenViaHTTP(t, vagentBase, sid, stub, params)
+	sess := agentState(t, agent, sid)
+	require.NotNil(t, sess.pkAgg)
+	return jointSk(t, params, stub.skC, sess.skShare), sess.pkAgg
+}
+
+func TestHTTPVAgent_Image_HappyPath(t *testing.T) {
+	vagentSrv, _, _, agent, _, _, params := newHTTPFixtureWithRService(t)
+	sid := openSessionViaHTTP(t, vagentSrv)
+	stub := newVClientStub(t, params, sid)
+
+	_, jointPK := runFullKeygenViaHTTPThenStore(t, vagentSrv.URL, sid, stub, agent, params)
+
+	// Encrypt 0.5 at slot 0 under jointPK. The x² circuit yields ≈0.25;
+	// we don't decode here — just verify the SSE channel receives a ct_M.
+	encoder := ckks.NewEncoder(params.CKKS)
+	encryptor := rlwe.NewEncryptor(params.CKKS, jointPK)
+	values := make([]float64, params.CKKS.MaxSlots())
+	values[0] = 0.5
+	pt := ckks.NewPlaintext(params.CKKS, params.CKKS.MaxLevel())
+	require.NoError(t, encoder.Encode(values, pt))
+	inputCt, err := encryptor.EncryptNew(pt)
+	require.NoError(t, err)
+	inputBytes, err := inputCt.MarshalBinary()
+	require.NoError(t, err)
+
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/image", inputBytes)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode, "body=%s", readAll(t, resp.Body))
+
+	// SSE channel must now carry ct_M (capacity-1 buffer captured it).
+	ch, ok := agent.SessionAuthResult(sid)
+	require.True(t, ok)
+	select {
+	case ct := <-ch:
+		require.NotNil(t, ct)
+	default:
+		t.Fatal("authResult channel empty after image POST")
+	}
+	// authenticatedCt cache must also be populated for the partial-decryption
+	// handler to retrieve.
+	ct, populated, ok := agent.SessionAuthenticatedCt(sid)
+	require.True(t, ok)
+	require.True(t, populated, "image handler must cache ct_M")
+	require.NotNil(t, ct)
+}
+
+func TestHTTPVAgent_Image_UnknownSidReturns404(t *testing.T) {
+	vagentSrv, _, _, _, _, _, _ := newHTTPFixtureWithRService(t)
+	resp := postOctet(t, vagentSrv.URL, "/sessions/never-opened/image", []byte{0x00})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	var body errorBody
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Contains(t, body.Error, "unknown session")
+}
+
+func TestHTTPVAgent_Image_MalformedBodyReturns400(t *testing.T) {
+	vagentSrv, _, _, _, _, _, _ := newHTTPFixtureWithRService(t)
+	sid := openSessionViaHTTP(t, vagentSrv)
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/image", []byte{0xff, 0xff, 0xff})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestHTTPVAgent_Image_RejectsGet(t *testing.T) {
+	vagentSrv, _, _, _, _, _, _ := newHTTPFixtureWithRService(t)
+	sid := openSessionViaHTTP(t, vagentSrv)
+	resp, err := http.Get(vagentSrv.URL + "/sessions/" + string(sid) + "/image")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
+}
+
+// TestHTTPVAgent_PartialDecryption_AcceptVerdict drives the happy path
+// end-to-end: full keygen + image POST + craft a valid partial-decryption
+// share for m=0.7² > 0 → expect Accept verdict callback + 302 to RService.
+func TestHTTPVAgent_PartialDecryption_AcceptVerdict(t *testing.T) {
+	vagentSrv, _, _, agent, rstub, rsvcSrv, params := newHTTPFixtureWithRService(t)
+	sid := openSessionViaHTTP(t, vagentSrv)
+	stub := newVClientStub(t, params, sid)
+
+	_, jointPK := runFullKeygenViaHTTPThenStore(t, vagentSrv.URL, sid, stub, agent, params)
+
+	// Encrypt sqrt(0.7) so the x² circuit yields ~0.7 > 0 → Accept.
+	encoder := ckks.NewEncoder(params.CKKS)
+	encryptor := rlwe.NewEncryptor(params.CKKS, jointPK)
+	values := make([]float64, params.CKKS.MaxSlots())
+	// pick a positive value whose square is well above zero
+	values[0] = 0.8366600265340756 // sqrt(0.7)
+	pt := ckks.NewPlaintext(params.CKKS, params.CKKS.MaxLevel())
+	require.NoError(t, encoder.Encode(values, pt))
+	inputCt, err := encryptor.EncryptNew(pt)
+	require.NoError(t, err)
+	inputBytes, err := inputCt.MarshalBinary()
+	require.NoError(t, err)
+
+	imgResp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/image", inputBytes)
+	require.Equal(t, http.StatusOK, imgResp.StatusCode)
+	imgResp.Body.Close()
+
+	// Build VClient's partial-decryption share under sk_c against the cached ct_M.
+	ctM, _, ok := agent.SessionAuthenticatedCt(sid)
+	require.True(t, ok)
+	require.NotNil(t, ctM)
+
+	clientProto, err := multiparty.NewKeySwitchProtocol(params.CKKS, ring.DiscreteGaussian{
+		Sigma: params.FloodSigma,
+		Bound: 6 * params.FloodSigma,
+	})
+	require.NoError(t, err)
+	zeroSk := rlwe.NewSecretKey(params.CKKS)
+	clientShare := clientProto.AllocateShare(ctM.Level())
+	clientProto.GenShare(stub.skC, zeroSk, ctM, &clientShare)
+	pdBytes, err := protocol.PartialDecryption{Share: clientShare}.MarshalBinary()
+	require.NoError(t, err)
+
+	// Disable redirect following so we can observe the 302 directly.
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	req, err := http.NewRequest(http.MethodPost, vagentSrv.URL+"/sessions/"+string(sid)+"/partial-decryption", bytes.NewReader(pdBytes))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusFound, resp.StatusCode, "body=%s", readAll(t, resp.Body))
+	assert.Equal(t, rsvcSrv.URL+"/protected", resp.Header.Get("Location"))
+
+	calls, gotSid, gotVerd := rstub.snapshot()
+	assert.Equal(t, 1, calls, "RService must receive exactly one callback")
+	assert.Equal(t, sid, gotSid)
+	assert.Equal(t, protocol.VerdictAccept, gotVerd)
+}
+
+// TestHTTPVAgent_PartialDecryption_TamperedShareReject sends a share built
+// under a different sk_c → Ver fails → callback Reject + 302.
+func TestHTTPVAgent_PartialDecryption_TamperedShareReject(t *testing.T) {
+	vagentSrv, _, _, agent, rstub, _, params := newHTTPFixtureWithRService(t)
+	sid := openSessionViaHTTP(t, vagentSrv)
+	stub := newVClientStub(t, params, sid)
+
+	_, jointPK := runFullKeygenViaHTTPThenStore(t, vagentSrv.URL, sid, stub, agent, params)
+
+	encoder := ckks.NewEncoder(params.CKKS)
+	encryptor := rlwe.NewEncryptor(params.CKKS, jointPK)
+	values := make([]float64, params.CKKS.MaxSlots())
+	values[0] = 0.5
+	pt := ckks.NewPlaintext(params.CKKS, params.CKKS.MaxLevel())
+	require.NoError(t, encoder.Encode(values, pt))
+	inputCt, err := encryptor.EncryptNew(pt)
+	require.NoError(t, err)
+	inputBytes, err := inputCt.MarshalBinary()
+	require.NoError(t, err)
+	imgResp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/image", inputBytes)
+	require.Equal(t, http.StatusOK, imgResp.StatusCode)
+	imgResp.Body.Close()
+
+	ctM, _, ok := agent.SessionAuthenticatedCt(sid)
+	require.True(t, ok)
+
+	// Build the share under a WRONG sk — Ver must reject.
+	wrongSk := rlwe.NewKeyGenerator(params.CKKS).GenSecretKeyNew()
+	clientProto, err := multiparty.NewKeySwitchProtocol(params.CKKS, ring.DiscreteGaussian{
+		Sigma: params.FloodSigma,
+		Bound: 6 * params.FloodSigma,
+	})
+	require.NoError(t, err)
+	zeroSk := rlwe.NewSecretKey(params.CKKS)
+	clientShare := clientProto.AllocateShare(ctM.Level())
+	clientProto.GenShare(wrongSk, zeroSk, ctM, &clientShare)
+	pdBytes, err := protocol.PartialDecryption{Share: clientShare}.MarshalBinary()
+	require.NoError(t, err)
+
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	req, err := http.NewRequest(http.MethodPost, vagentSrv.URL+"/sessions/"+string(sid)+"/partial-decryption", bytes.NewReader(pdBytes))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	// A clean Ver=false finalize is reported as Reject (no error); per
+	// docs/DESIGN.md the callback runs and the redirect is issued.
+	require.Equal(t, http.StatusFound, resp.StatusCode, "body=%s", readAll(t, resp.Body))
+
+	calls, _, gotVerd := rstub.snapshot()
+	assert.Equal(t, 1, calls)
+	assert.Equal(t, protocol.VerdictReject, gotVerd)
+}
+
+// TestHTTPVAgent_PartialDecryption_MalformedShareRejectThen4xx exercises
+// F2 wire shape: known sid, garbage body → callback Reject + 4xx.
+func TestHTTPVAgent_PartialDecryption_MalformedShareRejectThen4xx(t *testing.T) {
+	vagentSrv, _, _, _, rstub, _, _ := newHTTPFixtureWithRService(t)
+	sid := openSessionViaHTTP(t, vagentSrv)
+
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/partial-decryption", []byte{0xff, 0xff, 0xff})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	calls, _, gotVerd := rstub.snapshot()
+	assert.Equal(t, 1, calls, "F2 wire-shape violation must trigger Reject callback")
+	assert.Equal(t, protocol.VerdictReject, gotVerd)
+}
+
+// TestHTTPVAgent_PartialDecryption_UnknownSidNoCallback: unknown sid →
+// 404 + zero callbacks (no session to mark a verdict against).
+func TestHTTPVAgent_PartialDecryption_UnknownSidNoCallback(t *testing.T) {
+	vagentSrv, _, _, _, rstub, _, _ := newHTTPFixtureWithRService(t)
+
+	resp := postOctet(t, vagentSrv.URL, "/sessions/never-opened/partial-decryption", []byte{0x00})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+
+	calls, _, _ := rstub.snapshot()
+	assert.Equal(t, 0, calls, "unknown sid must not trigger callback")
+}
+
+// TestHTTPVAgent_PartialDecryption_BeforeImageRejects exercises the
+// "known sid, no ct_M cached" path: the client called partial-decryption
+// before the image POST set up ct_M. Callback Reject + 400.
+func TestHTTPVAgent_PartialDecryption_BeforeImageRejects(t *testing.T) {
+	vagentSrv, _, _, agent, rstub, _, params := newHTTPFixtureWithRService(t)
+	sid := openSessionViaHTTP(t, vagentSrv)
+	stub := newVClientStub(t, params, sid)
+
+	// Drive keygen so the sid is "known and live" but skip the image POST so
+	// authenticatedCt stays nil.
+	runKeygenViaHTTP(t, vagentSrv.URL, sid, stub, params)
+
+	// Build a syntactically valid (but semantically meaningless) share so
+	// UnmarshalBinary succeeds → the handler reaches the populated-check.
+	dummyCt := rlwe.NewCiphertext(params.CKKS, 1, params.CKKS.MaxLevel())
+	proto, err := multiparty.NewKeySwitchProtocol(params.CKKS, ring.DiscreteGaussian{Sigma: 0, Bound: 0})
+	require.NoError(t, err)
+	zeroSk := rlwe.NewSecretKey(params.CKKS)
+	share := proto.AllocateShare(dummyCt.Level())
+	proto.GenShare(stub.skC, zeroSk, dummyCt, &share)
+	pdBytes, err := protocol.PartialDecryption{Share: share}.MarshalBinary()
+	require.NoError(t, err)
+
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/partial-decryption", pdBytes)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	calls, _, gotVerd := rstub.snapshot()
+	assert.Equal(t, 1, calls)
+	assert.Equal(t, protocol.VerdictReject, gotVerd)
+
+	// Session should still exist (FinalizeDecryption did not run).
+	_, err = agent.session(sid)
+	require.NoError(t, err)
+}
+
+func TestHTTPVAgent_PartialDecryption_RejectsGet(t *testing.T) {
+	vagentSrv, _, _, _, _, _, _ := newHTTPFixtureWithRService(t)
+	sid := openSessionViaHTTP(t, vagentSrv)
+	resp, err := http.Get(vagentSrv.URL + "/sessions/" + string(sid) + "/partial-decryption")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
 }

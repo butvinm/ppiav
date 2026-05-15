@@ -80,6 +80,14 @@ type sessionState struct {
 	// to remain cancellable on browser disconnect — `sync.Cond.Wait` would
 	// not. See docs/DESIGN.md line 175 (open SSE before image POST).
 	authResult chan *rlwe.Ciphertext
+
+	// authenticatedCt caches the ct_M produced by BuildAuthenticatedCt so
+	// the Stage-4a partial-decryption handler can pass it to
+	// FinalizeDecryption without re-deriving it. The HTTP layer needs this
+	// because the SSE channel is single-receive (the browser consumed it);
+	// FinalizeDecryption's signature requires the ciphertext as input.
+	// Populated by handleImage in http.go, consumed by handlePartialDecrypt.
+	authenticatedCt *rlwe.Ciphertext
 }
 
 // Agent holds VAgent's protocol-wide state. The Authenticator is built
@@ -155,6 +163,34 @@ func (a *Agent) SessionAuthResult(sid protocol.SessionID) (chan *rlwe.Ciphertext
 		return nil, false
 	}
 	return sess.authResult, true
+}
+
+// storeAuthenticatedCt caches ct_M so the partial-decryption handler can
+// retrieve it. Returns false if the sid is unknown (the caller maps that
+// to a 404 with no callback per docs/DESIGN.md §`Failure modes`).
+func (a *Agent) storeAuthenticatedCt(sid protocol.SessionID, ct *rlwe.Ciphertext) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	sess, ok := a.sessions[sid]
+	if !ok {
+		return false
+	}
+	sess.authenticatedCt = ct
+	return true
+}
+
+// SessionAuthenticatedCt returns the cached ct_M for `sid`. The third
+// return is false if the sid is unknown; the second is true once
+// storeAuthenticatedCt has run. http.go uses this in the
+// partial-decryption handler to assemble FinalizeDecryption's input.
+func (a *Agent) SessionAuthenticatedCt(sid protocol.SessionID) (ct *rlwe.Ciphertext, populated, ok bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	sess, exists := a.sessions[sid]
+	if !exists {
+		return nil, false, false
+	}
+	return sess.authenticatedCt, sess.authenticatedCt != nil, true
 }
 
 // session looks up a registered session under the mutex. Callers that

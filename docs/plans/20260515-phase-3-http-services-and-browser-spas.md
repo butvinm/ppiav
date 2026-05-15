@@ -461,18 +461,22 @@ Scope notes:
 
 - Modify: `internal/vagent/http.go`
 - Modify: `internal/vagent/http_test.go`
+- Modify: `internal/vagent/agent.go` (scope expansion — added `authenticatedCt *rlwe.Ciphertext` field to `sessionState` + `storeAuthenticatedCt`/`SessionAuthenticatedCt` accessors so the partial-decryption handler can retrieve ct_M to pass into `FinalizeDecryption`'s existing signature)
+- Modify: `internal/vservice/http.go`, `internal/vservice/http_test.go` (scope expansion — Task 1 added VService routes for `/params`, `/sessions`, `/sessions/:sid/eval-keys` but **not** `/sessions/:sid/image`; the VAgent image handler forwards to VService, so the matching VService-side handler must exist. Added in this task.)
+- Modify: `internal/protocol/wire.go`, `internal/protocol/wire_test.go` (scope expansion — `PartialDecryption` had no `MarshalBinary`/`UnmarshalBinary`; the partial-decryption HTTP endpoint needs them. Delegates to `multiparty.KeySwitchShare`'s codec. Test promoted from `t.Skip` to a real round-trip.)
 
-- [ ] implement `POST /sessions/:sid/image` handler: read body as `application/octet-stream`, `UnmarshalBinary` into `EncryptedImage.Ct`, forward to VService `POST /sessions/:sid/image` (via HTTP client using `vserviceURL`) to get `result_ct`
-- [ ] call `agent.BuildAuthenticatedCt(sid, result_ct)` to produce `ct_M`
-- [ ] send `ct_M` into the SSE channel non-blocking: `select { case sess.authResult <- *ctM: default: }`. The `default` branch covers the impossible-by-protocol case of a second image POST for the same sid (single-use semantics).
-- [ ] return 200 (no body) to VClient
-- [ ] implement `POST /sessions/:sid/partial-decryption` handler: read body as `application/octet-stream`, `UnmarshalBinary` into `PartialDecryption.Share`. Look up `sess`; if unknown sid → 404 with no callback (no session means no RService cookie to reference). Otherwise call `agent.FinalizeDecryption(sid, sess.authenticatedCt, clientShare)` to get the verdict.
-- [ ] on verdict (Accept or Reject from a clean finalize): call RService `POST /api/callback` via HTTP client using `rserviceURL`, then return `302 Location: <rserviceURL>/protected`
-- [ ] on F2 error from a known sid (malformed share, length mismatch, `Ver = false`): call RService `POST /api/callback` with `VerdictReject`, then return 4xx with error JSON. Always callback **before** writing the HTTP response, so RService stores the verdict regardless of whether the client reads our 4xx body.
-- [ ] on F2 error from an unknown sid (no session registered, malformed URL sid): return 404, **no callback** — there is no session to mark Reject against.
-- [ ] write tests for `POST /sessions/:sid/image`: success path (`ct_M` delivered into channel, SSE handler in a goroutine receives it), error path (unknown sid → 404, malformed ciphertext → 400)
-- [ ] write tests for `POST /sessions/:sid/partial-decryption` with mock RService (via `httptest.NewServer`): success path (VerdictAccept → callback called + 302), `Ver=false` → Reject callback + 4xx, malformed share with known sid → Reject callback + 4xx, unknown sid → 404 + no callback
-- [ ] run tests — must pass before Task 9: `go test ./internal/vagent/...`
+- [x] implement `POST /sessions/:sid/image` handler: read body as `application/octet-stream`, `UnmarshalBinary` into `EncryptedImage.Ct`, forward to VService `POST /sessions/:sid/image` (via HTTP client using `vserviceURL`) to get `result_ct`
+- [x] call `agent.BuildAuthenticatedCt(sid, result_ct)` to produce `ct_M`
+- [x] send `ct_M` into the SSE channel non-blocking: `select { case sess.authResult <- *ctM: default: }`. The `default` branch covers the impossible-by-protocol case of a second image POST for the same sid (single-use semantics). (Implemented as `case ch <- ctM: default:` — the channel is `chan *rlwe.Ciphertext`, matching the Task-6 type.)
+- [x] return 200 (no body) to VClient
+- [x] implement `POST /sessions/:sid/partial-decryption` handler: read body as `application/octet-stream`, `UnmarshalBinary` into `PartialDecryption.Share`. Look up `sess`; if unknown sid → 404 with no callback (no session means no RService cookie to reference). Otherwise call `agent.FinalizeDecryption(sid, sess.authenticatedCt, clientShare)` to get the verdict. (The session struct does not previously cache `authenticatedCt`; added the field plus a `storeAuthenticatedCt` / `SessionAuthenticatedCt` accessor pair to preserve `FinalizeDecryption`'s existing `(sid, authenticatedCt, share)` signature.)
+- [x] on verdict (Accept or Reject from a clean finalize): call RService `POST /api/callback` via HTTP client using `rserviceURL`, then return `302 Location: <rserviceURL>/protected` (URL shape is `POST /api/callback/:sid` per Task 2's deviation)
+- [x] on F2 error from a known sid (malformed share, length mismatch, `Ver = false`): call RService `POST /api/callback` with `VerdictReject`, then return 4xx with error JSON. Always callback **before** writing the HTTP response, so RService stores the verdict regardless of whether the client reads our 4xx body. (Note: a clean `Ver=false` finalize is NOT an error — it produces verdict=Reject and returns the same 302 redirect as Accept. Only malformed-body and F3 "partial-decryption before image" paths return 4xx.)
+- [x] on F2 error from an unknown sid (no session registered, malformed URL sid): return 404, **no callback** — there is no session to mark Reject against.
+- [x] write tests for `POST /sessions/:sid/image`: success path (`ct_M` delivered into channel, SSE handler in a goroutine receives it), error path (unknown sid → 404, malformed ciphertext → 400)
+- [x] write tests for `POST /sessions/:sid/partial-decryption` with mock RService (via `httptest.NewServer`): success path (VerdictAccept → callback called + 302), `Ver=false` → Reject callback + 302, malformed share with known sid → Reject callback + 4xx, unknown sid → 404 + no callback, F3 (partial-decryption before image POST) → Reject callback + 4xx
+- [x] write VService-side tests for the new `POST /sessions/:sid/image` handler: happy path (x² output round-trips), unknown sid → 404, malformed body → 400, rejects GET → 405
+- [x] run tests — must pass before Task 9: `go test ./internal/vagent/... ./internal/vservice/...` (all new tests green; `TestFinalizeRejectsZeroLogit` pre-existing flake unaffected, verified by stashing the diff and reproducing the same failure on the base branch)
 
 ### Task 8: Reserved
 

@@ -201,6 +201,9 @@ type PartialDecryption struct {
 	Share multiparty.KeySwitchShare
 }
 
+func (s PartialDecryption) MarshalBinary() ([]byte, error)     { return s.Share.MarshalBinary() }
+func (s *PartialDecryption) UnmarshalBinary(data []byte) error { return s.Share.UnmarshalBinary(data) }
+
 // Stage 4b: VAgent → RService.
 type VerdictNotification struct {
 	Verdict Verdict

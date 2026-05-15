@@ -3,6 +3,7 @@ package vservice
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
+	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
 )
 
 // httpSvcParams returns a small Service+Params pair for HTTP handler
@@ -164,6 +166,111 @@ func TestHTTPStoreEvalKeysRejectsGet(t *testing.T) {
 	srv := NewServer(svc, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/sessions/abc/eval-keys", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusMethodNotAllowed, w.Code)
+}
+
+// TestHTTPImageHappyPath drives POST /sessions/:sid/image end-to-end:
+// open a session, store eval keys, encrypt 0.3 under the same pk, POST
+// the marshaled ct, parse back the result, decrypt, verify 0.3² ≈ 0.09.
+func TestHTTPImageHappyPath(t *testing.T) {
+	svc, params := httpSvcParams(t)
+	srv := NewServer(svc, "")
+
+	sid, err := svc.OpenSession()
+	require.NoError(t, err)
+
+	kgen := rlwe.NewKeyGenerator(params.CKKS)
+	sk, pk := kgen.GenKeyPairNew()
+	rlk := kgen.GenRelinearizationKeyNew(sk)
+	require.NoError(t, svc.StoreEvalKeys(sid, rlk, nil))
+
+	encoder := ckks.NewEncoder(params.CKKS)
+	encryptor := rlwe.NewEncryptor(params.CKKS, pk)
+	decryptor := rlwe.NewDecryptor(params.CKKS, sk)
+
+	values := make([]float64, params.CKKS.MaxSlots())
+	values[0] = 0.3
+	pt := ckks.NewPlaintext(params.CKKS, params.CKKS.MaxLevel())
+	require.NoError(t, encoder.Encode(values, pt))
+	inputCt, err := encryptor.EncryptNew(pt)
+	require.NoError(t, err)
+	inputBytes, err := inputCt.MarshalBinary()
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/sessions/"+string(sid)+"/image", bytes.NewReader(inputBytes))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	assert.Contains(t, w.Header().Get("Content-Type"), "application/octet-stream")
+
+	respBody, err := io.ReadAll(w.Body)
+	require.NoError(t, err)
+	outCt := &rlwe.Ciphertext{}
+	require.NoError(t, outCt.UnmarshalBinary(respBody))
+
+	decoded := make([]float64, params.CKKS.MaxSlots())
+	require.NoError(t, encoder.Decode(decryptor.DecryptNew(outCt), decoded))
+	assert.InDelta(t, 0.09, decoded[0], 1e-4, "image POST must apply x² circuit")
+}
+
+func TestHTTPImageUnknownSid(t *testing.T) {
+	svc, params := httpSvcParams(t)
+	srv := NewServer(svc, "")
+
+	// Build a syntactically valid ciphertext so the body parses; only the
+	// sid is missing. Without StoreEvalKeys, Infer surfaces "unknown session"
+	// or "no evaluator" — both map to 404 per handleImage.
+	kgen := rlwe.NewKeyGenerator(params.CKKS)
+	_, pk := kgen.GenKeyPairNew()
+	encoder := ckks.NewEncoder(params.CKKS)
+	encryptor := rlwe.NewEncryptor(params.CKKS, pk)
+	values := make([]float64, params.CKKS.MaxSlots())
+	pt := ckks.NewPlaintext(params.CKKS, params.CKKS.MaxLevel())
+	require.NoError(t, encoder.Encode(values, pt))
+	ct, err := encryptor.EncryptNew(pt)
+	require.NoError(t, err)
+	body, err := ct.MarshalBinary()
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/sessions/does-not-exist/image", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusNotFound, w.Code, "body=%s", w.Body.String())
+	var berr errorBody
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &berr))
+	assert.NotEmpty(t, berr.Error)
+}
+
+func TestHTTPImageMalformedBody(t *testing.T) {
+	svc, _ := httpSvcParams(t)
+	srv := NewServer(svc, "")
+
+	sid, err := svc.OpenSession()
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/sessions/"+string(sid)+"/image", bytes.NewReader([]byte{0xff, 0xff, 0xff}))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	var body errorBody
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.NotEmpty(t, body.Error)
+}
+
+func TestHTTPImageRejectsGet(t *testing.T) {
+	svc, _ := httpSvcParams(t)
+	srv := NewServer(svc, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/sessions/abc/image", nil)
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 

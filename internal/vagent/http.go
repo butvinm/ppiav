@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/butvinm/ppiav/internal/protocol"
+	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 )
 
 // Server wraps an *Agent with the HTTP routes VClient and RService drive.
@@ -21,9 +22,9 @@ import (
 //
 // Image (`POST /sessions/:sid/image`), SSE result (`GET
 // /sessions/:sid/result`) and partial-decryption
-// (`POST /sessions/:sid/partial-decryption`) handlers are added in Tasks
-// 6 and 7; this file only carries the keygen plus Stage-1 session-open
-// surface. The `/verify` SPA handler is added in Task 16.
+// (`POST /sessions/:sid/partial-decryption`) handlers are wired in this
+// file (added in Tasks 6 and 7). The `/verify` SPA handler is added in
+// Task 16.
 type Server struct {
 	agent       *Agent
 	vserviceURL string
@@ -138,6 +139,10 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		s.handleGKSShares(w, r, sessID)
 	case sub == "result":
 		s.handleResultSSE(w, r, sessID)
+	case sub == "image":
+		s.handleImage(w, r, sessID)
+	case sub == "partial-decryption":
+		s.handlePartialDecryption(w, r, sessID)
 	default:
 		writeError(w, http.StatusNotFound, "not found")
 	}
@@ -378,6 +383,193 @@ func (s *Server) handleGKSShares(w http.ResponseWriter, r *http.Request, sid pro
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// handleImage runs Stages 3 and the first half of 4a. Reads the marshaled
+// encrypted image from the request body, forwards the bytes to VService's
+// matching `POST /sessions/:sid/image` route, parses the returned
+// ciphertext, calls `BuildAuthenticatedCt` to fold in MPD-Auth's random
+// values, deposits the resulting ct_M into the SSE channel for the
+// already-opened result GET, and caches it in the session so the
+// subsequent partial-decryption call can pass it to FinalizeDecryption.
+//
+// Error mapping:
+//   - unknown sid → 404 (handled implicitly by `agent.session` + BuildAuthenticatedCt)
+//   - malformed body → 400
+//   - VService unreachable / non-200 → 502 (F4a wire shape)
+//   - BuildAuthenticatedCt failure → 500 (impossible-by-protocol once Stage 2d completed)
+func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, sid protocol.SessionID) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if _, err := s.agent.session(sid); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("read body: %s", err))
+		return
+	}
+	inCt := &rlwe.Ciphertext{}
+	if err := inCt.UnmarshalBinary(body); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("unmarshal EncryptedImage: %s", err))
+		return
+	}
+
+	if s.vserviceURL == "" {
+		writeError(w, http.StatusInternalServerError, "vagent: vserviceURL not configured")
+		return
+	}
+	url := s.vserviceURL + "/sessions/" + string(sid) + "/image"
+	// Forward the original bytes verbatim — we already unmarshaled to
+	// validate, but the VService handler unmarshals from the bytes itself.
+	resp, err := s.httpClient.Post(url, "application/octet-stream", bytes.NewReader(body))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("call vservice /image: %s", err))
+		return
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("read vservice /image: %s", err))
+		return
+	}
+	if resp.StatusCode != http.StatusOK {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("vservice /image returned %d: %s", resp.StatusCode, respBody))
+		return
+	}
+	resultCt := &rlwe.Ciphertext{}
+	if err := resultCt.UnmarshalBinary(respBody); err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("unmarshal vservice /image response: %s", err))
+		return
+	}
+
+	ctM, err := s.agent.BuildAuthenticatedCt(sid, resultCt)
+	if err != nil {
+		writeError(w, sidErrorStatus(err), err.Error())
+		return
+	}
+	// Cache ct_M for the upcoming partial-decryption call.
+	if ok := s.agent.storeAuthenticatedCt(sid, ctM); !ok {
+		// Sid was deleted between session() and storeAuthenticatedCt — race
+		// only possible from a concurrent FinalizeDecryption, which we don't
+		// expect on this code path. Surface as 404 for consistency.
+		writeError(w, http.StatusNotFound, fmt.Sprintf("vagent: unknown session id %q", sid))
+		return
+	}
+	// Non-blocking SSE deposit: covers both the pre-arrival case (SSE handler
+	// not yet attached — buffer 1 absorbs it) and the impossible-by-protocol
+	// duplicate-image case (default branch silently drops). See agent.go
+	// sessionState.authResult.
+	ch, ok := s.agent.SessionAuthResult(sid)
+	if !ok {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("vagent: unknown session id %q", sid))
+		return
+	}
+	select {
+	case ch <- ctM:
+	default:
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// handlePartialDecryption runs Stage 4a/b: receives VClient's smudged
+// KeySwitchShare, calls FinalizeDecryption against the cached ct_M, posts
+// the resulting verdict back to RService, and redirects the browser to
+// RService's /protected. Per docs/DESIGN.md §`Failure modes`:
+//
+//   - unknown sid → 404, no callback (no session means no RService cookie)
+//   - malformed share (known sid) → callback Reject (F2) **then** 4xx
+//   - Ver=false / FinalizeDecryption error → callback Reject **then** 4xx
+//   - clean Accept/Reject verdict → callback verdict **then** 302 to RService
+//
+// The verdict callback always runs **before** the HTTP response is
+// written so RService stores it regardless of whether the client reads
+// our body.
+func (s *Server) handlePartialDecryption(w http.ResponseWriter, r *http.Request, sid protocol.SessionID) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	// Unknown sid is 404 with no callback.
+	if _, err := s.agent.session(sid); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		// Known sid + read failure → F2 (wire-shape violation): callback
+		// Reject, then 400.
+		_ = s.postVerdict(sid, protocol.VerdictReject)
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("read body: %s", err))
+		return
+	}
+	var pd protocol.PartialDecryption
+	if err := pd.UnmarshalBinary(body); err != nil {
+		_ = s.postVerdict(sid, protocol.VerdictReject)
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("unmarshal PartialDecryption: %s", err))
+		return
+	}
+	ctM, populated, ok := s.agent.SessionAuthenticatedCt(sid)
+	if !ok {
+		// Race: session vanished between the initial check and now.
+		writeError(w, http.StatusNotFound, fmt.Sprintf("vagent: unknown session id %q", sid))
+		return
+	}
+	if !populated {
+		// F3: partial-decryption called before image POST stored ct_M.
+		// Known sid with no ct cached → callback Reject (F3 wire shape),
+		// then 400.
+		_ = s.postVerdict(sid, protocol.VerdictReject)
+		writeError(w, http.StatusBadRequest, "vagent: partial-decryption called before image submission")
+		return
+	}
+	verdict, err := s.agent.FinalizeDecryption(sid, ctM, pd.Share)
+	if err != nil {
+		_ = s.postVerdict(sid, protocol.VerdictReject)
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("finalize decryption: %s", err))
+		return
+	}
+	// Clean finalize: callback the actual verdict (Accept or Reject).
+	if err := s.postVerdict(sid, verdict); err != nil {
+		// Callback failed: surface 502 so the operator can see the wire
+		// fault. The session is already evicted by FinalizeDecryption.
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("rservice callback: %s", err))
+		return
+	}
+	if s.rserviceURL == "" {
+		// No place to redirect to. Treat as misconfiguration → 500.
+		writeError(w, http.StatusInternalServerError, "vagent: rserviceURL not configured")
+		return
+	}
+	http.Redirect(w, r, s.rserviceURL+"/protected", http.StatusFound)
+}
+
+// postVerdict POSTs `VerdictNotification{verdict}` to RService's
+// `/api/callback/:sid` route. Returns an error if the RService URL is
+// unset or the call fails; callers decide whether to surface it.
+func (s *Server) postVerdict(sid protocol.SessionID, verdict protocol.Verdict) error {
+	if s.rserviceURL == "" {
+		return fmt.Errorf("vagent: rserviceURL not configured")
+	}
+	notif := protocol.VerdictNotification{Verdict: verdict}
+	notifBytes, err := json.Marshal(notif)
+	if err != nil {
+		return fmt.Errorf("marshal VerdictNotification: %w", err)
+	}
+	url := s.rserviceURL + "/api/callback/" + string(sid)
+	resp, err := s.httpClient.Post(url, "application/json", bytes.NewReader(notifBytes))
+	if err != nil {
+		return fmt.Errorf("post: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("rservice returned %d: %s", resp.StatusCode, respBody)
+	}
+	return nil
 }
 
 // sidErrorStatus maps Agent errors to HTTP statuses. The Agent reports
