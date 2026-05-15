@@ -350,16 +350,19 @@ const ciphertext = await ppiavClient.encryptImage(tensor);
 
 - Create: `internal/vservice/http.go`
 - Create: `internal/vservice/http_test.go`
+- Modify: `internal/protocol/wire.go`, `internal/protocol/wire_test.go` (scope expansion — see note below)
 
-- [ ] create `internal/vservice/http.go` with `type Server struct { svc *vservice.Service; addr string }` and `func New(svc *Service, addr string) *Server`
-- [ ] implement `func (s *Server) ListenAndServe() error` using `http.Server` and `http.ServeMux`
-- [ ] implement `GET /params` handler: returns `protocol.Params` as JSON (`encoding/json` from `params.CKKS`, `params.Authenticator`, `params.FloodSigma`)
-- [ ] implement `POST /sessions` handler: calls `svc.OpenSession()`, returns `VerificationSession{SessionID: sid}` as JSON
-- [ ] implement `POST /sessions/:sid/eval-keys` handler: parses JSON `InferEvalKeys`, calls `svc.StoreEvalKeys(sid, ...)`, returns 200
-- [ ] write tests for `GET /params` with `httptest.ResponseRecorder`: assert JSON structure, correct field values
-- [ ] write tests for `POST /sessions`: asserts sid is non-empty and distinct across calls
-- [ ] write tests for `POST /sessions/:sid/eval-keys`: success on valid keys, 404 on unknown sid (error JSON)
-- [ ] run tests — must pass before Task 2: `go test ./internal/vservice/...`
+Scope note: `POST /sessions/:sid/eval-keys` ships its payload as `application/octet-stream` per Technical Details (JSON-encoding `*rlwe.RelinearizationKey` and `[]*rlwe.GaloisKey` is impractical and inconsistent with Task 4's outbound format). Adding `InferEvalKeys.MarshalBinary`/`UnmarshalBinary` was therefore included in Task 1 scope. The constructor is named `NewServer` rather than `New` to avoid shadowing `vservice.New(params)`.
+
+- [x] create `internal/vservice/http.go` with `type Server struct { svc *vservice.Service; addr string }` and `func NewServer(svc *Service, addr string) *Server` (renamed from `New` to avoid collision with existing Service constructor)
+- [x] implement `func (s *Server) ListenAndServe() error` using `http.Server` and `http.ServeMux`
+- [x] implement `GET /params` handler: returns `protocol.Params` as JSON (CKKS via Lattigo's `MarshalJSON`, authenticator config and scalar fields as JSON)
+- [x] implement `POST /sessions` handler: calls `svc.OpenSession()`, returns `VerificationSession{SessionID: sid}` as JSON
+- [x] implement `POST /sessions/:sid/eval-keys` handler: reads `application/octet-stream` body, `UnmarshalBinary` into `InferEvalKeys`, calls `svc.StoreEvalKeys(sid, ...)`, returns 200
+- [x] write tests for `GET /params` with `httptest.ResponseRecorder`: assert JSON structure, correct field values
+- [x] write tests for `POST /sessions`: asserts sid is non-empty and distinct across calls
+- [x] write tests for `POST /sessions/:sid/eval-keys`: success on valid keys, 404 on unknown sid (error JSON), 400 on malformed body, method-not-allowed for non-POST
+- [x] run tests — must pass before Task 2: `go test ./internal/vservice/...`
 
 ### Task 2: `internal/rservice` — HTTP layer (protected page, callback)
 

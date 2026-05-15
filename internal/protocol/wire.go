@@ -3,6 +3,7 @@ package protocol
 import (
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 	"github.com/tuneinsight/lattigo/v6/multiparty"
+	"github.com/tuneinsight/lattigo/v6/utils/structs"
 )
 
 // Wire messages exchanged by VClient, VAgent, VService and RService.
@@ -57,6 +58,57 @@ type VClientGaloisKeyShare struct {
 type InferEvalKeys struct {
 	RLK *rlwe.RelinearizationKey
 	GKS []*rlwe.GaloisKey
+}
+
+// MarshalBinary serialises InferEvalKeys by delegating to Lattigo's
+// MemEvaluationKeySet, which already knows how to write a RelinearizationKey
+// and a Galois key set. Phase 4 will replace this with a hierkeys master.
+func (k InferEvalKeys) MarshalBinary() ([]byte, error) {
+	galois := structs.Map[uint64, rlwe.GaloisKey]{}
+	for _, gk := range k.GKS {
+		if gk == nil {
+			continue
+		}
+		galois[gk.GaloisElement] = gk
+	}
+	evk := &rlwe.MemEvaluationKeySet{
+		RelinearizationKey: k.RLK,
+		GaloisKeys:         galois,
+	}
+	return evk.MarshalBinary()
+}
+
+// UnmarshalBinary inverts MarshalBinary; the resulting GKS slice is
+// ordered by ascending Galois element so two round-trips of the same
+// payload are byte-identical.
+func (k *InferEvalKeys) UnmarshalBinary(data []byte) error {
+	evk := &rlwe.MemEvaluationKeySet{}
+	if err := evk.UnmarshalBinary(data); err != nil {
+		return err
+	}
+	k.RLK = evk.RelinearizationKey
+	k.GKS = nil
+	if len(evk.GaloisKeys) == 0 {
+		return nil
+	}
+	elements := make([]uint64, 0, len(evk.GaloisKeys))
+	for el := range evk.GaloisKeys {
+		elements = append(elements, el)
+	}
+	// Sort ascending for deterministic order. Avoid a sort import — this
+	// loop is O(n²) over ≤Lambda+|extra| ≈ low hundreds.
+	for i := 1; i < len(elements); i++ {
+		for j := i; j > 0 && elements[j-1] > elements[j]; j-- {
+			elements[j-1], elements[j] = elements[j], elements[j-1]
+		}
+	}
+	out := make([]*rlwe.GaloisKey, 0, len(elements))
+	for _, el := range elements {
+		gk := evk.GaloisKeys[el]
+		out = append(out, gk)
+	}
+	k.GKS = out
+	return nil
 }
 
 // Stage 3: image.

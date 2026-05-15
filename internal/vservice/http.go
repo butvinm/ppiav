@@ -1,0 +1,181 @@
+package vservice
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+
+	"github.com/butvinm/ppiav/internal/protocol"
+)
+
+// Server wraps a *Service with the HTTP handlers VAgent uses to drive
+// inference. Routes mirror docs/DESIGN.md §`Protocol` exactly:
+//
+//	GET  /params
+//	POST /sessions
+//	POST /sessions/:sid/eval-keys
+//	POST /sessions/:sid/image       (Task 7 — image submission, not in Task 1)
+//
+// JSON for control endpoints, application/octet-stream for share- and
+// key-bearing endpoints (see docs/plans Technical Details).
+type Server struct {
+	svc  *Service
+	addr string
+	mux  *http.ServeMux
+}
+
+// NewServer wires a Server around `svc`. `addr` is forwarded verbatim to
+// http.Server.Addr in ListenAndServe. The constructor is named `NewServer`
+// rather than `New` to avoid shadowing the existing `vservice.New(params)`
+// Service constructor.
+func NewServer(svc *Service, addr string) *Server {
+	s := &Server{svc: svc, addr: addr, mux: http.NewServeMux()}
+	s.register()
+	return s
+}
+
+// Handler exposes the mux for use with httptest.NewServer / external
+// composition.
+func (s *Server) Handler() http.Handler { return s.mux }
+
+// ListenAndServe boots an http.Server on s.addr.
+func (s *Server) ListenAndServe() error {
+	srv := &http.Server{Addr: s.addr, Handler: s.mux}
+	return srv.ListenAndServe()
+}
+
+func (s *Server) register() {
+	s.mux.HandleFunc("/params", s.handleParams)
+	s.mux.HandleFunc("/sessions", s.handleSessions)
+	// Subroutes under /sessions/:sid/... are dispatched by handleSession.
+	s.mux.HandleFunc("/sessions/", s.handleSession)
+}
+
+func (s *Server) handleParams(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if err := writeParams(w, s.svc.Params()); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+}
+
+func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	sid, err := s.svc.OpenSession()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, protocol.VerificationSession{SessionID: sid})
+}
+
+// handleSession dispatches /sessions/:sid/<sub>. Stdlib ServeMux gives us
+// the bare prefix match; we parse the remaining path ourselves.
+func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/sessions/")
+	if rest == "" || rest == r.URL.Path {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	sid, sub, ok := strings.Cut(rest, "/")
+	if !ok || sid == "" || sub == "" {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	switch sub {
+	case "eval-keys":
+		s.handleEvalKeys(w, r, protocol.SessionID(sid))
+	default:
+		writeError(w, http.StatusNotFound, "not found")
+	}
+}
+
+func (s *Server) handleEvalKeys(w http.ResponseWriter, r *http.Request, sid protocol.SessionID) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("read body: %s", err))
+		return
+	}
+	var keys protocol.InferEvalKeys
+	if err := keys.UnmarshalBinary(body); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("unmarshal InferEvalKeys: %s", err))
+		return
+	}
+	if err := s.svc.StoreEvalKeys(sid, keys.RLK, keys.GKS); err != nil {
+		// Unknown sid is the only common error path here.
+		if strings.Contains(err.Error(), "unknown session") {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// paramsWire is the JSON representation of protocol.Params on the wire.
+// `ckks.Parameters` is JSON-marshaled directly (Lattigo provides the codec);
+// the rest of Params is small scalar config that survives `encoding/json`
+// untouched. Phase 4 may swap CKKS for a precomputed manifest.
+type paramsWire struct {
+	CKKS                 json.RawMessage `json:"ckks"`
+	AuthenticatorLambda  int             `json:"authenticator_lambda"`
+	AuthenticatorEpsilon float64         `json:"authenticator_epsilon"`
+	FloodSigma           float64         `json:"flood_sigma"`
+	ExtraRotationIndices []int           `json:"extra_rotation_indices,omitempty"`
+	InputLevel           int             `json:"input_level"`
+}
+
+func writeParams(w http.ResponseWriter, p protocol.Params) error {
+	ckksBytes, err := p.CKKS.MarshalJSON()
+	if err != nil {
+		return fmt.Errorf("marshal CKKS params: %w", err)
+	}
+	pw := paramsWire{
+		CKKS:                 ckksBytes,
+		AuthenticatorLambda:  p.Authenticator.Lambda,
+		AuthenticatorEpsilon: p.Authenticator.Epsilon,
+		FloodSigma:           p.FloodSigma,
+		ExtraRotationIndices: p.ExtraRotationIndices,
+		InputLevel:           p.InputLevel,
+	}
+	writeJSON(w, http.StatusOK, pw)
+	return nil
+}
+
+// errorBody is the wire shape of all 4xx/5xx JSON responses.
+type errorBody struct {
+	Error string `json:"error"`
+}
+
+func writeJSON(w http.ResponseWriter, status int, body any) {
+	data, err := json.Marshal(body)
+	if err != nil {
+		// We tried; fall back to a plain 500. Logging is intentionally
+		// thin — DESIGN.md §`Out of scope` rules out structured logging.
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(data)
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, errorBody{Error: msg})
+}
+
+// Compile-time check that handler functions match http.HandlerFunc.
+var _ http.HandlerFunc = (&Server{}).handleParams
