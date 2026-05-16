@@ -1,0 +1,26 @@
+{
+  "name": "partial-decrypt",
+  "phase": "phase4",
+  "started": "2026-05-16T12:04:00Z",
+  "go_version": "go1.23.0",
+  "goos": "linux",
+  "goarch": "amd64",
+  "num_cpu": 8,
+  "metadata": {},
+  "samples": [
+    {
+      "name": "partial-decrypt",
+      "iter": 0,
+      "wall": 800000000,
+      "heap_alloc": 3000,
+      "heap_inuse": 3100,
+      "sys": 3200,
+      "alloc_delta": 300,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "pre_vm_hwm": 3700,
+      "vm_hwm": 3800,
+      "bytes": 0
+    }
+  ]
+}

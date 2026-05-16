@@ -1,0 +1,32 @@
+{
+  "generated_at": "2026-05-16T12:00:00Z",
+  "model": "c3ae",
+  "logn": 14,
+  "n_images": 4,
+  "images": [
+    {
+      "idx": 0,
+      "path": "models/data/UTKFace/img_0.bin",
+      "label": 1,
+      "ref_logit": 0.42
+    },
+    {
+      "idx": 1,
+      "path": "models/data/UTKFace/img_1.bin",
+      "label": 0,
+      "ref_logit": -0.31
+    },
+    {
+      "idx": 2,
+      "path": "models/data/UTKFace/img_2.bin",
+      "label": 1,
+      "ref_logit": 0.18
+    },
+    {
+      "idx": 3,
+      "path": "models/data/UTKFace/img_3.bin",
+      "label": 0,
+      "ref_logit": -0.55
+    }
+  ]
+}

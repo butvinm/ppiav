@@ -245,13 +245,13 @@ All three subcommands follow the same refactor pattern: take the single `bench.M
 - Create: `bench/tests/test_messages.py`
 - Create: `bench/tests/fixtures/sample_batch/` (small JSON-only fixture — see contents below)
 
-- [ ] define `MESSAGES: list[Message]` covering every wire message in `docs/protocol.puml` per the catalog table in this plan
-- [ ] each `Message` has: `id` (str, CamelCase), `sender` ("client"|"agent"|"service"|"resource_service"), `receiver`, `label_ru`, `bytes_source` (one of: `FilePath("keys/...")`, `SampleBytes("keygen.pk.client_gen")`, `Synthetic(estimated_bytes)`, or `Unavailable(reason)`)
-- [ ] define `KEYS: list[KeyEntry]` with `name`, `location` (client_local | agent_local | service_local | derived_agent | derived_service | aggregated_all), `on_wire` (bool), `bytes_source`
-- [ ] write `resolve_message_bytes(message, batch_dir, samples_by_name) -> int | None` and `resolve_key_bytes(key, batch_dir, samples_by_name) -> int | None`; `None` for `Unavailable` and for missing files; tests cover both paths
-- [ ] create `bench/tests/fixtures/sample_batch/` containing: a `keygen.json` with all per-party sub-step Samples (including non-zero `Bytes` on the eight share sub-steps); per-image dirs `img_0/` through `img_3/` each with the new five JSONs (`encrypt.json` with 1 sample, `infer.json` with 4 sub-steps, `mac.json` with 2 sub-steps, `partial-decrypt.json` with 1 sample, `finalize.json` with 2 sub-steps); `eval_inputs.json` with 4 images covering both labels and both `ref_logit` signs; a few placeholder zero-byte `.bin` files where the catalog expects `FilePath` (so size resolution returns `0` rather than `None`)
-- [ ] write tests: every message in `MESSAGES` resolves against the fixture; every key in `KEYS` resolves; an `Unavailable` test case returns `None` gracefully; missing-file case returns `None` gracefully (delete one `.bin` from the fixture in the test)
-- [ ] run `cd bench && uv run pytest tests/test_messages.py` — must pass before next task
+- [x] define `MESSAGES: list[Message]` covering every wire message in `docs/protocol.puml` per the catalog table in this plan
+- [x] each `Message` has: `id` (str, CamelCase), `sender` ("client"|"agent"|"service"|"resource_service"), `receiver`, `label_ru`, `bytes_source` (one of: `FilePath("keys/...")`, `SampleBytes("keygen.pk.client_gen")`, `Synthetic(estimated_bytes)`, or `Unavailable(reason)`)
+- [x] define `KEYS: list[KeyEntry]` with `name`, `location` (client_local | agent_local | service_local | derived_agent | derived_service | aggregated_all), `on_wire` (bool), `bytes_source`
+- [x] write `resolve_message_bytes(message, batch_dir, samples_by_name) -> int | None` and `resolve_key_bytes(key, batch_dir, samples_by_name) -> int | None`; `None` for `Unavailable` and for missing files; tests cover both paths
+- [x] create `bench/tests/fixtures/sample_batch/` containing: a `keygen.json` with all per-party sub-step Samples (including non-zero `Bytes` on the eight share sub-steps); per-image dirs `img_0/` through `img_3/` each with the new five JSONs (`encrypt.json` with 1 sample, `infer.json` with 4 sub-steps, `mac.json` with 2 sub-steps, `partial-decrypt.json` with 1 sample, `finalize.json` with 2 sub-steps); `eval_inputs.json` with 4 images covering both labels and both `ref_logit` signs; a few placeholder zero-byte `.bin` files where the catalog expects `FilePath` (so size resolution returns `0` rather than `None`)
+- [x] write tests: every message in `MESSAGES` resolves against the fixture; every key in `KEYS` resolves; an `Unavailable` test case returns `None` gracefully; missing-file case returns `None` gracefully (delete one `.bin` from the fixture in the test)
+- [x] run `cd bench && uv run pytest tests/test_messages.py` — must pass before next task
 
 ### Task 5: Rework `_per_message_bytes` + add `_key_inventory_md` in aggregator
 
