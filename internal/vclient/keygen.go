@@ -56,7 +56,7 @@ func (c *Client) AggregatePK(agentShare protocol.VAgentPKShare) error {
 		return fmt.Errorf("vclient: AggregatePK called before GenPKShare")
 	}
 
-	// Aggregate eval-level shares → pkEval.
+	// Aggregate eval-level shares → pkEval (wires the encryptor).
 	aggEval := c.pkProtoEval.AllocateShare()
 	c.pkProtoEval.AggregateShares(c.pkShareLocalEval, agentShare.ShareEval, &aggEval)
 	pkEval := rlwe.NewPublicKey(c.params.CKKS)
@@ -64,14 +64,12 @@ func (c *Client) AggregatePK(agentShare protocol.VAgentPKShare) error {
 	c.pkAgg = pkEval
 	c.encryptor = rlwe.NewEncryptor(c.params.CKKS, pkEval)
 
-	// Aggregate top-level shares → pkTop. Retained for inspection /
-	// downstream wire path; VAgent is the one that ships pk_top to
-	// VService inside InferEvalKeys.
-	aggTop := c.pkProtoTop.AllocateShare()
-	c.pkProtoTop.AggregateShares(c.pkShareLocalTop, agentShare.ShareTop, &aggTop)
-	pkTop := rlwe.NewPublicKey(c.params.LLKN.Top())
-	c.pkProtoTop.GenPublicKey(aggTop, c.pkCRPTop, pkTop)
-	c.pkTopAgg = pkTop
+	// Top-level shares are emitted to VAgent inside VClientPKShare; VAgent
+	// owns the pk_top aggregation and ships the result to VService.
+	// VClient itself does not need pk_top after GenPKShare — the encryptor
+	// runs only at eval level. The agentShare.ShareTop value is therefore
+	// passed through (verified above) but not aggregated locally.
+	_ = agentShare.ShareTop
 
 	return nil
 }

@@ -54,7 +54,7 @@ func TestNewSessionCRSDifferentSids(t *testing.T) {
 func TestCanonicalAuthAtoms_Defaults(t *testing.T) {
 	params, err := Defaults()
 	require.NoError(t, err)
-	got := CanonicalAuthAtoms(params)
+	got := params.AuthAtoms()
 	// λ=128 → powers of two up to and including 64.
 	assert.Equal(t, []int{1, 2, 4, 8, 16, 32, 64}, got)
 	assert.True(t, sort.IntsAreSorted(got), "auth atoms must be ascending")
@@ -77,14 +77,14 @@ func TestCanonicalAuthAtoms_VariedLambda(t *testing.T) {
 		params, err := Defaults()
 		require.NoError(t, err)
 		params.Authenticator.Lambda = c.lambda
-		assert.Equalf(t, c.want, CanonicalAuthAtoms(params), "lambda=%d", c.lambda)
+		assert.Equalf(t, c.want, params.AuthAtoms(), "lambda=%d", c.lambda)
 	}
 }
 
 func TestCanonicalInferAtoms_DefaultsBase4LogN16(t *testing.T) {
 	params, err := Defaults()
 	require.NoError(t, err)
-	got := CanonicalInferAtoms(params)
+	got := params.InferAtoms()
 	// Base=4, MaxSlots=N/2=32768 → {1,4,16,64,256,1024,4096,16384}.
 	assert.Equal(t, []int{1, 4, 16, 64, 256, 1024, 4096, 16384}, got)
 	assert.True(t, sort.IntsAreSorted(got), "infer atoms must be ascending")

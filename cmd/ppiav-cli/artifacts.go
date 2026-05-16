@@ -209,9 +209,9 @@ func readRelinearizationKey(workdir string) (*rlwe.RelinearizationKey, error) {
 // writeGaloisKeys serialises the GKS slice into a deterministic byte
 // blob using Lattigo's MemEvaluationKeySet container, then writes it to
 // `name`. The container is keyed by Galois element so two round-trips of
-// the same payload are byte-identical (sort by element on emit). RLK
-// is intentionally stuffed with a zero-valued placeholder so the container
-// stays well-formed without bloating the GKS files with relin material.
+// the same payload are byte-identical (sort by element on emit). RLK is
+// left nil — the container shape stays well-formed and the GKS files
+// carry only Galois material (no relin bytes).
 //
 // Used for both `gks_auth.bin` (eval-level negative-galEl auth atoms,
 // consumed by `mac`) and `gks_infer.bin` (VService's eval-level derived

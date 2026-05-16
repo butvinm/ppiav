@@ -78,12 +78,13 @@ func TestParams_InferAtoms_DefaultsBase4LogN16(t *testing.T) {
 	assert.Equal(t, want, params.InferAtoms())
 }
 
-func TestParams_InferAtoms_FallsBackWhenBaseUnset(t *testing.T) {
+func TestParams_InferAtoms_PanicsWhenBaseUnset(t *testing.T) {
 	params, err := Defaults()
 	require.NoError(t, err)
 	params.LLKNBase = 0
-	want := []int{1, 4, 16, 64, 256, 1024, 4096, 16384}
-	assert.Equal(t, want, params.InferAtoms())
+	// Constructed-from-scratch params with LLKNBase < 2 is a programmer
+	// error — every production site stamps LLKNBase: DefaultLLKNBase.
+	assert.Panics(t, func() { _ = params.InferAtoms() })
 }
 
 func TestParams_ProjectSKToEval_RoundTrip(t *testing.T) {

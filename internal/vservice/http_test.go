@@ -121,6 +121,16 @@ func TestHTTPStoreEvalKeysHappyPath(t *testing.T) {
 	srv.Handler().ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	// A no-op handler that returns 200 without populating state would pass
+	// the status assertion above. Verify the session was actually populated
+	// by exporting state — ExportState rejects sessions whose evaluator has
+	// not been built (StoreEvalKeys not called).
+	state, err := svc.ExportState(sess.SessionID)
+	require.NoError(t, err, "ExportState must succeed after /eval-keys 200")
+	require.NotNil(t, state, "ExportState must populate state after /eval-keys")
+	require.NotNil(t, state.Rlk, "stored Rlk must round-trip via ExportState")
+	require.NotNil(t, state.PKTop, "stored PKTop must round-trip via ExportState")
 }
 
 func TestHTTPStoreEvalKeysUnknownSid(t *testing.T) {

@@ -20,14 +20,12 @@ import (
 // PkAgg (eval level) is needed for EncryptImage (powers the per-session
 // encryptor); PartialDecrypt uses only the projected sk. Carrying PkAgg
 // unconditionally keeps the bench `encrypt` subcommand viable from a
-// single export+import. PkTopAgg is retained for inspection /
-// completeness; the wire path ships it from VAgent to VService directly,
-// so on-disk persistence is best-effort.
+// single export+import. pk_top is NOT included — VClient does not retain
+// it (VAgent owns the wire path that ships pk_top to VService).
 type ExportedState struct {
-	SID      protocol.SessionID
-	SkTop    *rlwe.SecretKey
-	PkAgg    *rlwe.PublicKey
-	PkTopAgg *rlwe.PublicKey
+	SID   protocol.SessionID
+	SkTop *rlwe.SecretKey
+	PkAgg *rlwe.PublicKey
 }
 
 // ExportState snapshots the per-session state. Returns an error if sk_c
@@ -39,10 +37,9 @@ func (c *Client) ExportState() (*ExportedState, error) {
 		return nil, fmt.Errorf("vclient: ExportState skTop is nil")
 	}
 	return &ExportedState{
-		SID:      c.sid,
-		SkTop:    c.skTop,
-		PkAgg:    c.pkAgg,
-		PkTopAgg: c.pkTopAgg,
+		SID:   c.sid,
+		SkTop: c.skTop,
+		PkAgg: c.pkAgg,
 	}, nil
 }
 
@@ -71,9 +68,6 @@ func NewWithState(params protocol.Params, state *ExportedState) (*Client, error)
 	if state.PkAgg != nil {
 		c.pkAgg = state.PkAgg
 		c.encryptor = rlwe.NewEncryptor(params.CKKS, state.PkAgg)
-	}
-	if state.PkTopAgg != nil {
-		c.pkTopAgg = state.PkTopAgg
 	}
 	return c, nil
 }

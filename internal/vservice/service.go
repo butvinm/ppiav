@@ -108,6 +108,18 @@ func NewWithOrion(params protocol.Params, orionDir string) (*Service, error) {
 	merged := params
 	merged.CKKS = ckksParams
 	merged.InputLevel = inputLevel
+	// Rebuild LLKN against the Orion-overridden CKKS — the caller's
+	// `params.LLKN` was built against `Defaults().CKKS` (or whatever CKKS
+	// the caller passed in) and is now stale. The multi-party top-level
+	// Galois handshake CRPs are sampled over the LLKN top ring; if VClient
+	// rebuilds LLKN from the wire CKKS while VService keeps a stale LLKN,
+	// the two sides draw CRPs over different rings and the aggregated keys
+	// silently mismatch.
+	llknParams, err := protocol.BuildLLKNParams(ckksParams)
+	if err != nil {
+		return nil, fmt.Errorf("vservice: rebuild LLKN against Orion CKKS: %w", err)
+	}
+	merged.LLKN = llknParams
 	// Defensive copy: appending to merged.ExtraRotationIndices must not
 	// mutate the caller's slice (params is passed by value but the
 	// underlying array is shared).
@@ -175,8 +187,7 @@ func (s *Service) StoreEvalKeys(
 	gksMasterInfer map[int]*hierkeys.MasterKey,
 ) error {
 	s.mu.Lock()
-	sess, ok := s.sessions[sid]
-	if !ok {
+	if _, ok := s.sessions[sid]; !ok {
 		s.mu.Unlock()
 		return fmt.Errorf("%w: %q", ErrUnknownSession, sid)
 	}
@@ -196,7 +207,7 @@ func (s *Service) StoreEvalKeys(
 	// Re-check the session — it could have been evicted between the
 	// derivation pass and the re-acquire (no eviction path exists today
 	// but the contract is safer to re-validate than to skip).
-	sess, ok = s.sessions[sid]
+	sess, ok := s.sessions[sid]
 	if !ok {
 		return fmt.Errorf("%w: %q", ErrUnknownSession, sid)
 	}

@@ -93,6 +93,14 @@ func NewWithState(params protocol.Params, orionDir string, state *ExportedState)
 		model = m
 		mergedParams.CKKS = ckksParams
 		mergedParams.InputLevel = inputLevel
+		// Rebuild LLKN against the Orion-overridden CKKS — see
+		// NewWithOrion for the rationale (stale LLKN against caller's
+		// pre-override CKKS desynchronises the top-level Galois handshake).
+		llknParams, err := protocol.BuildLLKNParams(ckksParams)
+		if err != nil {
+			return nil, fmt.Errorf("vservice: NewWithState rebuild LLKN against Orion CKKS: %w", err)
+		}
+		mergedParams.LLKN = llknParams
 		if len(params.ExtraRotationIndices) > 0 || len(rotations) > 0 {
 			combined := make([]int, 0, len(params.ExtraRotationIndices)+len(rotations))
 			combined = append(combined, params.ExtraRotationIndices...)
@@ -107,11 +115,20 @@ func NewWithState(params protocol.Params, orionDir string, state *ExportedState)
 	// CLI subcommand passes it in straight from disk (gks_infer.bin) so a
 	// per-sample re-derivation isn't paid on every Infer invocation. The
 	// HTTP path leaves it nil and re-derives from PKTop + GksMasterInfer.
+	//
+	// When supplied, validate the loaded set actually covers
+	// ExtraRotationIndices — a mismatched gks_infer.bin (wrong manifest,
+	// different λ, swapped artifact dir) would silently produce wrong
+	// outputs at Infer time. Empty ExtraRotationIndices means synthetic-x²
+	// mode, in which case gks_infer should be empty.
 	var (
 		gks        []*rlwe.GaloisKey
 		deriveSecs float64
 	)
 	if state.GksInfer != nil {
+		if err := validateGksInferCoverage(mergedParams, state.GksInfer); err != nil {
+			return nil, fmt.Errorf("vservice: NewWithState validate GksInfer: %w", err)
+		}
 		gks = state.GksInfer
 	} else {
 		var err error
@@ -149,4 +166,38 @@ func NewWithState(params protocol.Params, orionDir string, state *ExportedState)
 	}
 	s.sessions[state.SID] = sess
 	return s, nil
+}
+
+// validateGksInferCoverage checks that the supplied gks_infer slice covers
+// the per-target rotation set the inference circuit needs. Each label in
+// `params.ExtraRotationIndices` (signed-label convention per
+// `protocol.Params` docs) must have a corresponding key at
+// `params.CKKS.GaloisElement(-label)`. A mismatched gks_infer.bin (wrong
+// manifest, different λ, swapped artifact dir) silently produces wrong
+// outputs at Infer time without this guard.
+func validateGksInferCoverage(params protocol.Params, gks []*rlwe.GaloisKey) error {
+	targets := params.ExtraRotationIndices
+	if len(targets) == 0 {
+		if len(gks) != 0 {
+			return fmt.Errorf("ExtraRotationIndices empty but GksInfer has %d entries", len(gks))
+		}
+		return nil
+	}
+	if len(gks) != len(targets) {
+		return fmt.Errorf("GksInfer length %d != ExtraRotationIndices length %d", len(gks), len(targets))
+	}
+	present := make(map[uint64]struct{}, len(gks))
+	for _, gk := range gks {
+		if gk == nil {
+			return fmt.Errorf("GksInfer contains nil entry")
+		}
+		present[gk.GaloisElement] = struct{}{}
+	}
+	for _, label := range targets {
+		want := params.CKKS.GaloisElement(-label)
+		if _, ok := present[want]; !ok {
+			return fmt.Errorf("GksInfer missing GaloisElement %d (label %d)", want, label)
+		}
+	}
+	return nil
 }

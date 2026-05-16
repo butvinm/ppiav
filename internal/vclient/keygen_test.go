@@ -198,7 +198,6 @@ func TestAggregatedPKEncryptsUnderJointSk(t *testing.T) {
 		ShareTop:  agentShareTop,
 	}))
 	require.NotNil(t, c.pkAgg)
-	require.NotNil(t, c.pkTopAgg)
 	require.NotNil(t, c.encryptor)
 
 	encoder := ckks.NewEncoder(params.CKKS)

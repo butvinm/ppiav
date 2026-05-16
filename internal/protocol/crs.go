@@ -45,27 +45,13 @@ const crsDomain = "ppiav-crs/v1"
 // NewSessionCRS returns a `sampling.KeyedPRNG` seeded deterministically
 // from the session id. Both VClient and VAgent construct it identically;
 // no CRS material crosses the wire. See docs/DESIGN.md §`internal/protocol`.
+//
+// Steps 4/5 of the canonical CRP draw order iterate `Params.AuthAtoms()`
+// and `Params.InferAtoms()` respectively (see package doc above).
 func NewSessionCRS(sid SessionID) (*sampling.KeyedPRNG, error) {
 	prng, err := sampling.NewKeyedPRNG([]byte(crsDomain + "|" + string(sid)))
 	if err != nil {
 		return nil, fmt.Errorf("protocol: build session CRS: %w", err)
 	}
 	return prng, nil
-}
-
-// CanonicalAuthAtoms returns the ascending auth-atom set VAgent's
-// authenticator chain-rotation consumes. Wrapper over `Params.AuthAtoms()`
-// kept as a free-standing helper so the keygen handshake — which already
-// holds `Params` — can spell out the canonical Galois-CRP draw order
-// (step 4 in the package doc) in a single readable call.
-func CanonicalAuthAtoms(params Params) []int {
-	return params.AuthAtoms()
-}
-
-// CanonicalInferAtoms returns the ascending master-atom set VService's
-// hierarchical key derivation consumes. Wrapper over
-// `Params.InferAtoms()`; parallel to `CanonicalAuthAtoms` for step 5
-// of the canonical Galois-CRP draw order.
-func CanonicalInferAtoms(params Params) []int {
-	return params.InferAtoms()
 }

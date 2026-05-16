@@ -33,9 +33,11 @@ package authenticator
 
 import (
 	"crypto/rand"
+	"fmt"
 	"math"
 	"math/bits"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -64,16 +66,20 @@ const (
 // gen2PartyAtomKeys runs the 2-party multi-party GaloisKeyGen handshake
 // at the seven negative-galEl auth atoms and returns the aggregated keys.
 // Matches the wire-protocol shape Phase 4 VAgent emits to VClient.
+//
+// Returns an error instead of calling t.FailNow — this helper runs from
+// worker goroutines and `t.FailNow` is undefined-behaviour off the main
+// goroutine per testing package docs.
 func gen2PartyAtomKeys(
-	t *testing.T,
 	params ckks.Parameters,
 	skC, skA *rlwe.SecretKey,
 	atoms []int,
 	crsLabel []byte,
-) []*rlwe.GaloisKey {
-	t.Helper()
+) ([]*rlwe.GaloisKey, error) {
 	crs, err := sampling.NewKeyedPRNG(crsLabel)
-	require.NoError(t, err)
+	if err != nil {
+		return nil, fmt.Errorf("gen2PartyAtomKeys: build CRS: %w", err)
+	}
 
 	gkg := multiparty.NewGaloisKeyGenProtocol(params)
 	out := make([]*rlwe.GaloisKey, 0, len(atoms))
@@ -83,30 +89,39 @@ func gen2PartyAtomKeys(
 
 		shareC := gkg.AllocateShare()
 		shareA := gkg.AllocateShare()
-		require.NoError(t, gkg.GenShare(skC, galEl, crp, &shareC))
-		require.NoError(t, gkg.GenShare(skA, galEl, crp, &shareA))
+		if err := gkg.GenShare(skC, galEl, crp, &shareC); err != nil {
+			return nil, fmt.Errorf("gen2PartyAtomKeys: GenShare skC atom %d: %w", atom, err)
+		}
+		if err := gkg.GenShare(skA, galEl, crp, &shareA); err != nil {
+			return nil, fmt.Errorf("gen2PartyAtomKeys: GenShare skA atom %d: %w", atom, err)
+		}
 
 		acc := gkg.AllocateShare()
 		acc.GaloisElement = galEl
-		require.NoError(t, gkg.AggregateShares(shareC, shareA, &acc))
+		if err := gkg.AggregateShares(shareC, shareA, &acc); err != nil {
+			return nil, fmt.Errorf("gen2PartyAtomKeys: AggregateShares atom %d: %w", atom, err)
+		}
 
 		gk := rlwe.NewGaloisKey(params)
-		require.NoError(t, gkg.GenGaloisKey(acc, crp, gk))
+		if err := gkg.GenGaloisKey(acc, crp, gk); err != nil {
+			return nil, fmt.Errorf("gen2PartyAtomKeys: GenGaloisKey atom %d: %w", atom, err)
+		}
 		out = append(out, gk)
 	}
-	return out
+	return out, nil
 }
 
 // gen2PartyPK runs the 2-party PublicKeyGen handshake → joint pk.
+// Worker-goroutine-safe (returns errors rather than failing the test).
 func gen2PartyPK(
-	t *testing.T,
 	params ckks.Parameters,
 	skC, skA *rlwe.SecretKey,
 	crsLabel []byte,
-) *rlwe.PublicKey {
-	t.Helper()
+) (*rlwe.PublicKey, error) {
 	crs, err := sampling.NewKeyedPRNG(crsLabel)
-	require.NoError(t, err)
+	if err != nil {
+		return nil, fmt.Errorf("gen2PartyPK: build CRS: %w", err)
+	}
 
 	proto := multiparty.NewPublicKeyGenProtocol(params)
 	crp := proto.SampleCRP(crs)
@@ -121,26 +136,27 @@ func gen2PartyPK(
 
 	pk := rlwe.NewPublicKey(params)
 	proto.GenPublicKey(agg, crp, pk)
-	return pk
+	return pk, nil
 }
 
 // joint2PartyDecrypt runs the 2-party KeySwitch-to-zero protocol with
 // flooding noise σ = floodSigma. Returns the recovered plaintext slot
 // vector. Matches ppiav's MPD-Auth joint-decryption shape.
+// Worker-goroutine-safe (returns errors rather than failing the test).
 func joint2PartyDecrypt(
-	t *testing.T,
 	params ckks.Parameters,
 	skC, skA *rlwe.SecretKey,
 	encoder *ckks.Encoder,
 	ct *rlwe.Ciphertext,
 	floodSigma float64,
-) []float64 {
-	t.Helper()
+) ([]float64, error) {
 	proto, err := multiparty.NewKeySwitchProtocol(params, ring.DiscreteGaussian{
 		Sigma: floodSigma,
 		Bound: 6 * floodSigma,
 	})
-	require.NoError(t, err)
+	if err != nil {
+		return nil, fmt.Errorf("joint2PartyDecrypt: NewKeySwitchProtocol: %w", err)
+	}
 
 	zeroSk := rlwe.NewSecretKey(params)
 	shareC := proto.AllocateShare(ct.Level())
@@ -149,7 +165,9 @@ func joint2PartyDecrypt(
 	proto.GenShare(skA, zeroSk, ct, &shareA)
 
 	agg := proto.AllocateShare(ct.Level())
-	require.NoError(t, proto.AggregateShares(shareC, shareA, &agg))
+	if err := proto.AggregateShares(shareC, shareA, &agg); err != nil {
+		return nil, fmt.Errorf("joint2PartyDecrypt: AggregateShares: %w", err)
+	}
 
 	out := ckks.NewCiphertext(params, ct.Degree(), ct.Level())
 	proto.KeySwitch(ct, agg, out)
@@ -157,82 +175,93 @@ func joint2PartyDecrypt(
 	zeroDec := rlwe.NewDecryptor(params, zeroSk)
 	pt := zeroDec.DecryptNew(out)
 	slots := make([]float64, params.MaxSlots())
-	require.NoError(t, encoder.Decode(pt, slots))
-	return slots
+	if err := encoder.Decode(pt, slots); err != nil {
+		return nil, fmt.Errorf("joint2PartyDecrypt: Decode: %w", err)
+	}
+	return slots, nil
 }
 
 // chainGateTrial runs a single Auth → joint-decrypt → Ver round-trip with
 // randomized Key.S and trial-unique CRS labels (so parallel trials draw
 // independent randomness for pk and atom keys). Returns whether Ver
-// accepted.
-func chainGateTrial(t *testing.T, params ckks.Parameters, atoms []int, trialIdx int) bool {
-	t.Helper()
-
+// accepted, plus an error if any subprotocol failed. This helper is
+// invoked from worker goroutines and must not call `t.FailNow`.
+func chainGateTrial(params ckks.Parameters, atoms []int, trialIdx int) (bool, error) {
 	kgen := rlwe.NewKeyGenerator(params)
 	skC := kgen.GenSecretKeyNew()
 	skA := kgen.GenSecretKeyNew()
 
-	pkLabel := []byte("phase4-chain-gate-crs-pk-" + itoaTest(trialIdx))
-	atomLabel := []byte("phase4-chain-gate-crs-atoms-" + itoaTest(trialIdx))
+	pkLabel := []byte("phase4-chain-gate-crs-pk-" + strconv.Itoa(trialIdx))
+	atomLabel := []byte("phase4-chain-gate-crs-atoms-" + strconv.Itoa(trialIdx))
 
-	pkJoint := gen2PartyPK(t, params, skC, skA, pkLabel)
-	atomGKs := gen2PartyAtomKeys(t, params, skC, skA, atoms, atomLabel)
+	pkJoint, err := gen2PartyPK(params, skC, skA, pkLabel)
+	if err != nil {
+		return false, err
+	}
+	atomGKs, err := gen2PartyAtomKeys(params, skC, skA, atoms, atomLabel)
+	if err != nil {
+		return false, err
+	}
 
 	// Synthetic rlk — Auth never relinearizes, but authchain.New requires
 	// non-nil rlk for the evaluator key set.
 	rlk := rlwe.NewRelinearizationKey(params)
 	rot, err := authchain.New(params, rlk, atomGKs, atoms)
-	require.NoError(t, err)
+	if err != nil {
+		return false, fmt.Errorf("chainGateTrial: authchain.New: %w", err)
+	}
 
 	cfg := Config{Lambda: chainGateLambda, Epsilon: math.Exp2(20)}
 	a, err := New(cfg, params)
-	require.NoError(t, err)
+	if err != nil {
+		return false, fmt.Errorf("chainGateTrial: authenticator.New: %w", err)
+	}
 	key, err := KeyGen(cfg, rand.Reader)
-	require.NoError(t, err)
+	if err != nil {
+		return false, fmt.Errorf("chainGateTrial: KeyGen: %w", err)
+	}
 
 	encoder := ckks.NewEncoder(params)
 	const m = 0.5
 	values := make([]float64, params.MaxSlots())
 	values[0] = m
 	pt := ckks.NewPlaintext(params, params.MaxLevel())
-	require.NoError(t, encoder.Encode(values, pt))
+	if err := encoder.Encode(values, pt); err != nil {
+		return false, fmt.Errorf("chainGateTrial: Encode: %w", err)
+	}
 	encryptor := rlwe.NewEncryptor(params, pkJoint)
 	ct, err := encryptor.EncryptNew(pt)
-	require.NoError(t, err)
+	if err != nil {
+		return false, fmt.Errorf("chainGateTrial: EncryptNew: %w", err)
+	}
 
 	ctM, err := a.Auth(key, encryptor, rot, ct)
-	require.NoError(t, err)
+	if err != nil {
+		return false, fmt.Errorf("chainGateTrial: Auth: %w", err)
+	}
 
-	plaintext := joint2PartyDecrypt(t, params, skC, skA, encoder, ctM, math.Exp2(16))
+	plaintext, err := joint2PartyDecrypt(params, skC, skA, encoder, ctM, math.Exp2(16))
+	if err != nil {
+		return false, err
+	}
 	_, ok := a.Ver(key, plaintext)
-	return ok
+	return ok, nil
 }
 
-// itoaTest is a tiny strconv.Itoa stand-in to keep the import list short.
-func itoaTest(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
+// trialResult plumbs per-trial outcome out of worker goroutines. The
+// main test goroutine aggregates and asserts via require.NoError off the
+// channel, keeping all t.* calls on the main goroutine.
+type trialResult struct {
+	idx int
+	ok  bool
+	err error
 }
 
 // runChainGate runs `nTrials` independent trials in parallel via a worker
 // pool sized to GOMAXPROCS. Returns the number of Ver-accepted trials.
+// Workers do NOT touch *testing.T — they return results on a channel,
+// the main goroutine asserts on errors (per testing-package goroutine
+// rules: t.FailNow must be called from the test's main goroutine).
 // Lattigo v6.2.0+ per-structure methods are concurrent-safe (per the
 // CLAUDE.md "Lattigo concurrency" note); each trial also builds fresh
 // keys + evaluator so there's no shared mutable state across workers.
@@ -245,14 +274,14 @@ func runChainGate(t *testing.T, nTrials int) int {
 		atoms = append(atoms, a)
 	}
 
-	var passes int64
-	var wg sync.WaitGroup
 	jobs := make(chan int, nTrials)
 	for i := 0; i < nTrials; i++ {
 		jobs <- i
 	}
 	close(jobs)
 
+	results := make(chan trialResult, nTrials)
+	var wg sync.WaitGroup
 	workers := runtime.GOMAXPROCS(0)
 	if workers > nTrials {
 		workers = nTrials
@@ -262,13 +291,23 @@ func runChainGate(t *testing.T, nTrials int) int {
 		go func() {
 			defer wg.Done()
 			for idx := range jobs {
-				if chainGateTrial(t, params, atoms, idx) {
-					atomic.AddInt64(&passes, 1)
-				}
+				ok, err := chainGateTrial(params, atoms, idx)
+				results <- trialResult{idx: idx, ok: ok, err: err}
 			}
 		}()
 	}
-	wg.Wait()
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	var passes int64
+	for r := range results {
+		require.NoErrorf(t, r.err, "trial %d failed", r.idx)
+		if r.ok {
+			atomic.AddInt64(&passes, 1)
+		}
+	}
 	return int(passes)
 }
 

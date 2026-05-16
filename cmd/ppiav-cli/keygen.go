@@ -246,18 +246,14 @@ func runKeygen(args []string) error {
 		var (
 			clientAuthShares  any
 			clientInferShares any
-			clientAuthLabels  []int
-			clientInferLabels []int
 		)
 		if err := measureStep("keygen.galois.client_gen", func() error {
-			ca, ci, al, il, e := client.GenAuthAndInferShares()
+			ca, ci, _, _, e := client.GenAuthAndInferShares()
 			if e != nil {
 				return e
 			}
 			clientAuthShares = ca
 			clientInferShares = ci
-			clientAuthLabels = al
-			clientInferLabels = il
 			return nil
 		}); err != nil {
 			writeRunOnExit()
@@ -275,9 +271,7 @@ func runKeygen(args []string) error {
 				AuthAtomShares:  clientAuthShares.([]multiparty.GaloisKeyGenShare),
 				InferAtomShares: clientInferShares.([]multiparty.GaloisKeyGenShare),
 			}
-			aggRlk, aggPkTop, aggMasters, e := agent.AggregateGaloisShares(
-				sid, shares, clientAuthLabels, clientInferLabels,
-			)
+			aggRlk, aggPkTop, aggMasters, e := agent.AggregateGaloisShares(sid, shares)
 			if e != nil {
 				return e
 			}

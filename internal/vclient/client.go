@@ -55,12 +55,11 @@ type Client struct {
 	skEvalCached *rlwe.SecretKey
 
 	// pkAgg is the eval-level aggregated public key (used to wire the
-	// encryptor). pkTopAgg is the top-level aggregated public key used by
-	// VService's hierkeys.PubToRot LevelExpansion seed; VClient itself
-	// retains it for inspection/tests but does NOT ship it forward (VAgent
-	// aggregates and ships per docs/DESIGN.md §`internal/vagent`).
+	// encryptor). The top-level aggregated public key is computed during
+	// AggregatePK but VClient does not retain it — VAgent owns the
+	// downstream wire path (the pk_top is aggregated independently by
+	// VAgent and shipped to VService inside InferEvalKeys).
 	pkAgg     *rlwe.PublicKey
-	pkTopAgg  *rlwe.PublicKey
 	encryptor *rlwe.Encryptor
 	encoder   *ckks.Encoder
 

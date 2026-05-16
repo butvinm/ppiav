@@ -279,16 +279,14 @@ func (a *Agent) GenAuthAndInferShares(sid protocol.SessionID) (
 // The orchestrator and HTTP layer carry only the inference-side payload
 // onward inside `InferEvalKeys{RLK, PKTop, GKSMasterInfer}`.
 //
-// `clientAuthLabels` / `clientInferLabels` must be element-wise identical
-// to the stashed agent labels — they describe the canonical atom sets
-// both sides agreed on via the CRS draw order, and a mismatch indicates
-// a desynchronised handshake (hard error rather than silently aggregating
-// the wrong CRP).
+// Atom labels are NOT carried on the wire — both sides derive them from
+// `params.AuthAtoms()` / `params.InferAtoms()` (the canonical sets
+// determined by `Authenticator.Lambda` and the LLKN base). The shape
+// guard checks share counts against the agent-stashed labels; a desync
+// would surface as a count mismatch.
 func (a *Agent) AggregateGaloisShares(
 	sid protocol.SessionID,
 	clientShares protocol.VClientGaloisShares,
-	clientAuthLabels []int,
-	clientInferLabels []int,
 ) (
 	*rlwe.RelinearizationKey,
 	*rlwe.PublicKey,
@@ -308,34 +306,17 @@ func (a *Agent) AggregateGaloisShares(
 		return nil, nil, nil, fmt.Errorf("vagent: AggregateGaloisShares called before AggregatePK for sid %q", sid)
 	}
 
-	// Validate auth share/label shape vs stashed agent material.
+	// Validate share-count shape against stashed agent material. Atom
+	// labels are not on the wire (derived from params on both sides), so
+	// only counts can drift — a count mismatch means the peer drew a
+	// different number of CRPs and we cannot safely aggregate.
 	if len(clientShares.AuthAtomShares) != len(sess.galSharesAuth) {
 		return nil, nil, nil, fmt.Errorf("vagent: client auth share count %d != agent count %d",
 			len(clientShares.AuthAtomShares), len(sess.galSharesAuth))
 	}
-	if len(clientAuthLabels) != len(sess.authLabels) {
-		return nil, nil, nil, fmt.Errorf("vagent: client auth label count %d != agent count %d",
-			len(clientAuthLabels), len(sess.authLabels))
-	}
-	for i, a := range sess.authLabels {
-		if clientAuthLabels[i] != a {
-			return nil, nil, nil, fmt.Errorf("vagent: auth label mismatch at index %d: client=%d agent=%d",
-				i, clientAuthLabels[i], a)
-		}
-	}
 	if len(clientShares.InferAtomShares) != len(sess.galSharesInfer) {
 		return nil, nil, nil, fmt.Errorf("vagent: client infer share count %d != agent count %d",
 			len(clientShares.InferAtomShares), len(sess.galSharesInfer))
-	}
-	if len(clientInferLabels) != len(sess.inferLabels) {
-		return nil, nil, nil, fmt.Errorf("vagent: client infer label count %d != agent count %d",
-			len(clientInferLabels), len(sess.inferLabels))
-	}
-	for i, a := range sess.inferLabels {
-		if clientInferLabels[i] != a {
-			return nil, nil, nil, fmt.Errorf("vagent: infer label mismatch at index %d: client=%d agent=%d",
-				i, clientInferLabels[i], a)
-		}
 	}
 
 	// Auth atoms — raw eval-level `*rlwe.GaloisKey`s.

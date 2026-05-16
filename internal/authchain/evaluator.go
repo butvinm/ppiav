@@ -73,14 +73,6 @@ func New(
 // operations Auth uses (`MulNew`, `Add`, `AddNew`, ...).
 func (e *Evaluator) Inner() *ckks.Evaluator { return e.inner }
 
-// Atoms returns a copy of the auth-atom int list the evaluator was
-// constructed against. Read-only; callers must not mutate.
-func (e *Evaluator) Atoms() []int {
-	out := make([]int, len(e.atoms))
-	copy(out, e.atoms)
-	return out
-}
-
 // Decompose returns the binary expansion of `|j|` as a list of powers of
 // two (ascending). `chain length == popcount(|j|)`. The result is a subset
 // of the auth-atom set when `|j| < 2^len(atoms)`; the function does NOT

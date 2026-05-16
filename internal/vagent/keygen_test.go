@@ -116,7 +116,7 @@ func runFullKeygen(t *testing.T, a *Agent, sid protocol.SessionID, stub *vclient
 		InferAtomShares: clientInferShares,
 	}
 
-	rlk, _, _, err := a.AggregateGaloisShares(sid, clientShares, agentAuthLabels, agentInferLabels)
+	rlk, _, _, err := a.AggregateGaloisShares(sid, clientShares)
 	require.NoError(t, err)
 
 	sess := agentState(t, a, sid)
@@ -334,10 +334,12 @@ func TestAggregatedAuthAtomKeysEnableRotation(t *testing.T) {
 	assert.InDelta(t, want[1], got[2], 1e-3, "Rot(ct, -1) places slot 1 at slot 2")
 }
 
-// TestAggregateGaloisShareLabelMismatchErrors covers the label-validation
-// path on the agent's AggregateGaloisShares (auth + infer atom-set
-// mismatch each reject).
-func TestAggregateGaloisShareLabelMismatchErrors(t *testing.T) {
+// TestAggregateGaloisShareCountMismatchErrors covers the share-count
+// validation path on the agent's AggregateGaloisShares. Atom labels are
+// not on the wire (both sides derive them from `params.AuthAtoms()` /
+// `params.InferAtoms()`), so the remaining real desync surface is a
+// share-count mismatch on either set.
+func TestAggregateGaloisShareCountMismatchErrors(t *testing.T) {
 	params := smallParams(t)
 	a, err := New(params)
 	require.NoError(t, err)
@@ -350,15 +352,21 @@ func TestAggregateGaloisShareLabelMismatchErrors(t *testing.T) {
 	require.NoError(t, err)
 	clientAuth, clientInfer := generateClientGaloisShares(t, stub, params, agentAuthLabels, agentInferLabels)
 
-	// Tamper: flip the first two auth labels.
-	bad := append([]int(nil), agentAuthLabels...)
-	if len(bad) >= 2 {
-		bad[0], bad[1] = bad[1], bad[0]
+	// Trim auth shares to short-count and expect a count-mismatch error.
+	if len(clientAuth) >= 1 {
+		short := clientAuth[:len(clientAuth)-1]
+		_, _, _, err = a.AggregateGaloisShares(sid,
+			protocol.VClientGaloisShares{AuthAtomShares: short, InferAtomShares: clientInfer})
+		require.Error(t, err, "short auth share count must error")
 	}
-	_, _, _, err = a.AggregateGaloisShares(sid,
-		protocol.VClientGaloisShares{AuthAtomShares: clientAuth, InferAtomShares: clientInfer},
-		bad, agentInferLabels)
-	require.Error(t, err)
+
+	// Trim infer shares similarly.
+	if len(clientInfer) >= 1 {
+		shortInfer := clientInfer[:len(clientInfer)-1]
+		_, _, _, err = a.AggregateGaloisShares(sid,
+			protocol.VClientGaloisShares{AuthAtomShares: clientAuth, InferAtomShares: shortInfer})
+		require.Error(t, err, "short infer share count must error")
+	}
 }
 
 // TestAggregatedInferAtomsConvertToMasterKey checks the infer-atom side
@@ -378,8 +386,7 @@ func TestAggregatedInferAtomsConvertToMasterKey(t *testing.T) {
 	clientAuth, clientInfer := generateClientGaloisShares(t, stub, params, agentAuthLabels, agentInferLabels)
 
 	_, pkTop, gksMasterInfer, err := a.AggregateGaloisShares(sid,
-		protocol.VClientGaloisShares{AuthAtomShares: clientAuth, InferAtomShares: clientInfer},
-		agentAuthLabels, agentInferLabels)
+		protocol.VClientGaloisShares{AuthAtomShares: clientAuth, InferAtomShares: clientInfer})
 	require.NoError(t, err)
 	require.NotNil(t, pkTop, "pkTop must be returned")
 	require.Len(t, gksMasterInfer, len(agentInferLabels))

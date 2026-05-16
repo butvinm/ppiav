@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 
+	"github.com/butvinm/ppiav/internal/authchain"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
 )
@@ -61,16 +62,6 @@ func New(cfg Config, params ckks.Parameters) (*Authenticator, error) {
 // Config returns the bundled authenticator configuration.
 func (a *Authenticator) Config() Config { return a.cfg }
 
-// Rotator is the rotation surface Auth needs from the
-// chain-rotation evaluator wrapper. `RotateNew(ct, -j)` must place
-// `ct`'s slot 0 at slot `j` (Lattigo convention); `Inner` exposes the
-// underlying `*ckks.Evaluator` for Auth's non-rotation operations (mask
-// multiply, add). `internal/authchain.Evaluator` satisfies this interface.
-type Rotator interface {
-	RotateNew(ct *rlwe.Ciphertext, j int) (*rlwe.Ciphertext, error)
-	Inner() *ckks.Evaluator
-}
-
 // Auth runs §MPD-Auth/Auth: masks slot 0 with the cached pt_one_hot,
 // rotates+sums into ct_m^Rep over [0, Lambda) \ S, encrypts v
 // deterministically from key.SeedF, adds, returns ct_M.
@@ -83,7 +74,7 @@ type Rotator interface {
 func (a *Authenticator) Auth(
 	key Key,
 	encryptor *rlwe.Encryptor,
-	rot Rotator,
+	rot *authchain.Evaluator,
 	resultCt *rlwe.Ciphertext,
 ) (*rlwe.Ciphertext, error) {
 	if err := a.cfg.validate(); err != nil {

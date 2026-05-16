@@ -349,17 +349,21 @@ func (k *InferEvalKeys) UnmarshalBinary(data []byte) error {
 	}
 
 	out := make(map[int]*hierkeys.MasterKey, count)
-	prevAtom := int(-1) << 62
+	var (
+		prevAtom int
+		first    = true
+	)
 	for i := uint32(0); i < count; i++ {
 		if off+4 > len(data) {
 			return fmt.Errorf("InferEvalKeys: short atom int at entry %d", i)
 		}
 		atom := int(int32(binary.BigEndian.Uint32(data[off : off+4])))
 		off += 4
-		if i > 0 && atom <= prevAtom {
+		if !first && atom <= prevAtom {
 			return fmt.Errorf("InferEvalKeys: atoms not strictly ascending at entry %d (got %d, prev %d)", i, atom, prevAtom)
 		}
 		prevAtom = atom
+		first = false
 		if off+4 > len(data) {
 			return fmt.Errorf("InferEvalKeys: short MasterKey length prefix at entry %d", i)
 		}

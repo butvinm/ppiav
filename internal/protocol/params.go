@@ -92,7 +92,7 @@ func Defaults() (Params, error) {
 	if err != nil {
 		return Params{}, fmt.Errorf("protocol: build CKKS parameters: %w", err)
 	}
-	llknParams, err := buildLLKNParams(params)
+	llknParams, err := BuildLLKNParams(params)
 	if err != nil {
 		return Params{}, err
 	}
@@ -105,26 +105,19 @@ func Defaults() (Params, error) {
 	}, nil
 }
 
-// buildLLKNParams constructs the LLKN 2-level hierarchy on top of the
+// BuildLLKNParams constructs the LLKN 2-level hierarchy on top of the
 // supplied eval-level CKKS parameters using `DefaultLLKNLogPHK`. The
-// hierarchy is hierarchy-only (it does not change the eval-level circuit),
-// so both `Defaults()` and `LoadOrionParams()` stamp the same schedule.
-func buildLLKNParams(p ckks.Parameters) (llkn.Parameters, error) {
+// hierarchy does not change the eval-level circuit, so both `Defaults()`
+// and `LoadOrionParams()` stamp the same schedule. The CLI's `loadParams`
+// and `vservice.NewWithOrion` / `NewWithState` use it to re-derive the
+// hierarchy after a CKKS override (the persisted CKKS may differ from
+// the default — re-stamping ensures the hierarchy matches).
+func BuildLLKNParams(p ckks.Parameters) (llkn.Parameters, error) {
 	out, err := llkn.NewParameters(p.Parameters, [][]int{DefaultLLKNLogPHK})
 	if err != nil {
 		return llkn.Parameters{}, fmt.Errorf("protocol: build LLKN parameters: %w", err)
 	}
 	return out, nil
-}
-
-// BuildLLKNParams is the exported view of buildLLKNParams. The CLI's
-// `loadParams` calls it to re-derive the LLKN hierarchy on top of a CKKS
-// parameter set rehydrated from disk (Defaults() stamps an LLKN built
-// against the default CKKS, but the persisted CKKS may have been overridden
-// by an Orion manifest — re-stamping ensures the hierarchy matches the
-// rehydrated CKKS).
-func BuildLLKNParams(p ckks.Parameters) (llkn.Parameters, error) {
-	return buildLLKNParams(p)
 }
 
 // AuthAtoms returns the ascending base-2 atom set used by VAgent's
@@ -155,12 +148,16 @@ func (p Params) AuthAtoms() []int {
 // the **top** level of the LLKN hierarchy. VService runs
 // `hierkeys.LevelExpansion` over this set to derive the full per-target
 // inference key bundle locally.
+//
+// `LLKNBase < 2` is invalid and panics — every production caller stamps
+// `LLKNBase: DefaultLLKNBase` via `Defaults()` / `LoadOrionParams()`, so
+// a zero value indicates a constructed-from-scratch params bug rather
+// than something to paper over with a fallback.
 func (p Params) InferAtoms() []int {
-	base := p.LLKNBase
-	if base < 2 {
-		base = DefaultLLKNBase
+	if p.LLKNBase < 2 {
+		panic(fmt.Sprintf("protocol: Params.InferAtoms: LLKNBase=%d < 2 (set LLKNBase: DefaultLLKNBase)", p.LLKNBase))
 	}
-	return hierkeys.MasterRotationsForBase(base, p.CKKS.MaxSlots())
+	return hierkeys.MasterRotationsForBase(p.LLKNBase, p.CKKS.MaxSlots())
 }
 
 // ProjectSKToEval projects the multi-party top-level secret-key share

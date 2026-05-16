@@ -95,13 +95,16 @@ func TestDecompose(t *testing.T) {
 		{7, []int{1, 2, 4}},
 		{8, []int{8}},
 		{127, []int{1, 2, 4, 8, 16, 32, 64}},
-		{-1, []int{1}},          // sign is stripped
-		{-127, []int{1, 2, 4, 64, 32, 16, 8}}, // order may vary, just match popcount
+		// Negative cases: sign is stripped; we only assert popcount
+		// (binary expansion order matches |j|, but the test guards the
+		// popcount invariant explicitly below).
+		{-1, nil},
+		{-127, nil},
 	}
 	for _, c := range cases {
 		got := Decompose(c.j)
 		assert.Equal(t, bits.OnesCount(uint(absInt(c.j))), len(got), "popcount mismatch for j=%d", c.j)
-		if c.j >= 0 && c.expected != nil {
+		if c.expected != nil {
 			assert.Equal(t, c.expected, got, "binary expansion mismatch for j=%d", c.j)
 		}
 	}

@@ -120,12 +120,17 @@ func NewWithState(params protocol.Params, state *ExportedState) (*Agent, error) 
 		sess.pkTopAgg = state.PkTop
 	}
 	if state.Rlk != nil && state.GksAuth != nil {
+		// Validate the loaded gks_auth.bin covers the canonical AuthAtoms
+		// set at the expected (negative) Galois elements — a mismatched
+		// artifact (wrong λ, different manifest) silently produces wrong
+		// outputs at BuildAuthenticatedCt time.
+		atoms := params.AuthAtoms()
+		if err := validateGksAuthCoverage(params, atoms, state.GksAuth); err != nil {
+			return nil, fmt.Errorf("vagent: NewWithState validate GksAuth: %w", err)
+		}
 		sess.rlkAgg = state.Rlk
 		sess.gksAuth = state.GksAuth
 		sess.gksMasterInfer = state.GksMasterInfer
-		// Recompute the auth atom list from `params` rather than carrying
-		// it across the wire — the canonical set is determined by Lambda.
-		atoms := params.AuthAtoms()
 		chainEval, err := authchain.New(params.CKKS, state.Rlk, state.GksAuth, atoms)
 		if err != nil {
 			return nil, fmt.Errorf("vagent: NewWithState build authchain: %w", err)
@@ -134,4 +139,31 @@ func NewWithState(params protocol.Params, state *ExportedState) (*Agent, error) 
 	}
 	a.sessions[state.SID] = sess
 	return a, nil
+}
+
+// validateGksAuthCoverage checks the loaded gks_auth slice covers the
+// canonical auth-atom set at the expected eval-level Galois elements
+// (negative atom per the signed-label convention on `protocol.Params`).
+// A mismatch indicates a stale or cross-wired gks_auth.bin.
+func validateGksAuthCoverage(params protocol.Params, atoms []int, gks []*rlwe.GaloisKey) error {
+	if len(gks) != len(atoms) {
+		return fmt.Errorf("GksAuth length %d != AuthAtoms length %d", len(gks), len(atoms))
+	}
+	if len(atoms) == 0 {
+		return nil
+	}
+	present := make(map[uint64]struct{}, len(gks))
+	for _, gk := range gks {
+		if gk == nil {
+			return fmt.Errorf("GksAuth contains nil entry")
+		}
+		present[gk.GaloisElement] = struct{}{}
+	}
+	for _, atom := range atoms {
+		want := params.CKKS.GaloisElement(-atom)
+		if _, ok := present[want]; !ok {
+			return fmt.Errorf("GksAuth missing GaloisElement %d (atom %d)", want, atom)
+		}
+	}
+	return nil
 }

@@ -33,8 +33,8 @@ func TestExportStateRoundTripInfer(t *testing.T) {
 	require.NoError(t, a.StoreEvalKeys(sid, rlk, nil, nil))
 
 	// Export and rebuild on a second Service. ExportState now populates
-	// Rlk + Glk from the StoreEvalKeys-captured values, so the test does
-	// not have to thread keys back in.
+	// Rlk + PKTop + GksMasterInfer + GksInfer from the StoreEvalKeys-
+	// captured values, so the test does not have to thread keys back in.
 	state, err := a.ExportState(sid)
 	require.NoError(t, err)
 	require.NotNil(t, state)

@@ -116,7 +116,7 @@ func LoadOrionParams(manifestPath string) (Params, error) {
 		extras = append(extras, -k)
 	}
 
-	llknParams, err := buildLLKNParams(ckksParams)
+	llknParams, err := BuildLLKNParams(ckksParams)
 	if err != nil {
 		return Params{}, fmt.Errorf("protocol: Orion manifest %q: %w", manifestPath, err)
 	}

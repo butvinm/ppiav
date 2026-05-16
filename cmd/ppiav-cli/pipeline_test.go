@@ -61,7 +61,7 @@ func TestKeygenToMacToInferPipeline(t *testing.T) {
 	require.NoError(t, agent.AggregateRLKRound2(sid, cR2))
 
 	// Dual-atom-set Galois handshake.
-	cAuthShares, cInferShares, cAuthLabels, cInferLabels, err := client.GenAuthAndInferShares()
+	cAuthShares, cInferShares, _, _, err := client.GenAuthAndInferShares()
 	require.NoError(t, err)
 	_, _, _, _, err = agent.GenAuthAndInferShares(sid)
 	require.NoError(t, err)
@@ -69,7 +69,7 @@ func TestKeygenToMacToInferPipeline(t *testing.T) {
 		AuthAtomShares:  cAuthShares,
 		InferAtomShares: cInferShares,
 	}
-	rlk, pkTop, gksMasterInfer, err := agent.AggregateGaloisShares(sid, clientShares, cAuthLabels, cInferLabels)
+	rlk, pkTop, gksMasterInfer, err := agent.AggregateGaloisShares(sid, clientShares)
 	require.NoError(t, err)
 	require.NoError(t, svc.StoreEvalKeys(sid, rlk, pkTop, gksMasterInfer))
 
@@ -189,6 +189,24 @@ func TestKeygenToMacToInferPipeline(t *testing.T) {
 	resultCt, err := inferSvc.Infer(sid, inputCt)
 	require.NoError(t, err)
 	require.NotNil(t, resultCt)
+
+	// Correctness assertion (not just non-nil): synthetic-x² should produce
+	// enc(0.09) at slot 0. Reconstruct the joint eval-level sk from the
+	// per-party top-level sks loaded from disk, project each to eval, sum
+	// the projections, decrypt resultCt, and verify the slot-0 value lands
+	// within precision of 0.3² = 0.09. A bug that produces cryptographically
+	// well-formed but wrong ciphertext would fail here.
+	skCEval, err := loadedParams.ProjectSKToEval(skC)
+	require.NoError(t, err)
+	skAEval, err := loadedParams.ProjectSKToEval(skA)
+	require.NoError(t, err)
+	skJointEval := rlwe.NewSecretKey(loadedParams.CKKS)
+	loadedParams.CKKS.RingQP().Add(skCEval.Value, skAEval.Value, skJointEval.Value)
+
+	dec := rlwe.NewDecryptor(loadedParams.CKKS, skJointEval)
+	decoded := make([]float64, loadedParams.CKKS.MaxSlots())
+	require.NoError(t, enc.Decode(dec.DecryptNew(resultCt), decoded))
+	assert.InDelta(t, 0.09, decoded[0], 1e-3, "synthetic-x² Infer must yield 0.3² at slot 0")
 
 	// mac path must consume the rebuilt VAgent.
 	authCt, err := macAgent.BuildAuthenticatedCt(sid, resultCt)

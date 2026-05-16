@@ -83,27 +83,43 @@ func TestWriteReadGaloisKeysRoundTrip(t *testing.T) {
 }
 
 // TestWriteReadMasterKeysRoundTrip exercises gks_master_infer.bin. We
-// generate a top-level public key via Lattigo's KeyGenerator and convert
-// it via hierkeys.PubToRot to a MasterKey, then round-trip a small
-// {atom -> MasterKey} map through writeMasterKeys/readMasterKeys and assert
-// the atom set survives and per-MasterKey bytes are byte-identical.
+// generate a DISTINCT MasterKey per atom (different rotation indices fed
+// into the hierkeys Galois-key-to-master conversion) and round-trip the
+// {atom -> MasterKey} map through writeMasterKeys/readMasterKeys, asserting
+// each readback matches its own original bytes. Using one shared MasterKey
+// across atoms would silently pass an off-by-one indexing / swap bug; the
+// per-atom distinct keys make any cross-atom drift visible.
 func TestWriteReadMasterKeysRoundTrip(t *testing.T) {
 	params := smallCLIParams(t)
 	dir := t.TempDir()
 
 	topParams := params.LLKN.Top()
-	evalParams := params.LLKN.Eval()
 	kg := rlwe.NewKeyGenerator(topParams)
 	skTop := kg.GenSecretKeyNew()
-	pkTop := kg.GenPublicKeyNew(skTop)
 
-	mk, err := hierkeys.PubToRot(evalParams, topParams, pkTop)
+	// Generate a distinct top-level GaloisKey per atom and convert each
+	// to a MasterKey. Atom values are arbitrary positive ints; what
+	// matters for the round-trip test is that the per-MasterKey bytes
+	// differ across atoms so cross-atom swaps are catchable.
+	atoms := []int{1, 4, 16}
+	want := make(map[int]*hierkeys.MasterKey, len(atoms))
+	for _, atom := range atoms {
+		galEl := topParams.GaloisElement(atom)
+		gk := kg.GenGaloisKeyNew(galEl, skTop)
+		mk, err := hierkeys.GaloisKeyToMasterKey(topParams, gk)
+		require.NoError(t, err)
+		want[atom] = mk
+	}
+
+	// Sanity: per-atom MasterKey bytes really do differ (otherwise the
+	// round-trip below would be just as weak as the original test).
+	prevBytes, err := want[atoms[0]].MarshalBinary()
 	require.NoError(t, err)
-
-	want := map[int]*hierkeys.MasterKey{
-		1:  mk,
-		4:  mk,
-		16: mk,
+	for _, atom := range atoms[1:] {
+		b, err := want[atom].MarshalBinary()
+		require.NoError(t, err)
+		require.NotEqual(t, prevBytes, b, "per-atom MasterKeys must differ to exercise round-trip")
+		prevBytes = b
 	}
 
 	require.NoError(t, writeMasterKeys(dir, artifactGKSMasterInfer, want))
@@ -119,7 +135,7 @@ func TestWriteReadMasterKeysRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 		gotBytes, err := mkGot.MarshalBinary()
 		require.NoError(t, err)
-		assert.Equal(t, wantBytes, gotBytes, "MasterKey bytes differ for atom %d", atom)
+		assert.Equalf(t, wantBytes, gotBytes, "MasterKey bytes differ for atom %d", atom)
 	}
 
 	info, err := os.Stat(filepath.Join(dir, artifactGKSMasterInfer))

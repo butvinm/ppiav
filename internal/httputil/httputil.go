@@ -35,17 +35,17 @@ func WriteError(w http.ResponseWriter, status int, msg string) {
 // Per-route body-size caps. Picked to be comfortably above the largest
 // payload each route legitimately carries while still bounding a DoS POST.
 // The big ones are the CKKS share/key blobs at LogN=16:
-//   - VClientGaloisKeyShare: ~Lambda shares × per-rotation share size
-//   - InferEvalKeys: aggregated RLK + per-rotation GaloisKey
+//   - VClientGaloisShares: per-atom shares for AuthAtoms (eval) +
+//     InferAtoms (top) — both sized for the LogN=16 lattigo-hierkeys
+//     dual-atom-set wire payload (no longer Lambda × per-rotation).
+//   - InferEvalKeys: aggregated RLK (eval) + PKTop (top) + the
+//     gks_master_infer bundle (8 top-level MasterKeys at LogN=16).
 //
 // We split the cap by route shape so a concurrent attacker can't bank
-// the same 1 GiB allocation on a small-share endpoint. The 1 GiB ceiling
-// is preserved only for routes that legitimately need it (eval-keys, the
-// encrypted image, and the aggregated Galois shares payload at LogN=16
-// × Lambda=128). DESIGN.md says rate limiting is out of scope, but
-// per-route caps cost nothing and keep the worst-case allocation bounded
-// to what the protocol actually demands. lattigo-hierkeys integration
-// will cut the GKS down to a single master and let us tighten the largest cap.
+// the same allocation on a small-share endpoint. DESIGN.md says rate
+// limiting is out of scope, but per-route caps cost nothing and keep
+// the worst-case allocation bounded to what the protocol actually
+// demands.
 const (
 	// MaxJSONBody is the cap for JSON control endpoints (sessions,
 	// params, callback, redirect-reply).
@@ -59,14 +59,19 @@ const (
 	// (pk-share/rlk-round2/partial-decryption) cap the same allocation.
 	MaxShareBody int64 = 128 * 1024 * 1024
 
-	// MaxGksSharesBody covers the aggregated Galois-share blob
-	// (gks-shares): Lambda × per-rotation share. At LogN=16 × Lambda=128
-	// this stays under 512 MiB with margin.
-	MaxGksSharesBody int64 = 512 * 1024 * 1024
+	// MaxGksSharesBody covers the aggregated Galois-shares blob
+	// (gks-shares): AuthAtomShares (eval level, ~7 atoms at λ=128) plus
+	// InferAtomShares (top level, 8 atoms at LogN=16). Top-level shares
+	// are larger than eval-level (extra P-prime limbs). Sized to ≥1 GiB
+	// to keep margin for the LogN=16 dual-atom-set payload, which lands
+	// in the ~400-500 MiB range by estimate.
+	MaxGksSharesBody int64 = 2 * 1024 * 1024 * 1024
 
-	// MaxEvalKeysBody covers the largest octet-stream payloads — the
-	// aggregated eval-keys forwarded to VService and the encrypted image
-	// ciphertext. Sized for LogN=16 × Lambda=128 (GaloisKey set
-	// dominates).
-	MaxEvalKeysBody int64 = 1024 * 1024 * 1024
+	// MaxEvalKeysBody covers the InferEvalKeys forwarded to VService
+	// (RLK + PKTop + GKSMasterInfer) and the encrypted image. Sized for
+	// LogN=16 lattigo-hierkeys: at base-4 the master atom set is 8 keys,
+	// each ~233 MiB (top-level GaloisKey with extra P primes), totalling
+	// ~1.86 GiB; RLK + PKTop push the body past 1.93 GiB. 3 GiB gives a
+	// safety margin over the LogN=16 production target.
+	MaxEvalKeysBody int64 = 3 * 1024 * 1024 * 1024
 )

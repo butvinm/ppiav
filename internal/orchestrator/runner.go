@@ -222,7 +222,7 @@ func (r *Runner) Setup() error {
 	// internally by Auth's chain rotator) + a `map[int]*hierkeys.MasterKey`
 	// for the inference side. The orchestrator forwards only the
 	// inference-side payload to VService — `gksAuth` stays inside VAgent.
-	clientAuthShares, clientInferShares, clientAuthLabels, clientInferLabels, err := r.vclient.GenAuthAndInferShares()
+	clientAuthShares, clientInferShares, _, _, err := r.vclient.GenAuthAndInferShares()
 	if err != nil {
 		return fmt.Errorf("orchestrator: VClient.GenAuthAndInferShares: %w", err)
 	}
@@ -233,7 +233,7 @@ func (r *Runner) Setup() error {
 		AuthAtomShares:  clientAuthShares,
 		InferAtomShares: clientInferShares,
 	}
-	rlk, pkTop, gksMasterInfer, err := r.vagent.AggregateGaloisShares(r.sid, clientShares, clientAuthLabels, clientInferLabels)
+	rlk, pkTop, gksMasterInfer, err := r.vagent.AggregateGaloisShares(r.sid, clientShares)
 	if err != nil {
 		return fmt.Errorf("orchestrator: VAgent.AggregateGaloisShares: %w", err)
 	}
