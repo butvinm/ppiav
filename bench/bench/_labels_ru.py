@@ -3,7 +3,7 @@
 The defaults below are derived from ``docs/protocol.puml`` (the canonical
 sequence diagram). Edit the right-hand strings to taste; the left-hand
 keys are stable and used by ``plots_eval`` and the ``eval`` aggregator.
-Keep English abbreviations for cryptographic artefacts (pk, rlk, glk,
+Keep English abbreviations for cryptographic artefacts (pk, rlk, gks,
 sk_c, sk_a, mac_key, sid, params) per the user convention.
 
 After editing, regenerate plots without rerunning the protocol:

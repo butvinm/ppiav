@@ -495,8 +495,11 @@ def _format_with_prettier(path: Path) -> None:
 def _format_seconds(seconds: float) -> str:
     """Compact human-readable wall-time for the network table.
 
-    Reports up to days because glk_full.bin transfers at 1 Mbps land in the
-    tens-of-hours range; formatting it as minutes hides the scale.
+    Reports up to days because the auth-side `gks_auth.bin` + service-side
+    `gks_infer.bin` transfers at 1 Mbps land in the tens-of-hours range;
+    formatting them as minutes hides the scale. `gks_master_infer.bin` (the
+    compressed seed bundle, the actual wire artifact) is far smaller but the
+    same scale applies for the largest Phase 2 baseline artefacts.
     """
     if seconds < 1.0:
         return f"{seconds * 1000:.1f} ms"
@@ -512,8 +515,7 @@ def _format_seconds(seconds: float) -> str:
 def _has_per_party_keygen(keygen_run: Run) -> bool:
     """True if keygen.json was produced by the instrumented driver."""
     return any(
-        s.name in PARTY_BY_STEP and PARTY_BY_STEP[s.name] != "joint"
-        for s in keygen_run.samples
+        s.name in PARTY_BY_STEP and PARTY_BY_STEP[s.name] != "joint" for s in keygen_run.samples
     )
 
 
@@ -529,8 +531,7 @@ def _party_step_table_md(
     """
     lines: list[str] = []
     header = (
-        "| party | step | n | mean wall ms | p95 wall ms "
-        "| mean delta RSS MiB | peak VM HWM MiB |"
+        "| party | step | n | mean wall ms | p95 wall ms | mean delta RSS MiB | peak VM HWM MiB |"
     )
     lines.append(header)
     lines.append("|---|---|---:|---:|---:|---:|---:|")
@@ -598,17 +599,14 @@ def _keygen_by_round_table_md(keygen_run: Run) -> str:
             hwm = max(s.vm_hwm for s in sub_samples) / (1024.0 * 1024.0)
             n_each = [sum(1 for s in sub_samples if s.name == sub) for sub in substeps]
             n = max([x for x in n_each if x > 0], default=1)
-            lines.append(
-                f"| {round_label} | {n} | {_format_ms(wall)} | {_format_mib(hwm)} |"
-            )
+            lines.append(f"| {round_label} | {n} | {_format_ms(wall)} | {_format_mib(hwm)} |")
             continue
         legacy = [s for s in keygen_run.samples if s.name == round_name]
         if legacy:
             wall = sum(s.wall_ms for s in legacy)
             hwm = max(s.vm_hwm for s in legacy) / (1024.0 * 1024.0)
             lines.append(
-                f"| {round_label} | {len(legacy)} | {_format_ms(wall)} | "
-                f"{_format_mib(hwm)} |"
+                f"| {round_label} | {len(legacy)} | {_format_ms(wall)} | {_format_mib(hwm)} |"
             )
     lines.append("")
     lines.append(
@@ -630,9 +628,13 @@ def _bytes_table_md(rows: Sequence[tuple[str, int]]) -> str:
         lines.append(f"| {name} | {size} | {kib:.1f} | {mib:.2f} |")
     lines.append("")
     lines.append(
-        "_Note: `glk_master.bin` and `glk_full.bin` are byte-identical today; "
-        "they diverge after lattigo-hierkeys integration (master = compressed seed, "
-        "full = expanded set)._"
+        "_Note: lattigo-hierkeys splits the Galois key surface asymmetrically: "
+        "`gks_auth.bin` holds the auth-side raw multi-party keys (negative galEls, "
+        "consumed by VAgent's authchain.Evaluator); `gks_master_infer.bin` is the "
+        "compressed seed bundle that crosses the wire to VService; `gks_infer.bin` "
+        "is the per-target derived set VService caches locally — derivable from "
+        "`gks_master_infer.bin + pk_top.bin + params.json` but tens-of-GB at "
+        "LogN=16, so cached on disk to avoid multi-minute per-sample re-derivation._"
     )
     return "\n".join(lines)
 

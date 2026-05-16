@@ -647,12 +647,12 @@ The bench step-name registry (`bench/bench/_labels_ru.py:63-66`) already anticip
 - Modify: `bench/bench/eval.py` (comment strings only)
 - Modify: `bench/README.md` (artifact name strings)
 
-- [ ] update `bench/bench/eval.py:498` stale docstring — replace `glk_full.bin` reference with `gks_master.bin` / `gks_infer.bin`.
-- [ ] update `bench/bench/eval.py:633` stale comment — `glk_master.bin and glk_full.bin are byte-identical today` wording is obsolete; describe the new asymmetric shape.
-- [ ] update `bench/README.md:46` artifact list.
+- [x] update `bench/bench/eval.py:498` stale docstring — replace `glk_full.bin` reference with `gks_master.bin` / `gks_infer.bin`.
+- [x] update `bench/bench/eval.py:633` stale comment — `glk_master.bin and glk_full.bin are byte-identical today` wording is obsolete; describe the new asymmetric shape.
+- [x] update `bench/README.md:46` artifact list.
 - [ ] (optional) add `summary.md` cross-phase row comparing `gks_master_bytes` to the Phase 2 results-dir baseline.
-- [ ] verify Go-side per-party sample emission in Tasks 5/6/7/10 uses the pre-existing step names (`keygen.galois.{client_gen, agent_gen, agent_agg, service_store}`). If new step names are introduced, add them to `STEP_NAMES`, `KEYGEN_ROUND_SUBSTEPS`, and `PARTY_BY_STEP` in one commit. Don't introduce new names speculatively — wait until the Go side actually emits them.
-- [ ] keep ruff/mypy clean.
+- [x] verify Go-side per-party sample emission in Tasks 5/6/7/10 uses the pre-existing step names (`keygen.galois.{client_gen, agent_gen, agent_agg, service_store}`). If new step names are introduced, add them to `STEP_NAMES`, `KEYGEN_ROUND_SUBSTEPS`, and `PARTY_BY_STEP` in one commit. Don't introduce new names speculatively — wait until the Go side actually emits them.
+- [x] keep ruff/mypy clean.
 
 ### Task 14: Verify acceptance criteria + end-to-end smoke
 
