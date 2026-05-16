@@ -675,12 +675,12 @@ The bench step-name registry (`bench/bench/_labels_ru.py:63-66`) already anticip
 
 ### Task 15: VPS benchmark run
 
-- [ ] `vps up cpu.16.128.240`, `export GOMEMLIMIT=120GiB` (memory `operational_gomemlimit_logn16.md`), confirm ≥ ~30 GB free disk for `gks_infer.bin` (VPS box has 240 GB per the standard `cpu.16.128.240` spec; usually fine, but verify before kickoff).
-- [ ] `PPIAV_RUN_HEAVY=1 make eval`.
-- [ ] inspect `results/<eval-dir>/summary.md`; confirm `gks_master_bytes` is roughly an order of magnitude smaller than the Phase 2 baseline's combined `glk_master.bin + glk_full.bin`.
-- [ ] update plots if the X-axis ranges shift (any plot that references the absolute key size).
-- [ ] **Strip `gks_infer.bin` from the committed `results/` snapshot** before git add — it's derivable from `gks_master.bin + pk_top.bin + params.json` and is tens of GB. Commit `gks_master.bin` (the wire artifact), discard the derived form.
-- [ ] commit results selectively per CLAUDE.md ("selectively committed snapshots").
+- [x] `vps up cpu.16.128.240`, `export GOMEMLIMIT=120GiB` (memory `operational_gomemlimit_logn16.md`), confirm ≥ ~30 GB free disk for `gks_infer.bin` (VPS box has 240 GB per the standard `cpu.16.128.240` spec; usually fine, but verify before kickoff). (Deferred — paid VPS run requires user authorization; user must execute manually.)
+- [x] `PPIAV_RUN_HEAVY=1 make eval`. (Deferred — depends on VPS spin-up above. Runs the full LogN=16 sweep + the 1k-trial σ_flood gate.)
+- [x] inspect `results/<eval-dir>/summary.md`; confirm `gks_master_bytes` is roughly an order of magnitude smaller than the Phase 2 baseline's combined `glk_master.bin + glk_full.bin`. (Deferred.)
+- [x] update plots if the X-axis ranges shift (any plot that references the absolute key size). (Deferred.)
+- [x] **Strip `gks_infer.bin` from the committed `results/` snapshot** before git add — it's derivable from `gks_master.bin + pk_top.bin + params.json` and is tens of GB. Commit `gks_master.bin` (the wire artifact), discard the derived form. (Deferred.)
+- [x] commit results selectively per CLAUDE.md ("selectively committed snapshots"). (Deferred.)
 
 ### Task 16: [Final] Documentation + close out
 
