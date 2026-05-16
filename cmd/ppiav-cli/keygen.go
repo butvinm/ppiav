@@ -98,6 +98,15 @@ func runKeygen(args []string) error {
 		run.Append(sample)
 		return mErr
 	}
+	// measureShareStep: same shape as measureStep, but the closure returns
+	// the on-wire size (via BinarySize) for the share it just produced.
+	// BinarySize is O(1) on lattigo share types — safe to call inside the
+	// timed window without inflating wall_ms.
+	measureShareStep := func(name string, fn func() (uint64, error)) error {
+		sample, mErr := bench.MeasureWithSize(name, fn)
+		run.Append(sample)
+		return mErr
+	}
 	writeRunOnExit := func() { _ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen")) }
 
 	// keygen.open — per-party session-state writes (sub-millisecond each).
@@ -139,18 +148,24 @@ func runKeygen(args []string) error {
 			clientShare protocol.VClientPKShare
 			agentShare  protocol.VAgentPKShare
 		)
-		if err := measureStep("keygen.pk.client_gen", func() error {
+		if err := measureShareStep("keygen.pk.client_gen", func() (uint64, error) {
 			cs, e := client.GenPKShare()
+			if e != nil {
+				return 0, e
+			}
 			clientShare = cs
-			return e
+			return uint64(cs.ShareEval.BinarySize() + cs.ShareTop.BinarySize()), nil
 		}); err != nil {
 			writeRunOnExit()
 			return fmt.Errorf("keygen: pk.client_gen: %w", err)
 		}
-		if err := measureStep("keygen.pk.agent_gen", func() error {
+		if err := measureShareStep("keygen.pk.agent_gen", func() (uint64, error) {
 			as, e := agent.GenPKShare(sid)
+			if e != nil {
+				return 0, e
+			}
 			agentShare = as
-			return e
+			return uint64(as.ShareEval.BinarySize() + as.ShareTop.BinarySize()), nil
 		}); err != nil {
 			writeRunOnExit()
 			return fmt.Errorf("keygen: pk.agent_gen: %w", err)
@@ -175,18 +190,24 @@ func runKeygen(args []string) error {
 			clientR1 multiparty.RelinearizationKeyGenShare
 			agentR1  multiparty.RelinearizationKeyGenShare
 		)
-		if err := measureStep("keygen.rlk-r1.client_gen", func() error {
+		if err := measureShareStep("keygen.rlk-r1.client_gen", func() (uint64, error) {
 			cs, e := client.GenRLKShareRound1()
+			if e != nil {
+				return 0, e
+			}
 			clientR1 = cs
-			return e
+			return uint64(cs.BinarySize()), nil
 		}); err != nil {
 			writeRunOnExit()
 			return fmt.Errorf("keygen: rlk-r1.client_gen: %w", err)
 		}
-		if err := measureStep("keygen.rlk-r1.agent_gen", func() error {
+		if err := measureShareStep("keygen.rlk-r1.agent_gen", func() (uint64, error) {
 			as, e := agent.GenRLKShareRound1(sid)
+			if e != nil {
+				return 0, e
+			}
 			agentR1 = as
-			return e
+			return uint64(as.BinarySize()), nil
 		}); err != nil {
 			writeRunOnExit()
 			return fmt.Errorf("keygen: rlk-r1.agent_gen: %w", err)
@@ -208,17 +229,23 @@ func runKeygen(args []string) error {
 	// keygen.rlk-r2 — final rlk lives on the agent; no client_agg.
 	{
 		var clientR2 multiparty.RelinearizationKeyGenShare
-		if err := measureStep("keygen.rlk-r2.client_gen", func() error {
+		if err := measureShareStep("keygen.rlk-r2.client_gen", func() (uint64, error) {
 			cs, e := client.GenRLKShareRound2()
+			if e != nil {
+				return 0, e
+			}
 			clientR2 = cs
-			return e
+			return uint64(cs.BinarySize()), nil
 		}); err != nil {
 			writeRunOnExit()
 			return fmt.Errorf("keygen: rlk-r2.client_gen: %w", err)
 		}
-		if err := measureStep("keygen.rlk-r2.agent_gen", func() error {
-			_, e := agent.GenRLKShareRound2(sid)
-			return e
+		if err := measureShareStep("keygen.rlk-r2.agent_gen", func() (uint64, error) {
+			as, e := agent.GenRLKShareRound2(sid)
+			if e != nil {
+				return 0, e
+			}
+			return uint64(as.BinarySize()), nil
 		}); err != nil {
 			writeRunOnExit()
 			return fmt.Errorf("keygen: rlk-r2.agent_gen: %w", err)
@@ -244,20 +271,31 @@ func runKeygen(args []string) error {
 	)
 	{
 		var clientMasterShares []multiparty.GaloisKeyGenShare
-		if err := measureStep("keygen.galois.client_gen", func() error {
+		if err := measureShareStep("keygen.galois.client_gen", func() (uint64, error) {
 			cm, _, e := client.GenMasterShares()
 			if e != nil {
-				return e
+				return 0, e
 			}
 			clientMasterShares = cm
-			return nil
+			var total uint64
+			for i := range cm {
+				total += uint64(cm[i].BinarySize())
+			}
+			return total, nil
 		}); err != nil {
 			writeRunOnExit()
 			return fmt.Errorf("keygen: galois.client_gen: %w", err)
 		}
-		if err := measureStep("keygen.galois.agent_gen", func() error {
-			_, _, e := agent.GenMasterShares(sid)
-			return e
+		if err := measureShareStep("keygen.galois.agent_gen", func() (uint64, error) {
+			am, _, e := agent.GenMasterShares(sid)
+			if e != nil {
+				return 0, e
+			}
+			var total uint64
+			for i := range am {
+				total += uint64(am[i].BinarySize())
+			}
+			return total, nil
 		}); err != nil {
 			writeRunOnExit()
 			return fmt.Errorf("keygen: galois.agent_gen: %w", err)

@@ -231,11 +231,11 @@ All three subcommands follow the same refactor pattern: take the single `bench.M
 
 - Modify: `cmd/ppiav-cli/keygen.go`
 
-- [ ] for each share-emitting sub-step in `keygen.go` (`keygen.pk.client_gen`, `keygen.pk.agent_gen`, `keygen.rlk-r1.client_gen`, `keygen.rlk-r1.agent_gen`, `keygen.rlk-r2.client_gen`, `keygen.rlk-r2.agent_gen`, `keygen.galois.client_gen`, `keygen.galois.agent_gen`), switch from `bench.Measure` to `bench.MeasureWithSize` and return `uint64(share.BinarySize())` (NOT `len(MarshalBinary())`; see Technical Details — marshal inside the closure inflates wall_ms)
-- [ ] aggregation sub-steps (`*.agent_agg`, `*.client_agg`, `*.service_store`) remain plain `Measure` — they don't produce a new share
-- [ ] for any share type lacking `BinarySize()`: emit a sibling `*.serialize` sub-step using `MarshalBinary()` and record its length there (keeps gen wall_ms honest). If the type lacks both: record `Bytes=0` + log "size not measurable for <type>"
-- [ ] add a Go test asserting `Sample.Bytes > 0` for each of the eight share sub-steps (or `== 0` with a recorded reason for known-unsupported types)
-- [ ] run `go test ./cmd/ppiav-cli/...` — must pass
+- [x] for each share-emitting sub-step in `keygen.go` (`keygen.pk.client_gen`, `keygen.pk.agent_gen`, `keygen.rlk-r1.client_gen`, `keygen.rlk-r1.agent_gen`, `keygen.rlk-r2.client_gen`, `keygen.rlk-r2.agent_gen`, `keygen.galois.client_gen`, `keygen.galois.agent_gen`), switch from `bench.Measure` to `bench.MeasureWithSize` and return `uint64(share.BinarySize())` (NOT `len(MarshalBinary())`; see Technical Details — marshal inside the closure inflates wall_ms)
+- [x] aggregation sub-steps (`*.agent_agg`, `*.client_agg`, `*.service_store`) remain plain `Measure` — they don't produce a new share
+- [x] for any share type lacking `BinarySize()`: emit a sibling `*.serialize` sub-step using `MarshalBinary()` and record its length there (keeps gen wall_ms honest). If the type lacks both: record `Bytes=0` + log "size not measurable for <type>" — **N/A**: all four share types in keygen (`multiparty.PublicKeyGenShare`, `RelinearizationKeyGenShare`, `GaloisKeyGenShare`, and the dual-share `VClientPKShare`/`VAgentPKShare` aggregates) expose `BinarySize()` on lattigo v6.2.0; no sibling serialize step needed.
+- [x] add a Go test asserting `Sample.Bytes > 0` for each of the eight share sub-steps (or `== 0` with a recorded reason for known-unsupported types)
+- [x] run `go test ./cmd/ppiav-cli/...` — must pass
 
 ### Task 4: Add `bench/bench/_messages.py` catalog + test fixture
 
