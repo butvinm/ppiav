@@ -205,6 +205,7 @@ AXIS: dict[str, str] = {
     "session_ms": "время сессии, мс",
     "party_lane": "сторона",
     "message_name": "сообщение",
+    "rate": "доля",
 }
 
 # Legend entries (Gantt + macro-phase colours).

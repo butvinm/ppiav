@@ -852,9 +852,9 @@ def aggregate(batch_dir: Path) -> None:
     - `<batch>/img_<idx>/decoded.json` — verdict + noise vector
     - `<batch>/keys/*.bin` and `<batch>/img_<idx>/*.bin` — wire-format artifacts
 
-    Writes `<batch>/summary.md` and then defers to `plots_eval.write_plots`
-    (Task 15). The plot module is imported lazily so Task 14 lands first;
-    once Task 15 is in place the warning disappears.
+    Writes `<batch>/summary.md` and then defers to `plots_eval.write_plots`.
+    The plot module is imported lazily so a missing/broken plotting backend
+    surfaces as a warning rather than aborting the summary render.
     """
     batch_dir = Path(batch_dir).resolve()
     keygen_run = _load_keygen_run(batch_dir)
@@ -942,24 +942,11 @@ def aggregate(batch_dir: Path) -> None:
     summary_path.write_text("\n".join(sections), encoding="utf-8")
     _format_with_prettier(summary_path)
 
-    # Legacy-shape bytes_rows for plots_eval (renamed-message label by Task 8).
-    # Task 8 will switch plots to read catalog-keyed rows; until then keep the
-    # plot module's existing (name, size) contract intact by passing the
-    # legacy artifact-named view derived from the catalog. ``None`` sizes
-    # are coerced to 0 so the log-scaled bar plot does not crash.
-    legacy_bytes_rows: list[tuple[str, int]] = []
-    for msg in _messages.MESSAGES:
-        size = _messages.resolve_message_bytes(msg, batch_dir, samples_by_name)
-        if size is None:
-            continue
-        legacy_bytes_rows.append((msg.id, size))
-
     agg_data: dict[str, Any] = {
         "batch_dir": str(batch_dir),
         "keygen_run": keygen_run,
         "per_image_samples": per_image_samples,
         "samples_by_name": samples_by_name,
-        "bytes_rows": legacy_bytes_rows,
         "message_bytes_rows": bytes_rows,
         "key_rows": key_rows,
         "verdict_stats": verdict_stats,
@@ -975,14 +962,12 @@ def aggregate(batch_dir: Path) -> None:
         "keygen_substeps": _KEYGEN_SUBSTEPS,
     }
 
-    # Lazy import so Task 14 lands without depending on Task 15. Once
-    # `plots_eval` exists the warning disappears naturally. importlib (not a
-    # `from bench import plots_eval`) keeps mypy from failing the module-level
-    # symbol check before Task 15 adds the file.
+    # Lazy import — keeps a broken matplotlib backend (e.g. missing system
+    # libs on a minimal VPS image) from aborting the summary render.
     try:
         plots_eval = importlib.import_module("bench.plots_eval")
     except ImportError as exc:
-        logger.warning("plots_eval unavailable (Task 15 not landed yet): %s", exc)
+        logger.warning("plots_eval unavailable: %s", exc)
         return
     plots_eval.write_plots(batch_dir, agg_data)
 

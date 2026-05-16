@@ -303,11 +303,11 @@ All three subcommands follow the same refactor pattern: take the single `bench.M
 
 - Modify: `bench/bench/plots_eval.py`
 
-- [ ] `bytes_per_message.png`: x-axis labels become message_id (e.g. `VClientGaloisShare`), one bar per catalog entry, log-y scale preserved. Add a small color tag for sender party.
-- [ ] `bandwidth_per_message.png`: same x-axis renaming
-- [ ] new `accuracy_plain_vs_fhe.png`: grouped bar chart, 3 metric groups (accuracy / FPR / FNR), 2 bars each (plain / FHE). Y range [0, 1].
-- [ ] `session_timeline_10mbps.png` Gantt: draw each sub-step as its own segment on its party's lane (VService's lane shows `infer.load_keys → infer.load_input_ct → infer.exec → infer.serialize_result` as adjacent blocks; VAgent's lane shows `mac.derive_auth_keys → mac.compute_ct → ... → finalize.final_decrypt → finalize.verdict_compute`). Use the same color family for sub-steps of one parent stage so visual grouping is preserved.
-- [ ] no plot tests (matplotlib output isn't unit-testable here); operator validates visually post-VPS run
+- [x] `bytes_per_message.png`: x-axis labels become message_id (e.g. `VClientGaloisShare`), one bar per catalog entry, log-y scale preserved. Add a small color tag for sender party.
+- [x] `bandwidth_per_message.png`: same x-axis renaming
+- [x] new `accuracy_plain_vs_fhe.png`: grouped bar chart, 3 metric groups (accuracy / FPR / FNR), 2 bars each (plain / FHE). Y range [0, 1].
+- [x] `session_timeline_10mbps.png` Gantt: draw each sub-step as its own segment on its party's lane (VService's lane shows `infer.load_keys → infer.load_input_ct → infer.exec → infer.serialize_result` as adjacent blocks; VAgent's lane shows `mac.derive_auth_keys → mac.compute_ct → ... → finalize.final_decrypt → finalize.verdict_compute`). Use the same color family for sub-steps of one parent stage so visual grouping is preserved.
+- [x] no plot tests (matplotlib output isn't unit-testable here); operator validates visually post-VPS run
 
 ### Task 9: Verify acceptance criteria
 
