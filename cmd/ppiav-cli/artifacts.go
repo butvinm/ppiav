@@ -52,6 +52,20 @@ const (
 	artifactClientShare = "client_share.bin"
 )
 
+// Per-image sub-step Sample.name values. Single source of truth so the Go
+// callers and the Python catalog (`bench._messages.PER_IMAGE_STEPS`) stay
+// in sync — rename one side, this list flags the other on `go build`.
+const (
+	sampleInferLoadKeys        = "infer.load_keys"
+	sampleInferLoadInputCt     = "infer.load_input_ct"
+	sampleInferExec            = "infer.exec"
+	sampleInferSerializeResult = "infer.serialize_result"
+	sampleMacDeriveAuthKeys    = "mac.derive_auth_keys"
+	sampleMacComputeCt         = "mac.compute_ct"
+	sampleFinalizeFinalDecrypt = "finalize.final_decrypt"
+	sampleFinalizeVerdictCompute = "finalize.verdict_compute"
+)
+
 // writeBytes atomically writes data to <workdir>/<name>. Thin wrapper over
 // writeBytesPath so all atomic-write logic lives in one place.
 func writeBytes(workdir, name string, data []byte) error {

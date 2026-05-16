@@ -1,28 +1,44 @@
-"""Integration test for ``bench.eval.aggregate`` on the committed fixture batch.
+"""Integration tests for ``bench.eval.aggregate`` on the committed fixture batch.
 
-This is the contract test for Tasks 5-7 combined per the plan:
+Asserts that the rendered ``summary.md`` contains:
+- every section header in ``_labels_ru.SECTION_HEADERS``;
+- every message id in ``MESSAGES`` and every key name in ``KEYS``;
+- the plain + FHE accuracy columns with all metric rows;
+- one row per per-image sub-step, tagged with its assigned party.
 
-- Task 5 (this task): assert every section header, every message_id in MESSAGES,
-  and every key name in KEYS appears in the rendered ``summary.md``.
-- Task 6 (future): asserts the plain + FHE accuracy columns.
-- Task 7 (future): asserts the per-image sub-steps land in the per-party table.
-
-The fixture lives at ``bench/tests/fixtures/sample_batch/`` and was authored in
-Task 4 specifically for this driver: keygen.json with per-party sub-steps, four
-per-image dirs with the post-Task-2 sub-step JSONs, decoded.json with verdict
-labels, and placeholder zero-byte ``.bin`` files where the catalog expects
-FilePath sources.
+The fixture at ``bench/tests/fixtures/sample_batch/`` carries keygen.json with
+per-party sub-samples, four per-image dirs with per-stage sub-step JSONs,
+decoded.json with verdict labels, and placeholder zero-byte ``.bin`` files
+where the catalog expects FilePath sources.
 """
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
 import pytest
 
-from bench._messages import KEYS, MESSAGES
-from bench.eval import aggregate
+from bench._labels_ru import (
+    ACCURACY_METRIC_NAMES,
+    KEY_LOCATION_NAMES,
+    PARTY_BY_STEP,
+    PARTY_NAMES,
+    SECTION_HEADERS,
+    STEP_NAMES,
+    TABLE_HEADERS,
+)
+from bench._messages import KEYS, MESSAGES, PER_IMAGE_STEPS
+from bench.eval import (
+    _key_inventory_md,
+    _key_inventory_rows,
+    _load_keygen_run,
+    _load_step_runs,
+    _network_table_md,
+    _party_step_table_md,
+    aggregate,
+)
 
 FIXTURE_SRC = Path(__file__).parent / "fixtures" / "sample_batch"
 
@@ -50,8 +66,6 @@ def test_aggregate_contains_section_headers(batch_dir: Path) -> None:
     # Section headers — Russian-language per project convention. Use the same
     # strings from _labels_ru.SECTION_HEADERS so a label rename here would
     # require updating both sides.
-    from bench._labels_ru import SECTION_HEADERS
-
     assert f"## {SECTION_HEADERS['per_message_bytes']}" in summary
     assert f"## {SECTION_HEADERS['key_inventory']}" in summary
     assert f"## {SECTION_HEADERS['network_wire_time']}" in summary
@@ -59,9 +73,7 @@ def test_aggregate_contains_section_headers(batch_dir: Path) -> None:
 
 
 def test_aggregate_accuracy_section_has_plain_and_fhe_columns(batch_dir: Path) -> None:
-    """The Task-6 plain-vs-FHE table must include both column headers + metric rows."""
-    from bench._labels_ru import ACCURACY_METRIC_NAMES, TABLE_HEADERS
-
+    """The plain-vs-FHE accuracy table must include both column headers + metric rows."""
     aggregate(batch_dir)
     summary = _read_summary(batch_dir)
     assert TABLE_HEADERS["plain_column"] in summary
@@ -91,14 +103,6 @@ def test_aggregate_key_inventory_section_lists_every_key(batch_dir: Path) -> Non
 
 def test_party_step_table_lists_each_substep_with_party(batch_dir: Path) -> None:
     """Every per-image sub-step renders as its own row with its assigned party tag."""
-    from bench._labels_ru import PARTY_BY_STEP, PARTY_NAMES, STEP_NAMES
-    from bench._messages import PER_IMAGE_STEPS
-    from bench.eval import (
-        _load_keygen_run,
-        _load_step_runs,
-        _party_step_table_md,
-    )
-
     img_dirs = sorted(
         (
             (int(p.name.removeprefix("img_")), p)
@@ -128,9 +132,6 @@ def test_party_step_table_lists_each_substep_with_party(batch_dir: Path) -> None
 
 def test_key_inventory_renders_on_wire_flags_correctly(batch_dir: Path) -> None:
     """on_wire flag + location strings render exactly per the labels module."""
-    from bench._labels_ru import KEY_LOCATION_NAMES, TABLE_HEADERS
-    from bench.eval import _key_inventory_md, _key_inventory_rows
-
     rows = _key_inventory_rows(batch_dir, {})
     table = _key_inventory_md(rows)
 
@@ -156,9 +157,9 @@ def test_network_table_bandwidth_arithmetic() -> None:
     "1.00 s" — a regression that swapped bits<->bytes (factor of 8) would land
     on "0.13 s" or "8.00 s" and fail loudly.
     """
-    from bench.eval import _network_table_md
+    from bench._messages import MessageBytesRow
 
-    rows = [("ProbeMsg", "проба", "client", "agent", 1_000_000)]
+    rows = [MessageBytesRow("ProbeMsg", "проба", "client", "agent", 1_000_000)]
     table = _network_table_md(rows)
     # _BANDWIDTHS_MBPS is (1, 10, 100); 10 Mbps -> 1e6 / 1.25e6 = 0.80s.
     # We synthesize for 1 Mbps which yields 1e6 / 1.25e5 = 8.00s.
@@ -179,8 +180,6 @@ def test_load_step_runs_rejects_unknown_sample_name(tmp_path: Path) -> None:
     == "infer"`` from a partially-regenerated batch lands under a non-catalog
     bucket key and disappears from every downstream table.
     """
-    from bench.eval import _load_step_runs
-
     img_dir = tmp_path / "img_0"
     img_dir.mkdir()
     # Write the five per-stage files. Four are valid; infer.json carries the
@@ -202,8 +201,6 @@ def _write_run(path: Path, run_name: str, sample_names: list[str]) -> None:
     Mirrors the on-disk schema produced by ``internal/bench`` so ``load_run``
     can parse it. Required envelope fields default to neutral values.
     """
-    import json
-
     base = {
         "name": run_name,
         "phase": "phase2",

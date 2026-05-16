@@ -23,15 +23,9 @@ type decodedOutput struct {
 	NoisePerSlot []float64 `json:"noise_per_slot"`
 }
 
-// runFinalize loads the VAgent state written by `keygen` and runs Stage 4b —
-// `FinalizeDecryptionVerbose` — on a saved authenticated ciphertext + the
-// VClient's KeySwitchShare. Two artifacts are written: the per-image
-// `--out-decoded` (decoded.json with verdict + noise vector) and the
-// single-sample bench.Run JSON at `--out` (default <workdir>/finalize.json).
-//
-// The Agent is built fresh in this process so the in-memory single-use
-// session map never sees a replay — eviction inside FinalizeDecryption is
-// irrelevant across CLI boundaries.
+// runFinalize loads the VAgent state and runs FinalizeDecryptionVerbose on a
+// saved authenticated ciphertext + the VClient's KeySwitchShare, writing the
+// verdict + noise vector to --out-decoded.
 func runFinalize(args []string) error {
 	fs := flag.NewFlagSet("finalize", flag.ContinueOnError)
 	workdir := fs.String("workdir", "", "per-batch keygen artifact directory (required)")
@@ -107,7 +101,7 @@ func runFinalize(args []string) error {
 		verdict protocol.Verdict
 		slots   []float64
 	)
-	decryptSample, err := bench.Measure("finalize.final_decrypt", func() error {
+	decryptSample, err := bench.Measure(sampleFinalizeFinalDecrypt, func() error {
 		v, s, finErr := agent.FinalizeDecryptionVerbose(sid, ct, share)
 		if finErr != nil {
 			return fmt.Errorf("VAgent.FinalizeDecryptionVerbose: %w", finErr)
@@ -123,7 +117,7 @@ func runFinalize(args []string) error {
 	}
 
 	var decoded decodedOutput
-	verdictSample, err := bench.Measure("finalize.verdict_compute", func() error {
+	verdictSample, err := bench.Measure(sampleFinalizeVerdictCompute, func() error {
 		d, e := buildDecodedOutput(*refLogit, params.Authenticator.Lambda, macKey.S, slots, verdict)
 		if e != nil {
 			return e

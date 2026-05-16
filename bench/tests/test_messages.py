@@ -17,7 +17,7 @@ from bench._messages import (
     resolve_key_bytes,
     resolve_message_bytes,
 )
-from bench.load import Sample, load_run
+from bench.load import Sample, iter_per_image_run_jsons, load_run
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_batch"
 
@@ -35,10 +35,7 @@ def _samples_by_name() -> dict[str, list[Sample]]:
     for img_dir in sorted(FIXTURE.iterdir()):
         if not img_dir.is_dir() or not img_dir.name.startswith("img_"):
             continue
-        for json_path in sorted(img_dir.glob("*.json")):
-            # decoded.json is not a bench Run — skip the same way bench.eval does.
-            if json_path.name == "decoded.json":
-                continue
+        for json_path in iter_per_image_run_jsons(img_dir):
             run = load_run(json_path)
             for s in run.samples:
                 index[s.name].append(s)

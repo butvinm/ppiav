@@ -44,8 +44,7 @@ from bench._labels_ru import (
     TABLE_HEADERS,
     TRANSFERS_PER_IMAGE,
 )
-from bench._messages import PER_IMAGE_STEPS
-from bench.eval import MessageBytesRow
+from bench._messages import PER_IMAGE_STEPS, MessageBytesRow
 from bench.load import Run, Sample
 
 # Macro-phase color palette. setup = blue, inference = orange, verify = green.
@@ -63,13 +62,12 @@ _SENDER_COLORS: dict[str, str] = {
 }
 
 # Parent-stage color families for the per-party Gantt sub-step lanes.
-# Each parent stage gets a base color; sub-steps get distinct shades from
-# the same matplotlib colormap so visual grouping is preserved across the
-# lane. Order within the tuple is `(base_cmap_name, n_shades)`.
-_SUBSTEP_FAMILIES: dict[str, tuple[str, int]] = {
-    "infer": ("Blues", 4),
-    "mac": ("Greens", 2),
-    "finalize": ("Purples", 2),
+# Each parent stage gets a base colormap name; sub-steps get distinct shades
+# from the same colormap so visual grouping is preserved across the lane.
+_SUBSTEP_FAMILIES: dict[str, str] = {
+    "infer": "Blues",
+    "mac": "Greens",
+    "finalize": "Purples",
 }
 
 def _parent_stage(step: str) -> str:
@@ -94,18 +92,17 @@ def _substep_shade(
     """Return a per-sub-step shade from its parent's color family.
 
     Falls back to the macro-phase color (a hex string) when no family is
-    registered (e.g. `encrypt`, `partial-decrypt` — single-sample stages
-    with no sub-steps); otherwise returns an RGBA tuple from a matplotlib
-    colormap, which is the natural color spec for ``ax.barh``.
+    registered; otherwise returns an RGBA tuple from a matplotlib colormap.
+    Caller is expected to guard `total > 1`.
     """
     parent = _parent_stage(step)
-    family = _SUBSTEP_FAMILIES.get(parent)
-    if family is None:
+    cmap_name = _SUBSTEP_FAMILIES.get(parent)
+    if cmap_name is None:
         return _phase_color(step)
-    cmap_name, _n = family
     cmap = plt.get_cmap(cmap_name)
     # Anchor in the mid-to-dark range so shades read against a white bg.
-    t = 0.7 if total <= 1 else 0.35 + 0.55 * (ordinal / max(total - 1, 1))
+    # Caller guards total > 1 — assume that here.
+    t = 0.35 + 0.55 * (ordinal / max(total - 1, 1))
     rgba: tuple[float, float, float, float] = cmap(t)
     return rgba
 
@@ -151,12 +148,12 @@ def _plot_bytes_per_message(path: Path, rows: Sequence[MessageBytesRow]) -> None
         plt.close(fig)
         return
 
-    ids = [r[0] for r in rows]
-    senders = [r[2] for r in rows]
+    ids = [r.message_id for r in rows]
+    senders = [r.sender for r in rows]
     # Coerce None → 1 byte so the log axis is safe; matches the existing
     # bytes_per_message convention. Missing-file rows get the same
     # treatment but the table-side renders an em-dash to disambiguate.
-    sizes = [max(r[4] or 1, 1) for r in rows]
+    sizes = [max(r.size or 1, 1) for r in rows]
     colors = [_SENDER_COLORS.get(s, "#888888") for s in senders]
 
     xs = np.arange(len(ids))
@@ -185,9 +182,9 @@ def _plot_bandwidth_per_message(
         plt.close(fig)
         return
 
-    ids = [r[0] for r in rows]
-    senders = [r[2] for r in rows]
-    sizes_np = np.array([float(r[4] or 0) for r in rows], dtype=np.float64)
+    ids = [r.message_id for r in rows]
+    senders = [r.sender for r in rows]
+    sizes_np = np.array([float(r.size or 0) for r in rows], dtype=np.float64)
     n_msgs = len(ids)
     n_bw = len(bandwidths_mbps)
     width = 0.8 / n_bw
@@ -334,9 +331,9 @@ def _bytes_for_message(
     message_id: str,
 ) -> int:
     """Resolve a message's wire size from the catalog rows; 0 if missing."""
-    for mid, _label, _sender, _receiver, size in bytes_rows:
-        if mid == message_id:
-            return int(size) if size is not None else 0
+    for r in bytes_rows:
+        if r.message_id == message_id:
+            return int(r.size) if r.size is not None else 0
     return 0
 
 

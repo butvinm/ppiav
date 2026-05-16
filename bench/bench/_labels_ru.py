@@ -34,8 +34,10 @@ from __future__ import annotations
 # protocol.puml section headers. Plot bars are tight on space, so each
 # value is kept to ~3 words max.
 STEP_NAMES: dict[str, str] = {
-    # Round-level keygen labels (legacy bench runs emit these directly).
-    "keygen": "генерация ключей",
+    # Round-level keygen labels — used by _keygen_by_round_table_md to label
+    # the joint-round rows (production never emits a Sample named "keygen.*"
+    # at this level; the aggregator iterates KEYGEN_ROUND_SUBSTEPS and pulls
+    # the round display name from these keys).
     "keygen.open": "инициализация сессии",
     "keygen.pk": "генерация pk",
     "keygen.rlk-r1": "генерация rlk, раунд 1",
@@ -64,12 +66,10 @@ STEP_NAMES: dict[str, str] = {
     "keygen.galois.agent_gen": "gks: генерация gks_master_a",
     "keygen.galois.agent_agg": "gks: агрегация + иерархический вывод (агент)",
     "keygen.galois.service_store": "gks: иерархический вывод (сервис)",
-    # Per-image protocol steps.
+    # Per-image protocol steps (sub-steppable stages emit one Sample per
+    # sub-step; encrypt and partial-decrypt remain single-sample).
     "encrypt": "шифрование изображения",
-    "infer": "инференс",
-    "mac": "аутентификация шифротекста",
     "partial-decrypt": "частичная расшифровка",
-    "finalize": "окончательная расшифровка",
     # Per-image sub-steps emitted by the instrumented per-image subcommands.
     "infer.load_keys": "инференс: загрузка rlk + gks_infer",
     "infer.load_input_ct": "инференс: загрузка шифротекста входа",
@@ -220,18 +220,8 @@ LEGEND: dict[str, str] = {
     "macro_verify": "проверка результата",
 }
 
-# Per-step → party mapping. Per-party keygen sub-steps map to their
-# specific party (no "joint" anywhere). Legacy round-level keys keep a
-# "joint" tag but are NOT placed on any Gantt lane; the aggregator
-# renders them in the "Keygen by round" no-party table.
+# Per-step → party mapping for every Sample name production actually emits.
 PARTY_BY_STEP: dict[str, str] = {
-    # Legacy round-level keys: aggregator handles separately.
-    "keygen": "joint",
-    "keygen.open": "joint",
-    "keygen.pk": "joint",
-    "keygen.rlk-r1": "joint",
-    "keygen.rlk-r2": "joint",
-    "keygen.galois": "joint",
     # Per-party keygen sub-steps.
     "keygen.open.service": "service",
     "keygen.open.agent": "agent",
@@ -253,10 +243,7 @@ PARTY_BY_STEP: dict[str, str] = {
     "keygen.galois.service_store": "service",
     # Per-image steps.
     "encrypt": "client",
-    "infer": "service",
-    "mac": "agent",
     "partial-decrypt": "client",
-    "finalize": "agent",
     # Per-image sub-steps.
     "infer.load_keys": "service",
     "infer.load_input_ct": "service",

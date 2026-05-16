@@ -30,6 +30,7 @@ import logging
 import shutil
 import subprocess
 import sys
+from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -48,7 +49,13 @@ from bench._labels_ru import (
     STEP_NAMES,
     TABLE_HEADERS,
 )
-from bench.load import Run, Sample, load_run
+from bench._messages import (
+    PER_IMAGE_STAGES,
+    PER_IMAGE_STEPS,
+    KeyInventoryRow,
+    MessageBytesRow,
+)
+from bench.load import Run, Sample, iter_per_image_run_jsons, load_run
 
 logger = logging.getLogger(__name__)
 
@@ -256,10 +263,6 @@ def run_pipeline(
     return batch_dir
 
 
-# Protocol step order for the e2e per-image chain. Sourced from the message
-# catalog so the bench and the protocol-message catalog stay in sync.
-_PER_IMAGE_STEPS: tuple[str, ...] = _messages.PER_IMAGE_STEPS
-
 # Network bandwidth points reported in the wire-time table (Mbps).
 _BANDWIDTHS_MBPS: tuple[int, ...] = (1, 10, 100)
 
@@ -335,21 +338,14 @@ def _load_step_runs(
     ``infer.exec``, ``mac.derive_auth_keys``). The bucket is keyed by Sample
     name so the per-party table can render one row per sub-step.
 
-    Unknown Sample names (not in ``_PER_IMAGE_STEPS``) raise loudly. A stale
+    Unknown Sample names (not in ``PER_IMAGE_STEPS``) raise loudly. A stale
     single-block ``Sample.name == "infer"`` from a partially-regenerated batch
     must not be silently absorbed under a non-catalog key.
     """
-    stage_files: tuple[str, ...] = (
-        "encrypt",
-        "infer",
-        "mac",
-        "partial-decrypt",
-        "finalize",
-    )
-    allowed = set(_PER_IMAGE_STEPS)
-    bucket: dict[str, list[Sample]] = {step: [] for step in _PER_IMAGE_STEPS}
+    allowed = set(PER_IMAGE_STEPS)
+    bucket: dict[str, list[Sample]] = {step: [] for step in PER_IMAGE_STEPS}
     for _, img_dir in img_dirs:
-        for stage in stage_files:
+        for stage in PER_IMAGE_STAGES:
             json_path = img_dir / f"{stage}.json"
             run = load_run(json_path)
             for sample in run.samples:
@@ -366,32 +362,24 @@ def _load_keygen_run(batch_dir: Path) -> Run:
     return load_run(batch_dir / "keygen.json")
 
 
-# Per-message bytes row: (message_id, label_ru, sender, receiver, bytes_or_None).
-MessageBytesRow = tuple[str, str, str, str, int | None]
-
-
 def _per_message_bytes(
     batch_dir: Path, samples_by_name: dict[str, list[Sample]]
 ) -> list[MessageBytesRow]:
     """Per-message wire sizes driven by ``_messages.MESSAGES``.
 
     Each catalog entry resolves its size via ``resolve_message_bytes``. Missing
-    files yield ``bytes=None`` (rendered as ``—``).
+    files yield ``size=None`` (rendered as ``—``).
     """
     return [
-        (
-            msg.id,
-            msg.label_ru,
-            msg.sender,
-            msg.receiver,
-            _messages.resolve_message_bytes(msg, batch_dir, samples_by_name),
+        MessageBytesRow(
+            message_id=msg.id,
+            label_ru=msg.label_ru,
+            sender=msg.sender,
+            receiver=msg.receiver,
+            size=_messages.resolve_message_bytes(msg, batch_dir, samples_by_name),
         )
         for msg in _messages.MESSAGES
     ]
-
-
-# Per-key inventory row: (key_name, location_label, on_wire_label, bytes_or_None).
-KeyInventoryRow = tuple[str, str, str, int | None]
 
 
 def _key_inventory_rows(
@@ -405,7 +393,14 @@ def _key_inventory_rows(
         on_wire_label = (
             TABLE_HEADERS["on_wire_yes"] if key.on_wire else TABLE_HEADERS["on_wire_no"]
         )
-        rows.append((key.name, location_label, on_wire_label, size))
+        rows.append(
+            KeyInventoryRow(
+                key_name=key.name,
+                location=location_label,
+                on_wire=on_wire_label,
+                size=size,
+            )
+        )
     return rows
 
 
@@ -522,9 +517,9 @@ def _format_with_prettier(path: Path) -> None:
 def _format_seconds(seconds: float) -> str:
     """Compact human-readable wall-time for the network table.
 
-    Steps through ms / s / min / h so the largest catalog wire payloads
-    (the compressed `gks_master.bin` bundle inside ``VAgentEvalKeyBundle``)
-    render in the right unit at slow bandwidths.
+    Steps through ms / s / min / h so the largest wire payload
+    (``VAgentEvalKeyBundle`` = rlk + pk_top + gks_master) renders in the
+    right unit at slow bandwidths.
     """
     if seconds < 1.0:
         return f"{seconds * 1000:.1f} ms"
@@ -567,7 +562,7 @@ def _party_step_table_md(
                 f"{_format_mib(delta)} | {_format_mib(hwm)} |"
             )
 
-    for step in _PER_IMAGE_STEPS:
+    for step in PER_IMAGE_STEPS:
         samples = per_image.get(step, [])
         if not samples:
             continue
@@ -610,8 +605,7 @@ def _keygen_by_round_table_md(keygen_run: Run) -> str:
             continue
         wall = sum(s.wall_ms for s in sub_samples)
         hwm = max(s.vm_hwm for s in sub_samples) / (1024.0 * 1024.0)
-        n_each = [sum(1 for s in sub_samples if s.name == sub) for sub in substeps]
-        n = max([x for x in n_each if x > 0], default=1)
+        n = max(Counter(s.name for s in sub_samples).values(), default=1)
         lines.append(f"| {round_label} | {n} | {_format_ms(wall)} | {_format_mib(hwm)} |")
     lines.append("")
     lines.append(
@@ -630,16 +624,20 @@ def _bytes_table_md(rows: Sequence[MessageBytesRow]) -> str:
         f"{TABLE_HEADERS['bytes']} | {TABLE_HEADERS['kib']} | {TABLE_HEADERS['mib']} |"
     )
     lines: list[str] = [header, "|---|---|---|---|---:|---:|---:|"]
-    for mid, label, sender, receiver, size in rows:
-        snd = PARTY_SHORT_NAMES.get(sender, sender)
-        rcv = PARTY_SHORT_NAMES.get(receiver, receiver)
-        if size is None:
-            lines.append(f"| {mid} | {label} | {snd} | {rcv} | {empty} | {empty} | {empty} |")
-        else:
-            kib = size / 1024.0
-            mib = size / (1024.0 * 1024.0)
+    for r in rows:
+        snd = PARTY_SHORT_NAMES.get(r.sender, r.sender)
+        rcv = PARTY_SHORT_NAMES.get(r.receiver, r.receiver)
+        if r.size is None:
             lines.append(
-                f"| {mid} | {label} | {snd} | {rcv} | {size} | {kib:.1f} | {mib:.2f} |"
+                f"| {r.message_id} | {r.label_ru} | {snd} | {rcv} | "
+                f"{empty} | {empty} | {empty} |"
+            )
+        else:
+            kib = r.size / 1024.0
+            mib = r.size / (1024.0 * 1024.0)
+            lines.append(
+                f"| {r.message_id} | {r.label_ru} | {snd} | {rcv} | "
+                f"{r.size} | {kib:.1f} | {mib:.2f} |"
             )
     lines.append("")
     lines.append(
@@ -663,14 +661,18 @@ def _key_inventory_md(rows: Sequence[KeyInventoryRow]) -> str:
         f"{TABLE_HEADERS['kib']} | {TABLE_HEADERS['mib']} |"
     )
     lines: list[str] = [header, "|---|---|---|---:|---:|---:|"]
-    for name, location, on_wire, size in rows:
-        if size is None:
-            lines.append(f"| {name} | {location} | {on_wire} | {empty} | {empty} | {empty} |")
-        else:
-            kib = size / 1024.0
-            mib = size / (1024.0 * 1024.0)
+    for r in rows:
+        if r.size is None:
             lines.append(
-                f"| {name} | {location} | {on_wire} | {size} | {kib:.1f} | {mib:.2f} |"
+                f"| {r.key_name} | {r.location} | {r.on_wire} | "
+                f"{empty} | {empty} | {empty} |"
+            )
+        else:
+            kib = r.size / 1024.0
+            mib = r.size / (1024.0 * 1024.0)
+            lines.append(
+                f"| {r.key_name} | {r.location} | {r.on_wire} | "
+                f"{r.size} | {kib:.1f} | {mib:.2f} |"
             )
     return "\n".join(lines)
 
@@ -684,15 +686,15 @@ def _network_table_md(rows: Sequence[MessageBytesRow]) -> str:
     lines: list[str] = []
     lines.append("| " + " | ".join(head_cells) + " |")
     lines.append("|" + "|".join(["---"] + ["---:"] * (len(head_cells) - 1)) + "|")
-    for mid, _label, _sender, _receiver, size in rows:
-        if size is None:
-            cells = [mid, empty] + [empty] * len(_BANDWIDTHS_MBPS)
+    for r in rows:
+        if r.size is None:
+            cells = [r.message_id, empty] + [empty] * len(_BANDWIDTHS_MBPS)
             lines.append("| " + " | ".join(cells) + " |")
             continue
-        cells = [mid, str(size)]
+        cells = [r.message_id, str(r.size)]
         for mbps in _BANDWIDTHS_MBPS:
             bps = mbps * 1_000_000 / 8.0
-            cells.append(_format_seconds(size / bps))
+            cells.append(_format_seconds(r.size / bps))
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
 
@@ -764,20 +766,7 @@ def _noise_block_md(noise_stats: dict[str, float], snr: list[tuple[int, float, f
 
 
 def aggregate(batch_dir: Path) -> None:
-    """Aggregate per-step JSONs + decoded.json into summary.md + plots/.
-
-    Layout produced by Task 13's `run_pipeline`:
-
-    - `<batch>/keygen.json` — single bench Run with five `keygen.*` Samples
-    - `<batch>/eval_inputs.json` — copy of the manifest with idx/label/ref_logit
-    - `<batch>/img_<idx>/{encrypt,infer,mac,partial-decrypt,finalize}.json` — per-step Runs
-    - `<batch>/img_<idx>/decoded.json` — verdict + noise vector
-    - `<batch>/keys/*.bin` and `<batch>/img_<idx>/*.bin` — wire-format artifacts
-
-    Writes `<batch>/summary.md` and then defers to `plots_eval.write_plots`.
-    The plot module is imported lazily so a missing/broken plotting backend
-    surfaces as a warning rather than aborting the summary render.
-    """
+    """Render summary.md + plots/ from per-step JSONs + decoded.json in batch_dir."""
     batch_dir = Path(batch_dir).resolve()
     keygen_run = _load_keygen_run(batch_dir)
     img_dirs = _image_dirs(batch_dir)
@@ -793,9 +782,7 @@ def aggregate(batch_dir: Path) -> None:
     for s in keygen_run.samples:
         samples_by_name.setdefault(s.name, []).append(s)
     for _, img_dir in img_dirs:
-        for json_path in sorted(img_dir.glob("*.json")):
-            if json_path.name == "decoded.json":
-                continue
+        for json_path in iter_per_image_run_jsons(img_dir):
             run = load_run(json_path)
             for s in run.samples:
                 samples_by_name.setdefault(s.name, []).append(s)

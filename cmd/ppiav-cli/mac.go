@@ -10,22 +10,8 @@ import (
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 )
 
-// runMAC loads the VAgent state written by `keygen` and runs Stage 4a —
-// `BuildAuthenticatedCt` — on a saved result ciphertext. The output
-// authenticated ciphertext is written to --out-ct; a single-sample
-// bench.Run named "mac" is written to --out (default <workdir>/mac.json).
-//
-// Reads from disk: pk_eval.bin (drives the authenticator-side encryptor),
-// pk_top.bin (seeds hierkeys.PubToRot for the auth-atom derivation),
-// rlk.bin + gks_master.bin (drive the LevelExpansion that produces the
-// auth-atom keys for authchain.Evaluator), sk_a + mac_key (per-session
-// secrets). gks_master.bin is the largest input by far at LogN=16; the
-// read time is recorded as `read_gks_master_seconds` in mac.json metadata.
-//
-// `derive_gks_auth_seconds` captures the in-memory LevelExpansion +
-// FinalizeKey time over the negative auth atoms — at LogN=16 this is the
-// dominant cost on the mac path (no longer sub-millisecond like the
-// pre-design-A authchain construction).
+// runMAC loads the VAgent state written by `keygen`, derives the auth-atom
+// keys locally, and runs `BuildAuthenticatedCt` on a saved result ciphertext.
 func runMAC(args []string) error {
 	fs := flag.NewFlagSet("mac", flag.ContinueOnError)
 	workdir := fs.String("workdir", "", "per-batch keygen artifact directory (required)")
@@ -94,7 +80,7 @@ func runMAC(args []string) error {
 		agent             *vagent.Agent
 		readGksMasterSecs float64
 	)
-	deriveSample, err := bench.MeasureWithSize("mac.derive_auth_keys", func() (uint64, error) {
+	deriveSample, err := bench.MeasureWithSize(sampleMacDeriveAuthKeys, func() (uint64, error) {
 		readGksStart := time.Now()
 		gksMaster, e := readMasterKeys(*workdir, artifactGKSMaster)
 		if e != nil {
@@ -138,7 +124,7 @@ func runMAC(args []string) error {
 	}
 
 	var authCt *rlwe.Ciphertext
-	computeSample, err := bench.Measure("mac.compute_ct", func() error {
+	computeSample, err := bench.Measure(sampleMacComputeCt, func() error {
 		c, macErr := agent.BuildAuthenticatedCt(sid, ct)
 		if macErr != nil {
 			return fmt.Errorf("VAgent.BuildAuthenticatedCt: %w", macErr)

@@ -8,13 +8,6 @@ The catalog is data-only: ``MESSAGES`` and ``KEYS`` are immutable lists of
 frozen dataclasses; the size resolvers (``resolve_message_bytes``,
 ``resolve_key_bytes``) dispatch on the ``bytes_source`` variant tag.
 
-Renames from the bench-redesign-v1 layout: every share message now carries
-an explicit ``Share`` suffix; ``VAgentInferenceKeys`` → ``VAgentEvalKeyBundle``
-(the wire artifact is ``rlk + gks_master``, not the locally-derived
-``gks_infer``); per-image messages reference ``img_0/`` as the canonical
-sample since all images produce identically-sized ciphertexts at fixed
-CKKS parameters.
-
 Scope: this catalog covers VClient↔VAgent and VAgent↔VService wire
 messages. Resource-service-side traffic (ResourceClient↔ResourceService and
 ResourceService↔VerificationAgent in ``docs/protocol.puml`` — L14-L15,
@@ -29,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from bench.load import Sample
 
@@ -75,7 +68,7 @@ class SampleBytes:
 class Synthetic:
     """Size is a constant — for tiny handshake / ack envelopes with no on-disk artifact."""
 
-    bytes_: int
+    size: int
 
 
 BytesSource = FilePath | MultiFilePath | SampleBytes | Synthetic
@@ -113,6 +106,32 @@ PER_IMAGE_STEPS: tuple[str, ...] = (
     "finalize.final_decrypt",
     "finalize.verdict_compute",
 )
+
+# Parent-stage names derived from PER_IMAGE_STEPS — one entry per per-image
+# subcommand JSON file (encrypt.json, infer.json, ...). Order matches the
+# chronological PER_IMAGE_STEPS order.
+PER_IMAGE_STAGES: tuple[str, ...] = tuple(
+    dict.fromkeys(s.split(".", 1)[0] for s in PER_IMAGE_STEPS)
+)
+
+
+class MessageBytesRow(NamedTuple):
+    """One row of the per-message bytes table; size=None renders as em-dash."""
+
+    message_id: str
+    label_ru: str
+    sender: str
+    receiver: str
+    size: int | None
+
+
+class KeyInventoryRow(NamedTuple):
+    """One row of the key inventory table; size=None renders as em-dash."""
+
+    key_name: str
+    location: str
+    on_wire: str
+    size: int | None
 
 
 # Authoritative message catalog (drawn from docs/protocol.puml). Order is
@@ -427,7 +446,7 @@ def _resolve_bytes_source(
             return None
         return first.bytes
     if isinstance(source, Synthetic):
-        return source.bytes_
+        return source.size
     raise TypeError(f"unknown BytesSource variant: {type(source).__name__}")
 
 

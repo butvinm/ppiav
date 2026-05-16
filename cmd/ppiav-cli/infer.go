@@ -9,17 +9,9 @@ import (
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 )
 
-// runInfer loads the VService state written by `keygen` and runs the
-// session's inference circuit on a saved input ciphertext. The output
-// ciphertext is written to --out-ct; a single-sample bench.Run named "infer"
-// is written to --out (default <workdir>/infer.json).
-//
-// --orion <dir> must point at the Orion compiled-model directory used by
-// keygen; vservice.NewWithState reloads model.orion from disk and overrides
-// the CKKS / InputLevel / ExtraRotationIndices fields from the manifest. The
-// params persisted to params.json are also Orion-derived (keygen runs
-// vservice.NewWithOrion), so the loadParams + NewWithState merge is
-// idempotent in the Orion path.
+// runInfer loads the VService state written by `keygen` and runs the session's
+// inference circuit on a saved input ciphertext. --orion <dir> must match the
+// Orion compiled-model directory used by keygen.
 func runInfer(args []string) error {
 	fs := flag.NewFlagSet("infer", flag.ContinueOnError)
 	workdir := fs.String("workdir", "", "per-batch keygen artifact directory (required)")
@@ -60,7 +52,7 @@ func runInfer(args []string) error {
 	writeRunOnExit := func() { _ = run.WriteJSON(stepOutPath(*outPath, *workdir, "infer")) }
 
 	var svc *vservice.Service
-	loadKeysSample, err := bench.Measure("infer.load_keys", func() error {
+	loadKeysSample, err := bench.Measure(sampleInferLoadKeys, func() error {
 		rlk, e := readRelinearizationKey(*workdir)
 		if e != nil {
 			return fmt.Errorf("load rlk: %w", e)
@@ -90,7 +82,7 @@ func runInfer(args []string) error {
 	}
 
 	var ct *rlwe.Ciphertext
-	loadInputSample, err := bench.Measure("infer.load_input_ct", func() error {
+	loadInputSample, err := bench.Measure(sampleInferLoadInputCt, func() error {
 		c, e := readCiphertextPath(*inCt)
 		if e != nil {
 			return fmt.Errorf("load in-ct: %w", e)
@@ -105,7 +97,7 @@ func runInfer(args []string) error {
 	}
 
 	var outCipher *rlwe.Ciphertext
-	execSample, err := bench.Measure("infer.exec", func() error {
+	execSample, err := bench.Measure(sampleInferExec, func() error {
 		c, infErr := svc.Infer(sid, ct)
 		if infErr != nil {
 			return fmt.Errorf("VService.Infer: %w", infErr)
@@ -119,7 +111,7 @@ func runInfer(args []string) error {
 		return fmt.Errorf("infer: %w", err)
 	}
 
-	serializeSample, err := bench.Measure("infer.serialize_result", func() error {
+	serializeSample, err := bench.Measure(sampleInferSerializeResult, func() error {
 		return writeCiphertextPath(*outCt, outCipher)
 	})
 	run.Append(serializeSample)

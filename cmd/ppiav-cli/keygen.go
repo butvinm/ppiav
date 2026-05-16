@@ -18,23 +18,8 @@ import (
 
 // runKeygen drives the bilateral collaborative keygen in-process and writes
 // every per-session artifact (keys, sid, params, mac key) to <workdir>/.
-// Per-round wall-time / RSS samples are appended to a single bench.Run named
-// "keygen" with sub-step names keygen.open / keygen.pk / keygen.rlk-r1 /
-// keygen.rlk-r2 / keygen.galois.
-//
-// The flow mirrors orchestrator.Setup but additionally captures
-// pkEval / pkTop / sk_c / sk_a / rlkAgg / gksMaster plus the agent's
-// per-session authKey so the rest of the per-step CLIs can rebuild
-// VClient / VAgent / VService via their respective NewWithState constructors.
-//
-// `keygen.galois.{client_gen, agent_gen, agent_agg}` cover the single
-// master atom set handshake; agent_agg additionally runs the local
-// derivation of the negative auth-atom keys from the same master bundle
-// (the time is reported via `Agent.DeriveGksAuthSeconds`). The
-// `service_store` sample additionally records `derive_gks_infer_seconds`
-// (the wall-clock time spent inside StoreEvalKeys running
-// hierkeys.LevelExpansion + FinalizeKey on the derivation), surfaced via
-// `Service.DeriveGksInferSeconds(sid)`.
+// Per-round wall-time / RSS samples are appended to one bench.Run named
+// "keygen" with sub-step names keygen.{open,pk,rlk-r1,rlk-r2,galois}.*.
 func runKeygen(args []string) error {
 	fs := flag.NewFlagSet("keygen", flag.ContinueOnError)
 	workdir := fs.String("workdir", "", "per-batch directory to hold keygen artifacts (required)")

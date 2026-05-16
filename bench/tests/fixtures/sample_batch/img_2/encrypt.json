@@ -1,6 +1,6 @@
 {
   "name": "encrypt",
-  "phase": "phase4",
+  "phase": "phase2",
   "started": "2026-05-16T12:01:00Z",
   "go_version": "go1.23.0",
   "goos": "linux",

@@ -1,10 +1,10 @@
 """Tests for the plain-vs-FHE accuracy comparison helpers in ``bench.eval``.
 
-The fixture batch from Task 4 (``bench/tests/fixtures/sample_batch/``) has four
-images covering both labels and both ``ref_logit`` signs, with FHE verdicts
-already aligned to the cleartext side. We assert both classifiers reproduce the
-expected confusion matrix on the fixture, and that the rendered comparison
-table carries both columns + every metric row.
+The fixture batch at ``bench/tests/fixtures/sample_batch/`` has four images
+covering both labels and both ``ref_logit`` signs, with FHE verdicts aligned
+to the cleartext side. We assert both classifiers reproduce the expected
+confusion matrix on the fixture, and that the rendered comparison table
+carries both columns + every metric row.
 """
 
 from __future__ import annotations

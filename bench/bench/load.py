@@ -8,6 +8,7 @@ Field names use the Go `json` struct tags (lowercased with underscores).
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -111,3 +112,15 @@ def load_dir(directory: Path) -> list[Run]:
     """Load every *.json in `directory`, sorted by filename for determinism."""
     paths = sorted(p for p in directory.glob("*.json") if p.is_file())
     return [load_run(p) for p in paths]
+
+
+def iter_per_image_run_jsons(img_dir: Path) -> Iterator[Path]:
+    """Yield bench Run JSONs in an `img_<idx>/` dir, skipping decoded.json.
+
+    `decoded.json` is the verdict + noise payload, not a bench.Run — every
+    caller iterating per-image JSONs must skip it.
+    """
+    for json_path in sorted(img_dir.glob("*.json")):
+        if json_path.name == "decoded.json":
+            continue
+        yield json_path
