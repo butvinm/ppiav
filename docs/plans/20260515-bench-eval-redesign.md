@@ -533,18 +533,18 @@ Scope: confirm everything builds and unit tests pass on the dev box. Full chain 
 - Create (local): `/home/butvinm/Dev/ppiav/results/phase2/eval-<ts>/summary.md` + `plots/*.png` + per-image `decoded.json`
 - Optional gitignored capture: per-image `*.bin` artifacts and `keys/*.bin` (multi-GB; skip)
 
-- [ ] from local: `rsync -av --exclude '*.bin' ubuntu@<fhe-ip>:~/ppiav/results/phase2/eval-<ts>/ /home/butvinm/Dev/ppiav/results/phase2/eval-<ts>/`
-- [ ] **manual verify**: local `summary.md` + 7 PNGs + per-image `decoded.json` and timing JSONs present
-- [ ] commit the captured artifacts to git on the working branch: `git add results/phase2/eval-<ts>/summary.md results/phase2/eval-<ts>/plots/*.png results/phase2/eval-<ts>/keygen.json results/phase2/eval-<ts>/img_*/*.json results/phase2/eval-<ts>/img_*/decoded.json` (specific files, never `git add .`); commit message like `bench: capture eval-<ts> results from VPS run`
+- [x] from local: `rsync -av --exclude '*.bin' ubuntu@195.209.216.203:~/ppiav/results/phase2/eval-20260516T002209Z/ /home/butvinm/Dev/ppiav/results/phase2/eval-20260516T002209Z/` — pulled summary + plots + per-image JSONs (~360 kB total)
+- [x] **manual verify**: local `summary.md` + 7 PNGs + per-image `decoded.json` and timing JSONs all present
+- [x] commit the captured artifacts: `git add -f` (needed because `.gitignore` line `results/*/` blocks them by default; the gitignore comment explicitly allows "selectively committed snapshots"). Specific files staged per plan
 
 ### Task 26: Tear down FHE VPS
 
 **Files:** none
 
-- [ ] verified Task 25 succeeded (results committed locally)
-- [ ] `openstack --os-cloud immers server delete ppiav-bench-eval-fhe --wait`
-- [ ] **manual verify**: `openstack --os-cloud immers server list | grep ppiav-bench-eval` returns nothing
-- [ ] record rental end + total billed hours; sanity-check the cost log lines up with measured durations
+- [x] verified Task 25 succeeded (results committed locally — see commit `91b3...` capturing summary + plots + per-image JSONs)
+- [x] `openstack --os-cloud immers server delete ppiav-bench-eval-fhe --wait` — first attempt got HTTP timeout returning, second confirmed 404 + empty server list
+- [x] **manual verify**: `openstack server list` returns `[]`
+- [x] record rental end + total billed hours — VPS launched 2026-05-15T22:13:33Z, deleted ~2026-05-16T01:21Z; ~3h 8m wall ≈ 4 billed hours @ cpu.16.128.240
 
 ### Task 27: Review results + verify acceptance criteria
 
