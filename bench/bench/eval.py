@@ -36,7 +36,7 @@ from typing import Any
 
 import numpy as np
 
-from bench._labels_ru import PARTY_BY_STEP, PARTY_NAMES
+from bench._labels_ru import PARTY_BY_STEP, PARTY_NAMES, STEP_NAMES
 from bench.load import Run, Sample, load_run
 
 logger = logging.getLogger(__name__)
@@ -504,7 +504,11 @@ def _party_step_table_md(
 
     keygen_total_ms = sum(s.wall_ms for s in keygen_run.samples)
     joint = PARTY_NAMES["joint"]
-    total_row = f"| {joint} | keygen (total) | 1 | {_format_ms(keygen_total_ms)} | - | - | - |"
+    total_label = f"{STEP_NAMES['keygen']} (всего)"
+    total_row = (
+        f"| {joint} | {total_label} | 1 | "
+        f"{_format_ms(keygen_total_ms)} | - | - | - |"
+    )
     lines.append(total_row)
     for substep in _KEYGEN_SUBSTEPS:
         matching = [s for s in keygen_run.samples if s.name == substep]
@@ -512,8 +516,9 @@ def _party_step_table_md(
         delta, hwm = _rss_stats(matching)
         n = len(matching)
         party = PARTY_NAMES[PARTY_BY_STEP.get(substep, "joint")]
+        label = STEP_NAMES.get(substep, substep)
         lines.append(
-            f"| {party} | &nbsp;&nbsp;{substep} | {n} | "
+            f"| {party} | &nbsp;&nbsp;{label} | {n} | "
             f"{_format_ms(mean)} | {_format_ms(p95)} | "
             f"{_format_mib(delta)} | {_format_mib(hwm)} |"
         )
@@ -524,8 +529,9 @@ def _party_step_table_md(
         delta, hwm = _rss_stats(samples)
         n = len(samples)
         party = PARTY_NAMES[PARTY_BY_STEP.get(step, "joint")]
+        label = STEP_NAMES.get(step, step)
         lines.append(
-            f"| {party} | {step} | {n} | "
+            f"| {party} | {label} | {n} | "
             f"{_format_ms(mean)} | {_format_ms(p95)} | "
             f"{_format_mib(delta)} | {_format_mib(hwm)} |"
         )
