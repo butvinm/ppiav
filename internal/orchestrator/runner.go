@@ -213,15 +213,24 @@ func (r *Runner) Setup() error {
 		return fmt.Errorf("orchestrator: VAgent.AggregateRLKRound2: %w", err)
 	}
 
-	// Stage 2d — Galois handshake.
-	clientGalShares, clientLabels, err := r.vclient.GenGaloisShares()
+	// Stage 2d — dual atom-set Galois handshake (Phase 4). VClient emits
+	// auth-atom shares (eval level) + infer-atom shares (top level);
+	// VAgent finalises them into raw eval-level *rlwe.GaloisKeys + a
+	// `map[int]*hierkeys.MasterKey` for the inference side. Task 6 wires
+	// the new VAgent signature; for now the vagent call site stays
+	// broken on purpose (Task 6 owns it).
+	clientAuthShares, clientInferShares, clientAuthLabels, clientInferLabels, err := r.vclient.GenAuthAndInferShares()
 	if err != nil {
-		return fmt.Errorf("orchestrator: VClient.GenGaloisShares: %w", err)
+		return fmt.Errorf("orchestrator: VClient.GenAuthAndInferShares: %w", err)
 	}
+	_ = clientAuthShares
+	_ = clientInferShares
+	_ = clientAuthLabels
+	_ = clientInferLabels
 	if _, _, err := r.vagent.GenGaloisShares(r.sid); err != nil {
 		return fmt.Errorf("orchestrator: VAgent.GenGaloisShares: %w", err)
 	}
-	rlk, gks, err := r.vagent.AggregateGaloisShares(r.sid, clientGalShares, clientLabels)
+	rlk, gks, err := r.vagent.AggregateGaloisShares(r.sid, clientAuthShares, clientAuthLabels)
 	if err != nil {
 		return fmt.Errorf("orchestrator: VAgent.AggregateGaloisShares: %w", err)
 	}

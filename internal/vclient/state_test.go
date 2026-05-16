@@ -36,7 +36,7 @@ func TestExportStateRoundTripEncrypt(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, state)
 	assert.Equal(t, sid, state.SID)
-	require.NotNil(t, state.SkShare)
+	require.NotNil(t, state.SkTop)
 	require.NotNil(t, state.PkAgg)
 
 	b, err := NewWithState(params, state)
@@ -110,7 +110,7 @@ func TestExportStateRoundTripPartialDecrypt(t *testing.T) {
 	require.NoError(t, err)
 	zeroSk := rlwe.NewSecretKey(params.CKKS)
 	agentShare := agentProto.AllocateShare(ct.Level())
-	agentProto.GenShare(stub.skA, zeroSk, ct, &agentShare)
+	agentProto.GenShare(stub.skAEval, zeroSk, ct, &agentShare)
 
 	combined := agentProto.AllocateShare(ct.Level())
 	require.NoError(t, agentProto.AggregateShares(clientShare, agentShare, &combined))
@@ -132,7 +132,7 @@ func TestNewWithStateRejectsInvalidInputs(t *testing.T) {
 	require.Error(t, err)
 
 	_, err = NewWithState(params, &ExportedState{SID: "x"})
-	require.Error(t, err, "missing SkShare must fail")
+	require.Error(t, err, "missing SkTop must fail")
 }
 
 // ExportState on a freshly-built Client (no keygen yet) succeeds and
@@ -146,6 +146,6 @@ func TestExportStateAllowsNilPkAgg(t *testing.T) {
 
 	state, err := c.ExportState()
 	require.NoError(t, err)
-	require.NotNil(t, state.SkShare)
+	require.NotNil(t, state.SkTop)
 	assert.Nil(t, state.PkAgg, "PkAgg before AggregatePK must be nil")
 }

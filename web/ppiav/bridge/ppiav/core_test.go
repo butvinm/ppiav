@@ -5,6 +5,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/butvinm/lattigo-hierkeys/llkn"
 	"github.com/butvinm/ppiav/internal/authenticator"
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/butvinm/ppiav/internal/vclient"
@@ -20,7 +21,9 @@ import (
 // internal/vclient/client_test.go: LogN=14 (8192 slots), λ=8, FloodSigma=2^16.
 // The bridge tests cannot import vclient's _test.go helpers, so we replicate
 // the literal here. Drift between the two is fine — these tests only need a
-// CKKS profile small enough to run quickly under -race.
+// CKKS profile small enough to run quickly under -race. LLKN is a 1-level
+// extension with a single 40-bit P prime — just enough to exercise the
+// dual atom-set keygen path without bloating runtime.
 func smallParams(t *testing.T) protocol.Params {
 	t.Helper()
 	lit := ckks.ParametersLiteral{
@@ -32,8 +35,12 @@ func smallParams(t *testing.T) protocol.Params {
 	}
 	ckksParams, err := ckks.NewParametersFromLiteral(lit)
 	require.NoError(t, err)
+	llknParams, err := llkn.NewParameters(ckksParams.Parameters, [][]int{{40}})
+	require.NoError(t, err)
 	return protocol.Params{
-		CKKS: ckksParams,
+		CKKS:     ckksParams,
+		LLKN:     llknParams,
+		LLKNBase: protocol.DefaultLLKNBase,
 		Authenticator: authenticator.Config{
 			Lambda:  8,
 			Epsilon: math.Exp2(20),
@@ -45,7 +52,11 @@ func smallParams(t *testing.T) protocol.Params {
 // paramsJSON encodes a protocol.Params into the wire shape produced by
 // vservice.writeParams (internal/vservice/http.go's paramsWire). Tests use
 // this to feed NewClient through ParseParamsJSON, exercising the same code
-// path the browser will use.
+// path the browser will use. LLKN is reconstructed locally inside
+// ParseParamsJSON from the on-wire CKKS shape using the canonical default
+// LLKN schedule — so the test's LLKN literal does NOT need to match the
+// reconstructed one beyond shape compatibility (same eval-level CKKS →
+// same LLKN top level).
 func paramsJSON(t *testing.T, p protocol.Params) []byte {
 	t.Helper()
 	ckksBytes, err := p.CKKS.MarshalJSON()
@@ -72,6 +83,9 @@ func TestParseParamsJSONRoundTrip(t *testing.T) {
 	assert.Equal(t, want.Authenticator.Lambda, got.Authenticator.Lambda)
 	assert.InDelta(t, want.Authenticator.Epsilon, got.Authenticator.Epsilon, 0)
 	assert.InDelta(t, want.FloodSigma, got.FloodSigma, 0)
+	// LLKN must be populated by ParseParamsJSON — without it,
+	// vclient.New crashes on params.LLKN.Top().
+	assert.Equal(t, got.CKKS.LogN(), got.LLKN.Top().LogN())
 }
 
 func TestParseParamsJSONRejectsBadInput(t *testing.T) {
@@ -130,7 +144,7 @@ func TestUnknownHandleErrors(t *testing.T) {
 	require.Error(t, AggregateRLKRound1(bogus, []byte{0}))
 	_, err = GenRLKShareRound2(bogus)
 	require.Error(t, err)
-	_, err = GenGaloisShares(bogus)
+	_, err = GenAuthAndInferShares(bogus)
 	require.Error(t, err)
 	_, err = EncryptImage(bogus, make([]float64, vclient.ImageLen))
 	require.Error(t, err)
@@ -150,7 +164,9 @@ func TestGenPKShareRoundTrip(t *testing.T) {
 
 	var got protocol.VClientPKShare
 	require.NoError(t, got.UnmarshalBinary(out))
-	require.NotNil(t, got.Share)
+	// Dual PK shares: both eval and top must carry sampled polynomials.
+	require.NotNil(t, got.ShareEval.Value.Q, "eval share must carry Q poly")
+	require.NotNil(t, got.ShareTop.Value.Q, "top share must carry Q poly")
 }
 
 func TestAggregatePKRejectsMalformed(t *testing.T) {
@@ -172,28 +188,46 @@ func TestAggregatePKRejectsMalformed(t *testing.T) {
 // own keygen tests.
 func TestFullKeygenRoundTripThroughBridge(t *testing.T) {
 	params := smallParams(t)
+	// Use the params decoded by ParseParamsJSON so LLKN is the one the
+	// bridge actually built — the test's locally-built `params` LLKN is
+	// only used for the stub's matching share generation.
+	decoded, err := ParseParamsJSON(paramsJSON(t, params))
+	require.NoError(t, err)
+	params = decoded
+
 	sid := protocol.SessionID("sid-full")
 	h, err := NewClient(paramsJSON(t, params), string(sid))
 	require.NoError(t, err)
 	defer DeleteClient(h)
 
-	// Build a matching VAgent stub: same params, same CRS, fresh sk_a.
+	// Build a matching VAgent stub: same params (incl. LLKN), same CRS,
+	// fresh sk_a at top level with eval-level projection.
 	crs, err := protocol.NewSessionCRS(sid)
 	require.NoError(t, err)
-	skA := rlwe.NewKeyGenerator(params.CKKS).GenSecretKeyNew()
+	skATop := rlwe.NewKeyGenerator(params.LLKN.Top()).GenSecretKeyNew()
+	skAEval, err := params.ProjectSKToEval(skATop)
+	require.NoError(t, err)
 
-	// --- Stage 2b: PK ---
+	// --- Stage 2b: dual PK ---
 	clientPKBytes, err := GenPKShare(h)
 	require.NoError(t, err)
 	var clientPK protocol.VClientPKShare
 	require.NoError(t, clientPK.UnmarshalBinary(clientPKBytes))
 
-	pkProto := multiparty.NewPublicKeyGenProtocol(params.CKKS)
-	agentCRP := pkProto.SampleCRP(crs)
-	agentPKShare := pkProto.AllocateShare()
-	pkProto.GenShare(skA, agentCRP, &agentPKShare)
+	pkProtoEval := multiparty.NewPublicKeyGenProtocol(params.CKKS)
+	agentCRPEval := pkProtoEval.SampleCRP(crs)
+	agentPKShareEval := pkProtoEval.AllocateShare()
+	pkProtoEval.GenShare(skAEval, agentCRPEval, &agentPKShareEval)
 
-	agentPKBytes, err := protocol.VAgentPKShare{Share: agentPKShare}.MarshalBinary()
+	pkProtoTop := multiparty.NewPublicKeyGenProtocol(params.LLKN.Top())
+	agentCRPTop := pkProtoTop.SampleCRP(crs)
+	agentPKShareTop := pkProtoTop.AllocateShare()
+	pkProtoTop.GenShare(skATop, agentCRPTop, &agentPKShareTop)
+
+	agentPKBytes, err := protocol.VAgentPKShare{
+		ShareEval: agentPKShareEval,
+		ShareTop:  agentPKShareTop,
+	}.MarshalBinary()
 	require.NoError(t, err)
 	require.NoError(t, AggregatePK(h, agentPKBytes))
 
@@ -206,7 +240,7 @@ func TestFullKeygenRoundTripThroughBridge(t *testing.T) {
 	rlkProto := multiparty.NewRelinearizationKeyGenProtocol(params.CKKS)
 	agentRLKCRP := rlkProto.SampleCRP(crs)
 	agentEphSk, agentRLK1, _ := rlkProto.AllocateShare()
-	rlkProto.GenShareRoundOne(skA, agentRLKCRP, agentEphSk, &agentRLK1)
+	rlkProto.GenShareRoundOne(skAEval, agentRLKCRP, agentEphSk, &agentRLK1)
 
 	agentRLK1Bytes, err := protocol.VAgentRLKRound1{Share: agentRLK1}.MarshalBinary()
 	require.NoError(t, err)
@@ -218,13 +252,15 @@ func TestFullKeygenRoundTripThroughBridge(t *testing.T) {
 	var clientRLK2 protocol.VClientRLKRound2
 	require.NoError(t, clientRLK2.UnmarshalBinary(clientRLK2Bytes))
 
-	// --- Stage 2d: Galois shares ---
-	galSharesBytes, err := GenGaloisShares(h)
+	// --- Stage 2d: dual atom-set Galois shares ---
+	galSharesBytes, err := GenAuthAndInferShares(h)
 	require.NoError(t, err)
-	var galShares protocol.VClientGaloisKeyShare
+	var galShares protocol.VClientGaloisShares
 	require.NoError(t, galShares.UnmarshalBinary(galSharesBytes))
-	assert.Equal(t, len(params.RotationIndices()), len(galShares.Shares),
-		"bridge must emit one Galois share per rotation label")
+	assert.Equal(t, len(params.AuthAtoms()), len(galShares.AuthAtomShares),
+		"bridge must emit one auth share per AuthAtoms() entry")
+	assert.Equal(t, len(params.InferAtoms()), len(galShares.InferAtomShares),
+		"bridge must emit one infer share per InferAtoms() entry")
 }
 
 func TestEncryptImageRequiresAggregatedPK(t *testing.T) {
@@ -239,6 +275,10 @@ func TestEncryptImageRequiresAggregatedPK(t *testing.T) {
 
 func TestEncryptImageWrongLength(t *testing.T) {
 	params := smallParams(t)
+	decoded, err := ParseParamsJSON(paramsJSON(t, params))
+	require.NoError(t, err)
+	params = decoded
+
 	sid := protocol.SessionID("sid-img-len")
 	h, err := NewClient(paramsJSON(t, params), string(sid))
 	require.NoError(t, err)
@@ -251,12 +291,21 @@ func TestEncryptImageWrongLength(t *testing.T) {
 	require.NoError(t, clientPK.UnmarshalBinary(clientPKBytes))
 	crs, err := protocol.NewSessionCRS(sid)
 	require.NoError(t, err)
-	skA := rlwe.NewKeyGenerator(params.CKKS).GenSecretKeyNew()
-	pkProto := multiparty.NewPublicKeyGenProtocol(params.CKKS)
-	agentCRP := pkProto.SampleCRP(crs)
-	agentPKShare := pkProto.AllocateShare()
-	pkProto.GenShare(skA, agentCRP, &agentPKShare)
-	agentPKBytes, err := protocol.VAgentPKShare{Share: agentPKShare}.MarshalBinary()
+	skATop := rlwe.NewKeyGenerator(params.LLKN.Top()).GenSecretKeyNew()
+	skAEval, err := params.ProjectSKToEval(skATop)
+	require.NoError(t, err)
+	pkProtoEval := multiparty.NewPublicKeyGenProtocol(params.CKKS)
+	agentCRPEval := pkProtoEval.SampleCRP(crs)
+	agentPKShareEval := pkProtoEval.AllocateShare()
+	pkProtoEval.GenShare(skAEval, agentCRPEval, &agentPKShareEval)
+	pkProtoTop := multiparty.NewPublicKeyGenProtocol(params.LLKN.Top())
+	agentCRPTop := pkProtoTop.SampleCRP(crs)
+	agentPKShareTop := pkProtoTop.AllocateShare()
+	pkProtoTop.GenShare(skATop, agentCRPTop, &agentPKShareTop)
+	agentPKBytes, err := protocol.VAgentPKShare{
+		ShareEval: agentPKShareEval,
+		ShareTop:  agentPKShareTop,
+	}.MarshalBinary()
 	require.NoError(t, err)
 	require.NoError(t, AggregatePK(h, agentPKBytes))
 
@@ -266,6 +315,10 @@ func TestEncryptImageWrongLength(t *testing.T) {
 
 func TestEncryptImageProducesValidCiphertext(t *testing.T) {
 	params := smallParams(t)
+	decoded, err := ParseParamsJSON(paramsJSON(t, params))
+	require.NoError(t, err)
+	params = decoded
+
 	sid := protocol.SessionID("sid-img-ok")
 	h, err := NewClient(paramsJSON(t, params), string(sid))
 	require.NoError(t, err)
@@ -278,12 +331,21 @@ func TestEncryptImageProducesValidCiphertext(t *testing.T) {
 	require.NoError(t, clientPK.UnmarshalBinary(clientPKBytes))
 	crs, err := protocol.NewSessionCRS(sid)
 	require.NoError(t, err)
-	skA := rlwe.NewKeyGenerator(params.CKKS).GenSecretKeyNew()
-	pkProto := multiparty.NewPublicKeyGenProtocol(params.CKKS)
-	agentCRP := pkProto.SampleCRP(crs)
-	agentPKShare := pkProto.AllocateShare()
-	pkProto.GenShare(skA, agentCRP, &agentPKShare)
-	agentPKBytes, err := protocol.VAgentPKShare{Share: agentPKShare}.MarshalBinary()
+	skATop := rlwe.NewKeyGenerator(params.LLKN.Top()).GenSecretKeyNew()
+	skAEval, err := params.ProjectSKToEval(skATop)
+	require.NoError(t, err)
+	pkProtoEval := multiparty.NewPublicKeyGenProtocol(params.CKKS)
+	agentCRPEval := pkProtoEval.SampleCRP(crs)
+	agentPKShareEval := pkProtoEval.AllocateShare()
+	pkProtoEval.GenShare(skAEval, agentCRPEval, &agentPKShareEval)
+	pkProtoTop := multiparty.NewPublicKeyGenProtocol(params.LLKN.Top())
+	agentCRPTop := pkProtoTop.SampleCRP(crs)
+	agentPKShareTop := pkProtoTop.AllocateShare()
+	pkProtoTop.GenShare(skATop, agentCRPTop, &agentPKShareTop)
+	agentPKBytes, err := protocol.VAgentPKShare{
+		ShareEval: agentPKShareEval,
+		ShareTop:  agentPKShareTop,
+	}.MarshalBinary()
 	require.NoError(t, err)
 	require.NoError(t, AggregatePK(h, agentPKBytes))
 
@@ -302,6 +364,10 @@ func TestEncryptImageProducesValidCiphertext(t *testing.T) {
 
 func TestPartialDecryptRoundTrip(t *testing.T) {
 	params := smallParams(t)
+	decoded, err := ParseParamsJSON(paramsJSON(t, params))
+	require.NoError(t, err)
+	params = decoded
+
 	sid := protocol.SessionID("sid-pd")
 	h, err := NewClient(paramsJSON(t, params), string(sid))
 	require.NoError(t, err)
@@ -315,12 +381,21 @@ func TestPartialDecryptRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	crs, err := protocol.NewSessionCRS(sid)
 	require.NoError(t, err)
-	skA := rlwe.NewKeyGenerator(params.CKKS).GenSecretKeyNew()
-	pkProto := multiparty.NewPublicKeyGenProtocol(params.CKKS)
-	agentCRP := pkProto.SampleCRP(crs)
-	agentPKShare := pkProto.AllocateShare()
-	pkProto.GenShare(skA, agentCRP, &agentPKShare)
-	agentPKBytes, err := protocol.VAgentPKShare{Share: agentPKShare}.MarshalBinary()
+	skATop := rlwe.NewKeyGenerator(params.LLKN.Top()).GenSecretKeyNew()
+	skAEval, err := params.ProjectSKToEval(skATop)
+	require.NoError(t, err)
+	pkProtoEval := multiparty.NewPublicKeyGenProtocol(params.CKKS)
+	agentCRPEval := pkProtoEval.SampleCRP(crs)
+	agentPKShareEval := pkProtoEval.AllocateShare()
+	pkProtoEval.GenShare(skAEval, agentCRPEval, &agentPKShareEval)
+	pkProtoTop := multiparty.NewPublicKeyGenProtocol(params.LLKN.Top())
+	agentCRPTop := pkProtoTop.SampleCRP(crs)
+	agentPKShareTop := pkProtoTop.AllocateShare()
+	pkProtoTop.GenShare(skATop, agentCRPTop, &agentPKShareTop)
+	agentPKBytes, err := protocol.VAgentPKShare{
+		ShareEval: agentPKShareEval,
+		ShareTop:  agentPKShareTop,
+	}.MarshalBinary()
 	require.NoError(t, err)
 	require.NoError(t, AggregatePK(h, agentPKBytes))
 

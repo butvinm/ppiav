@@ -56,7 +56,7 @@ func TestPartialDecryptJointRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	zeroSk := rlwe.NewSecretKey(params.CKKS)
 	agentShare := agentProto.AllocateShare(ct.Level())
-	agentProto.GenShare(stub.skA, zeroSk, ct, &agentShare)
+	agentProto.GenShare(stub.skAEval, zeroSk, ct, &agentShare)
 
 	// Aggregate shares and apply key-switch on the agent side (any
 	// `KeySwitchProtocol` instance works for aggregation/KeySwitch — they

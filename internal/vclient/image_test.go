@@ -4,6 +4,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/butvinm/lattigo-hierkeys/llkn"
 	"github.com/butvinm/ppiav/internal/authenticator"
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/butvinm/ppiav/internal/testutil"
@@ -30,8 +31,12 @@ func imageParams(t *testing.T) protocol.Params {
 	}
 	ckksParams, err := ckks.NewParametersFromLiteral(lit)
 	require.NoError(t, err)
+	llknParams, err := llkn.NewParameters(ckksParams.Parameters, [][]int{{40}})
+	require.NoError(t, err)
 	return protocol.Params{
 		CKKS:          ckksParams,
+		LLKN:          llknParams,
+		LLKNBase:      protocol.DefaultLLKNBase,
 		Authenticator: authenticator.Config{Lambda: 8, Epsilon: math.Exp2(20)},
 		FloodSigma:    math.Exp2(16),
 	}

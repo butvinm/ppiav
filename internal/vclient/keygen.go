@@ -3,53 +3,98 @@ package vclient
 import (
 	"fmt"
 
+	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 	"github.com/tuneinsight/lattigo/v6/multiparty"
 )
 
-// GenPKShare runs the client side of Stage 2b. It instantiates the
-// multiparty PK protocol, draws the first CRP from the session CRS, and
-// produces sk_c's share. The CRP and the local share are stashed for
-// AggregatePK.
+// GenPKShare runs the client side of Stage 2b. It instantiates TWO
+// multiparty PK protocols — one at eval level, one at top level — draws
+// their CRPs from the session CRS in fixed order (eval first, then top),
+// and produces sk_c's shares against each. The CRPs and the local shares
+// are stashed for AggregatePK.
 //
-// CRS order: this is the FIRST draw from c.crs — RLK and Galois CRPs
-// follow in order. See docs/DESIGN.md §`internal/protocol`.
-func (c *Client) GenPKShare() (multiparty.PublicKeyGenShare, error) {
-	c.pkProto = multiparty.NewPublicKeyGenProtocol(c.params.CKKS)
-	c.pkCRP = c.pkProto.SampleCRP(c.crs)
-	c.pkShareLocal = c.pkProto.AllocateShare()
-	c.pkProto.GenShare(c.skShare, c.pkCRP, &c.pkShareLocal)
-	return c.pkShareLocal, nil
+// Why dual: the eval-level PK powers VClient's session encryptor and the
+// authenticator-side encryptor inside Auth. The top-level PK seeds
+// VService's `hierkeys.PubToRot` LevelExpansion (Phase 4 hierarchical key
+// derivation) — see docs/DESIGN.md §`internal/vservice`.
+//
+// CRS order: these are the FIRST TWO draws from c.crs (pk_eval, then
+// pk_top); RLK and per-atom Galois CRPs follow. See docs/DESIGN.md
+// §`internal/protocol`.
+func (c *Client) GenPKShare() (protocol.VClientPKShare, error) {
+	skEval, err := c.skEval()
+	if err != nil {
+		return protocol.VClientPKShare{}, err
+	}
+
+	// Eval-level PK share.
+	c.pkProtoEval = multiparty.NewPublicKeyGenProtocol(c.params.CKKS)
+	c.pkCRPEval = c.pkProtoEval.SampleCRP(c.crs)
+	c.pkShareLocalEval = c.pkProtoEval.AllocateShare()
+	c.pkProtoEval.GenShare(skEval, c.pkCRPEval, &c.pkShareLocalEval)
+
+	// Top-level PK share.
+	topParams := c.params.LLKN.Top()
+	c.pkProtoTop = multiparty.NewPublicKeyGenProtocol(topParams)
+	c.pkCRPTop = c.pkProtoTop.SampleCRP(c.crs)
+	c.pkShareLocalTop = c.pkProtoTop.AllocateShare()
+	c.pkProtoTop.GenShare(c.skTop, c.pkCRPTop, &c.pkShareLocalTop)
+
+	return protocol.VClientPKShare{
+		ShareEval: c.pkShareLocalEval,
+		ShareTop:  c.pkShareLocalTop,
+	}, nil
 }
 
-// AggregatePK combines the client share stashed by GenPKShare with
-// VAgent's matching share, finalises the aggregated public key, and
-// builds the per-session encryptor. EncryptImage is callable after this.
-func (c *Client) AggregatePK(agentShare multiparty.PublicKeyGenShare) error {
-	if c.pkCRP.Value.Q.Coeffs == nil {
+// AggregatePK combines the dual client shares stashed by GenPKShare with
+// VAgent's matching shares, finalises both the eval-level and top-level
+// aggregated public keys, and builds the per-session encryptor (against
+// the eval-level pk). EncryptImage is callable after this.
+func (c *Client) AggregatePK(agentShare protocol.VAgentPKShare) error {
+	if c.pkCRPEval.Value.Q.Coeffs == nil {
 		return fmt.Errorf("vclient: AggregatePK called before GenPKShare")
 	}
-	agg := c.pkProto.AllocateShare()
-	c.pkProto.AggregateShares(c.pkShareLocal, agentShare, &agg)
 
-	pk := rlwe.NewPublicKey(c.params.CKKS)
-	c.pkProto.GenPublicKey(agg, c.pkCRP, pk)
-	c.pkAgg = pk
-	c.encryptor = rlwe.NewEncryptor(c.params.CKKS, pk)
+	// Aggregate eval-level shares → pkEval.
+	aggEval := c.pkProtoEval.AllocateShare()
+	c.pkProtoEval.AggregateShares(c.pkShareLocalEval, agentShare.ShareEval, &aggEval)
+	pkEval := rlwe.NewPublicKey(c.params.CKKS)
+	c.pkProtoEval.GenPublicKey(aggEval, c.pkCRPEval, pkEval)
+	c.pkAgg = pkEval
+	c.encryptor = rlwe.NewEncryptor(c.params.CKKS, pkEval)
+
+	// Aggregate top-level shares → pkTop. Retained for inspection /
+	// downstream wire path; VAgent is the one that ships pk_top to
+	// VService inside InferEvalKeys.
+	aggTop := c.pkProtoTop.AllocateShare()
+	c.pkProtoTop.AggregateShares(c.pkShareLocalTop, agentShare.ShareTop, &aggTop)
+	pkTop := rlwe.NewPublicKey(c.params.LLKN.Top())
+	c.pkProtoTop.GenPublicKey(aggTop, c.pkCRPTop, pkTop)
+	c.pkTopAgg = pkTop
+
 	return nil
 }
 
 // GenRLKShareRound1 runs the client side of Stage 2c, round 1. It draws
-// the SECOND CRP from the session CRS (single CRP reused for both rounds,
-// per Lattigo's protocol shape) and produces sk_c's round-1 share. The
+// the next CRP from the session CRS (single CRP reused for both rounds,
+// per Lattigo's protocol shape) and produces sk_eval's round-1 share. The
 // CRP, the ephemeral sk_c, and the local share are stashed.
+//
+// The RLK protocol is EVAL-LEVEL — `skEval` (projected from `skTop`) is
+// the right secret-key arg; passing `skTop` would mismatch the protocol's
+// parameters and silently desync against VAgent.
 func (c *Client) GenRLKShareRound1() (multiparty.RelinearizationKeyGenShare, error) {
+	skEval, err := c.skEval()
+	if err != nil {
+		return multiparty.RelinearizationKeyGenShare{}, err
+	}
 	c.rlkProto = multiparty.NewRelinearizationKeyGenProtocol(c.params.CKKS)
 	c.rlkCRP = c.rlkProto.SampleCRP(c.crs)
 	ephSk, share1, _ := c.rlkProto.AllocateShare()
 	c.rlkEphSk = ephSk
 	c.rlkShare1Loc = share1
-	c.rlkProto.GenShareRoundOne(c.skShare, c.rlkCRP, c.rlkEphSk, &c.rlkShare1Loc)
+	c.rlkProto.GenShareRoundOne(skEval, c.rlkCRP, c.rlkEphSk, &c.rlkShare1Loc)
 	return c.rlkShare1Loc, nil
 }
 
@@ -63,50 +108,88 @@ func (c *Client) AggregateRLKRound1(agentShare multiparty.RelinearizationKeyGenS
 }
 
 // GenRLKShareRound2 runs the client side of Stage 2c, round 2. It uses
-// the cached round-1 aggregate and the stashed ephemeral sk. VClient does
-// not finalise the rlk locally — only VAgent and VService need it (per
-// docs/DESIGN.md §`internal/vclient`).
+// the cached round-1 aggregate, the stashed ephemeral sk, and the
+// eval-level projected `skEval`. VClient does not finalise the rlk locally
+// — only VAgent and VService need it (per docs/DESIGN.md §`internal/vclient`).
 func (c *Client) GenRLKShareRound2() (multiparty.RelinearizationKeyGenShare, error) {
 	if c.rlkEphSk == nil {
 		return multiparty.RelinearizationKeyGenShare{}, fmt.Errorf("vclient: GenRLKShareRound2 called before round 1")
 	}
+	skEval, err := c.skEval()
+	if err != nil {
+		return multiparty.RelinearizationKeyGenShare{}, err
+	}
 	_, _, share2 := c.rlkProto.AllocateShare()
-	c.rlkProto.GenShareRoundTwo(c.rlkEphSk, c.skShare, c.rlkShare1Agg, &share2)
+	c.rlkProto.GenShareRoundTwo(c.rlkEphSk, skEval, c.rlkShare1Agg, &share2)
 	return share2, nil
 }
 
-// GenGaloisShares produces one share per rotation label in
-// `c.params.RotationIndices()` (canonical `[1, lambda)` unioned with any
-// inference-circuit extras from the Orion manifest) in ascending order.
-// The CRPs are drawn from c.crs in label order — the THIRD-and-onward
-// draws.
+// GenAuthAndInferShares produces the two parallel share lists VAgent's
+// dual-atom-set Galois handshake consumes:
 //
-// Galois-element mapping: docs/DESIGN.md §`Implementation notes` and
-// internal/authenticator/authenticator.go validateGaloisKeys document that
-// Auth's step 4 uses `eval.RotateNew(ct, -j)` to place slot 0 at slot j
-// (Lattigo's RotateNew is LEFT-rotation). The required Galois element per
-// label j is therefore `params.GaloisElement(-j)` — VAgent applies the
-// same convention so the aggregated key matches what `Auth` expects.
+//   - Auth atoms (eval level, NEGATIVE Galois elements). One share per
+//     atom in `c.params.AuthAtoms()` (e.g. `{1,2,4,8,16,32,64}` for λ=128).
+//     `gkg = multiparty.NewGaloisKeyGenProtocol(c.params.CKKS)`. Secret-key
+//     arg is `skEval`. Each call uses `c.params.CKKS.GaloisElement(-atom)`.
+//     The aggregated keys are raw `*rlwe.GaloisKey`s used directly by the
+//     authenticator chain-rotation (no hierkeys conversion).
+//   - Infer atoms (top level, POSITIVE Galois elements). One share per
+//     atom in `c.params.InferAtoms()` (e.g. `{1,4,...,16384}` at LogN=16,
+//     base=4). `gkg = multiparty.NewGaloisKeyGenProtocol(c.params.LLKN.Top())`.
+//     Secret-key arg is `skTop`. Each call uses
+//     `c.params.LLKN.Top().GaloisElement(+atom)`. The aggregated keys are
+//     converted via `hierkeys.GaloisKeyToMasterKey` (VAgent's job) into
+//     the master-key bundle VService runs `hierkeys.LevelExpansion` over.
 //
-// The returned `labels` slice is parallel to `shares`: shares[k] is the
-// share for rotation label labels[k]. VAgent uses these labels when
-// aggregating and when binding each finalised GaloisKey to its element.
-func (c *Client) GenGaloisShares() ([]multiparty.GaloisKeyGenShare, []int, error) {
-	labels := c.params.RotationIndices()
-	if len(labels) == 0 {
-		return nil, nil, nil
+// CRS draw order: per the package contract, draws here follow pk_eval,
+// pk_top, rlk. First all `len(AuthAtoms())` auth CRPs are drawn at eval
+// level in ascending atom order, then all `len(InferAtoms())` infer CRPs
+// at top level in ascending atom order. VAgent draws in lockstep.
+//
+// The returned label slices are parallel to the share slices: `authShares[k]`
+// corresponds to `authLabels[k]`, similarly for infer.
+func (c *Client) GenAuthAndInferShares() (
+	authShares []multiparty.GaloisKeyGenShare,
+	inferShares []multiparty.GaloisKeyGenShare,
+	authLabels []int,
+	inferLabels []int,
+	err error,
+) {
+	skEval, err := c.skEval()
+	if err != nil {
+		return nil, nil, nil, nil, err
 	}
-	gkg := multiparty.NewGaloisKeyGenProtocol(c.params.CKKS)
-	shares := make([]multiparty.GaloisKeyGenShare, len(labels))
-	for i, j := range labels {
-		// Ascending-label CRP draw — order is part of the protocol contract.
-		crp := gkg.SampleCRP(c.crs)
-		share := gkg.AllocateShare()
-		galEl := c.params.CKKS.GaloisElement(-j)
-		if err := gkg.GenShare(c.skShare, galEl, crp, &share); err != nil {
-			return nil, nil, fmt.Errorf("vclient: GenShare for rotation label %d: %w", j, err)
+
+	authLabels = c.params.AuthAtoms()
+	authShares = make([]multiparty.GaloisKeyGenShare, len(authLabels))
+	if len(authLabels) > 0 {
+		gkgEval := multiparty.NewGaloisKeyGenProtocol(c.params.CKKS)
+		for i, a := range authLabels {
+			crp := gkgEval.SampleCRP(c.crs)
+			share := gkgEval.AllocateShare()
+			galEl := c.params.CKKS.GaloisElement(-a)
+			if err := gkgEval.GenShare(skEval, galEl, crp, &share); err != nil {
+				return nil, nil, nil, nil, fmt.Errorf("vclient: GenShare for auth atom %d: %w", a, err)
+			}
+			authShares[i] = share
 		}
-		shares[i] = share
 	}
-	return shares, labels, nil
+
+	inferLabels = c.params.InferAtoms()
+	inferShares = make([]multiparty.GaloisKeyGenShare, len(inferLabels))
+	if len(inferLabels) > 0 {
+		topParams := c.params.LLKN.Top()
+		gkgTop := multiparty.NewGaloisKeyGenProtocol(topParams)
+		for i, a := range inferLabels {
+			crp := gkgTop.SampleCRP(c.crs)
+			share := gkgTop.AllocateShare()
+			galEl := topParams.GaloisElement(+a)
+			if err := gkgTop.GenShare(c.skTop, galEl, crp, &share); err != nil {
+				return nil, nil, nil, nil, fmt.Errorf("vclient: GenShare for infer atom %d: %w", a, err)
+			}
+			inferShares[i] = share
+		}
+	}
+
+	return authShares, inferShares, authLabels, inferLabels, nil
 }

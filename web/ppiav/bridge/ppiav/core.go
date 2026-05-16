@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/butvinm/lattigo-hierkeys/llkn"
 	"github.com/butvinm/ppiav/internal/authenticator"
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/butvinm/ppiav/internal/vclient"
@@ -35,7 +36,10 @@ type paramsWire struct {
 }
 
 // ParseParamsJSON decodes the JSON written by vservice.writeParams into a
-// protocol.Params. Exported for tests.
+// protocol.Params. The LLKN hierarchy is reconstructed locally from the
+// decoded CKKS params using the canonical `DefaultLLKNLogPHK` schedule —
+// VService and the bridge MUST agree on the schedule, so we keep both
+// pinned in `protocol`. Exported for tests.
 func ParseParamsJSON(data []byte) (protocol.Params, error) {
 	var pw paramsWire
 	if err := json.Unmarshal(data, &pw); err != nil {
@@ -45,8 +49,14 @@ func ParseParamsJSON(data []byte) (protocol.Params, error) {
 	if err := ckksParams.UnmarshalJSON(pw.CKKS); err != nil {
 		return protocol.Params{}, fmt.Errorf("ppiav: decode CKKS params: %w", err)
 	}
+	llknParams, err := llkn.NewParameters(ckksParams.Parameters, [][]int{protocol.DefaultLLKNLogPHK})
+	if err != nil {
+		return protocol.Params{}, fmt.Errorf("ppiav: build LLKN parameters: %w", err)
+	}
 	return protocol.Params{
-		CKKS: ckksParams,
+		CKKS:     ckksParams,
+		LLKN:     llknParams,
+		LLKNBase: protocol.DefaultLLKNBase,
 		Authenticator: authenticator.Config{
 			Lambda:  pw.AuthenticatorLambda,
 			Epsilon: pw.AuthenticatorEpsilon,
@@ -97,7 +107,7 @@ func loadClient(h uint64) (*vclient.Client, error) {
 }
 
 // GenPKShare runs Stage 2b on the client and returns the marshaled
-// VClientPKShare bytes.
+// VClientPKShare bytes (dual eval+top shares; see protocol.VClientPKShare).
 func GenPKShare(h uint64) ([]byte, error) {
 	c, err := loadClient(h)
 	if err != nil {
@@ -107,15 +117,16 @@ func GenPKShare(h uint64) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ppiav: GenPKShare: %w", err)
 	}
-	out, err := protocol.VClientPKShare{Share: share}.MarshalBinary()
+	out, err := share.MarshalBinary()
 	if err != nil {
 		return nil, fmt.Errorf("ppiav: marshal VClientPKShare: %w", err)
 	}
 	return out, nil
 }
 
-// AggregatePK consumes the agent's marshaled VAgentPKShare bytes and
-// finalises the aggregated pk on the client.
+// AggregatePK consumes the agent's marshaled VAgentPKShare bytes (dual
+// eval+top shares) and finalises both aggregated public keys on the
+// client.
 func AggregatePK(h uint64, agentShareBytes []byte) error {
 	c, err := loadClient(h)
 	if err != nil {
@@ -125,7 +136,7 @@ func AggregatePK(h uint64, agentShareBytes []byte) error {
 	if err := msg.UnmarshalBinary(agentShareBytes); err != nil {
 		return fmt.Errorf("ppiav: unmarshal VAgentPKShare: %w", err)
 	}
-	if err := c.AggregatePK(msg.Share); err != nil {
+	if err := c.AggregatePK(msg); err != nil {
 		return fmt.Errorf("ppiav: AggregatePK: %w", err)
 	}
 	return nil
@@ -184,25 +195,30 @@ func GenRLKShareRound2(h uint64) ([]byte, error) {
 	return out, nil
 }
 
-// GenGaloisShares runs Stage 2d and returns the marshaled
-// VClientGaloisKeyShare bytes (length-prefixed concatenation of all
-// per-rotation shares in canonical label order).
-func GenGaloisShares(h uint64) ([]byte, error) {
+// GenAuthAndInferShares runs Stage 2d (dual atom-set Galois handshake)
+// and returns the marshaled VClientGaloisShares bytes — two
+// length-prefixed share lists, auth atoms first (eval level, ascending),
+// then infer atoms (top level, ascending). The JS-visible namespace key
+// stays `"genGaloisShares"` (see ppiav.go) so the TS client doesn't
+// need a coordinated rename.
+func GenAuthAndInferShares(h uint64) ([]byte, error) {
 	c, err := loadClient(h)
 	if err != nil {
 		return nil, err
 	}
-	shares, _, err := c.GenGaloisShares()
+	authShares, inferShares, _, _, err := c.GenAuthAndInferShares()
 	if err != nil {
-		return nil, fmt.Errorf("ppiav: GenGaloisShares: %w", err)
+		return nil, fmt.Errorf("ppiav: GenAuthAndInferShares: %w", err)
 	}
-	// vclient.GenGaloisShares can legitimately return (nil, nil, nil) when
-	// the canonical rotation set is empty (Lambda<=1). Allow that — the
-	// resulting marshal is a 4-byte zero count.
-	msg := protocol.VClientGaloisKeyShare{Shares: shares}
+	// Either list may legitimately be empty (e.g. Lambda<=1 → no auth
+	// atoms). The wire encoding handles both lists independently.
+	msg := protocol.VClientGaloisShares{
+		AuthAtomShares:  authShares,
+		InferAtomShares: inferShares,
+	}
 	out, err := msg.MarshalBinary()
 	if err != nil {
-		return nil, fmt.Errorf("ppiav: marshal VClientGaloisKeyShare: %w", err)
+		return nil, fmt.Errorf("ppiav: marshal VClientGaloisShares: %w", err)
 	}
 	return out, nil
 }
