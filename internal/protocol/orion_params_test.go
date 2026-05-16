@@ -43,7 +43,7 @@ func TestLoadOrionParams(t *testing.T) {
 	assert.Equal(t, defaults.LLKN.Top().QCount(), params.LLKN.Top().QCount())
 	assert.Equal(t, defaults.LLKN.Top().PCount(), params.LLKN.Top().PCount())
 	assert.Equal(t, defaults.AuthAtoms(), params.AuthAtoms())
-	assert.Equal(t, defaults.InferAtoms(), params.InferAtoms())
+	assert.Equal(t, defaults.MasterAtoms(), params.MasterAtoms())
 }
 
 func TestLoadOrionParams_MissingFile(t *testing.T) {

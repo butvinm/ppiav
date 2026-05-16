@@ -122,46 +122,37 @@ type VClientRLKRound2 struct {
 func (s VClientRLKRound2) MarshalBinary() ([]byte, error)     { return s.Share.MarshalBinary() }
 func (s *VClientRLKRound2) UnmarshalBinary(data []byte) error { return s.Share.UnmarshalBinary(data) }
 
-// Stage 2d: Galois-key share exchange (VClient → VAgent). The dual-atom-set
-// design splits the emitted shares per consumer:
+// Stage 2d: Galois-key share exchange (VClient → VAgent). Single master
+// atom set: one share per atom in `Params.MasterAtoms()` (e.g.
+// `{1,4,16,...,16384}` at LogN=16, base=4). Top-level handshake,
+// **positive** Galois elements (`params.LLKN.Top().GaloisElement(+atom)`).
+// VAgent aggregates and converts each share via
+// `hierkeys.GaloisKeyToMasterKey` into the master-key bundle that powers
+// both: (a) the local LevelExpansion derivation of the auth-atom keys
+// (negative direction) consumed by VAgent's authenticator, and (b) the
+// wire payload shipped to VService for its inference-side rotation set.
 //
-//   - `AuthAtomShares` — one share per atom in `Params.AuthAtoms()` (e.g.
-//     `{1,2,4,8,16,32,64}` for λ=128). Eval-level handshake, **negative**
-//     Galois elements (`params.CKKS.GaloisElement(-atom)`). Aggregated into
-//     raw `*rlwe.GaloisKey`s that VAgent's authenticator chain-rotates over.
-//   - `InferAtomShares` — one share per atom in `Params.InferAtoms()` (e.g.
-//     `{1,4,16,...,16384}` at LogN=16, base=4). Top-level handshake,
-//     **positive** Galois elements (`params.LLKN.Top().GaloisElement(+atom)`).
-//     Aggregated and converted via `hierkeys.GaloisKeyToMasterKey` into the
-//     master-key bundle VAgent forwards to VService.
-//
-// Wire layout: 4-byte big-endian auth count, then for each auth share a
-// 4-byte big-endian length prefix followed by the share bytes; then 4-byte
-// big-endian infer count, then for each infer share a 4-byte big-endian
-// length prefix followed by the share bytes. Order within each list is the
-// ascending order Tasks 2/3 pin (`AuthAtoms()`/`InferAtoms()`).
+// Wire layout: 4-byte big-endian count, then for each share a 4-byte
+// big-endian length prefix followed by the share bytes. Order is the
+// ascending atom order `MasterAtoms()` pins.
 type VClientGaloisShares struct {
-	AuthAtomShares  []multiparty.GaloisKeyGenShare
-	InferAtomShares []multiparty.GaloisKeyGenShare
+	MasterShares []multiparty.GaloisKeyGenShare
 }
 
 func (s VClientGaloisShares) MarshalBinary() ([]byte, error) {
-	authParts, authTotal, err := marshalGaloisShareList(s.AuthAtomShares, "auth")
-	if err != nil {
-		return nil, err
+	parts := make([][]byte, len(s.MasterShares))
+	total := 4
+	for i := range s.MasterShares {
+		b, err := s.MasterShares[i].MarshalBinary()
+		if err != nil {
+			return nil, fmt.Errorf("VClientGaloisShares: marshal master share %d: %w", i, err)
+		}
+		parts[i] = b
+		total += 4 + len(b)
 	}
-	inferParts, inferTotal, err := marshalGaloisShareList(s.InferAtomShares, "infer")
-	if err != nil {
-		return nil, err
-	}
-	out := make([]byte, 0, 8+authTotal+inferTotal)
-	out = binary.BigEndian.AppendUint32(out, uint32(len(s.AuthAtomShares)))
-	for _, p := range authParts {
-		out = binary.BigEndian.AppendUint32(out, uint32(len(p)))
-		out = append(out, p...)
-	}
-	out = binary.BigEndian.AppendUint32(out, uint32(len(s.InferAtomShares)))
-	for _, p := range inferParts {
+	out := make([]byte, 0, total)
+	out = binary.BigEndian.AppendUint32(out, uint32(len(s.MasterShares)))
+	for _, p := range parts {
 		out = binary.BigEndian.AppendUint32(out, uint32(len(p)))
 		out = append(out, p...)
 	}
@@ -169,78 +160,46 @@ func (s VClientGaloisShares) MarshalBinary() ([]byte, error) {
 }
 
 func (s *VClientGaloisShares) UnmarshalBinary(data []byte) error {
-	auth, off, err := unmarshalGaloisShareList(data, 0, "auth")
-	if err != nil {
-		return err
+	if len(data) < 4 {
+		return fmt.Errorf("VClientGaloisShares: short header")
 	}
-	infer, off, err := unmarshalGaloisShareList(data, off, "infer")
-	if err != nil {
-		return err
-	}
-	if off != len(data) {
-		return fmt.Errorf("VClientGaloisShares: trailing bytes (%d unread)", len(data)-off)
-	}
-	s.AuthAtomShares = auth
-	s.InferAtomShares = infer
-	return nil
-}
-
-// marshalGaloisShareList returns the per-share marshaled bytes (so the
-// caller can length-prefix them inline) plus the total byte count
-// including the 4-byte count header that prefixes the list.
-func marshalGaloisShareList(shares []multiparty.GaloisKeyGenShare, label string) ([][]byte, int, error) {
-	parts := make([][]byte, len(shares))
-	total := 4
-	for i := range shares {
-		b, err := shares[i].MarshalBinary()
-		if err != nil {
-			return nil, 0, fmt.Errorf("VClientGaloisShares: marshal %s share %d: %w", label, i, err)
-		}
-		parts[i] = b
-		total += 4 + len(b)
-	}
-	return parts, total, nil
-}
-
-// unmarshalGaloisShareList decodes one length-prefixed share list starting
-// at `off` and returns the decoded slice, the new offset, and any error.
-// Each list is preceded by a 4-byte big-endian count and followed by
-// `count` length-prefixed shares. The count is bounded against the
-// remaining payload so a malformed header cannot trigger a multi-GiB
-// allocation (see `TestVClientGaloisSharesUnmarshalCountExceedsPayload`).
-func unmarshalGaloisShareList(data []byte, off int, label string) ([]multiparty.GaloisKeyGenShare, int, error) {
-	if off+4 > len(data) {
-		return nil, 0, fmt.Errorf("VClientGaloisShares: short %s header", label)
-	}
-	count := binary.BigEndian.Uint32(data[off : off+4])
-	off += 4
+	count := binary.BigEndian.Uint32(data[0:4])
+	off := 4
+	// Bound the count against the remaining payload so a malformed
+	// header cannot trigger a multi-GiB allocation (matches the existing
+	// reject-on-short-body guard).
 	if uint64(count) > uint64((len(data)-off)/4) {
-		return nil, 0, fmt.Errorf("VClientGaloisShares: %s count %d exceeds remaining bytes %d", label, count, len(data)-off)
+		return fmt.Errorf("VClientGaloisShares: master count %d exceeds remaining bytes %d", count, len(data)-off)
 	}
 	shares := make([]multiparty.GaloisKeyGenShare, count)
 	for i := uint32(0); i < count; i++ {
 		if off+4 > len(data) {
-			return nil, 0, fmt.Errorf("VClientGaloisShares: short %s length prefix at share %d", label, i)
+			return fmt.Errorf("VClientGaloisShares: short length prefix at master share %d", i)
 		}
 		n := int(binary.BigEndian.Uint32(data[off : off+4]))
 		off += 4
 		if off+n > len(data) {
-			return nil, 0, fmt.Errorf("VClientGaloisShares: short %s body at share %d", label, i)
+			return fmt.Errorf("VClientGaloisShares: short body at master share %d", i)
 		}
 		if err := shares[i].UnmarshalBinary(data[off : off+n]); err != nil {
-			return nil, 0, fmt.Errorf("VClientGaloisShares: unmarshal %s share %d: %w", label, i, err)
+			return fmt.Errorf("VClientGaloisShares: unmarshal master share %d: %w", i, err)
 		}
 		off += n
 	}
-	return shares, off, nil
+	if off != len(data) {
+		return fmt.Errorf("VClientGaloisShares: trailing bytes (%d unread)", len(data)-off)
+	}
+	s.MasterShares = shares
+	return nil
 }
 
 // InferEvalKeys carries VAgent → VService Stage-2d forward payload: the
 // aggregated eval-level relinearization key, the aggregated top-level
 // public key (consumed by `hierkeys.PubToRot` to seed VService's
 // `LevelExpansion`), and the master Galois-key bundle keyed by ascending
-// positive infer atom. VAgent's auth-side raw `*rlwe.GaloisKey`s are NOT
-// included — they stay inside the VAgent session.
+// positive master atom. VAgent and VService both consume the same master
+// bundle (VAgent for auth-atom derivation, VService for the inference
+// rotation set); the wire payload is identical.
 //
 // Wire layout (length-prefixed sections, all big-endian unsigned):
 //
@@ -250,9 +209,9 @@ func unmarshalGaloisShareList(data []byte, off int, label string) ([]multiparty.
 //   - 4-byte signed atom (`int32` cast to `uint32`)
 //   - 4-byte master-key length, master-key bytes
 type InferEvalKeys struct {
-	RLK            *rlwe.RelinearizationKey
-	PKTop          *rlwe.PublicKey
-	GKSMasterInfer map[int]*hierkeys.MasterKey
+	RLK       *rlwe.RelinearizationKey
+	PKTop     *rlwe.PublicKey
+	GKSMaster map[int]*hierkeys.MasterKey
 }
 
 func (k InferEvalKeys) MarshalBinary() ([]byte, error) {
@@ -271,8 +230,8 @@ func (k InferEvalKeys) MarshalBinary() ([]byte, error) {
 		return nil, fmt.Errorf("InferEvalKeys: marshal PKTop: %w", err)
 	}
 
-	atoms := make([]int, 0, len(k.GKSMasterInfer))
-	for a := range k.GKSMasterInfer {
+	atoms := make([]int, 0, len(k.GKSMaster))
+	for a := range k.GKSMaster {
 		atoms = append(atoms, a)
 	}
 	sort.Ints(atoms)
@@ -284,7 +243,7 @@ func (k InferEvalKeys) MarshalBinary() ([]byte, error) {
 	parts := make([]masterBytes, 0, len(atoms))
 	total := 4 + len(rlkBytes) + 4 + len(pkBytes) + 4
 	for _, a := range atoms {
-		mk := k.GKSMasterInfer[a]
+		mk := k.GKSMaster[a]
 		if mk == nil {
 			return nil, fmt.Errorf("InferEvalKeys: nil MasterKey for atom %d", a)
 		}
@@ -389,7 +348,7 @@ func (k *InferEvalKeys) UnmarshalBinary(data []byte) error {
 
 	k.RLK = rlk
 	k.PKTop = pk
-	k.GKSMasterInfer = out
+	k.GKSMaster = out
 	return nil
 }
 

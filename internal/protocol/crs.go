@@ -14,21 +14,21 @@
 //     — pk_eval (eval-level public key, used for encryption).
 //  2. `multiparty.NewPublicKeyGenProtocol(params.LLKN.Top()).SampleCRP(crs)`
 //     — pk_top (top-level public key, fed into `hierkeys.PubToRot` to
-//     seed VService's `LevelExpansion`).
+//     seed both VAgent's and VService's `LevelExpansion`).
 //  3. `multiparty.NewRelinearizationKeyGenProtocol(params.CKKS).SampleCRP(crs, evkParams)`
 //     — single CRP reused for both RLK rounds (Lattigo's protocol shape).
-//  4. For each atom in `params.AuthAtoms()` (ascending):
-//     `multiparty.NewGaloisKeyGenProtocol(params.CKKS).SampleCRP(crs, evkParams)`
-//     — eval-level Galois CRP for VAgent's auth-side atom set.
-//  5. For each atom in `params.InferAtoms()` (ascending):
+//  4. For each atom in `params.MasterAtoms()` (ascending):
 //     `multiparty.NewGaloisKeyGenProtocol(params.LLKN.Top()).SampleCRP(crs, evkParams)`
-//     — top-level Galois CRP for VService's inference-side master atom set.
+//     — top-level Galois CRP for the SINGLE master atom set consumed by
+//     both VAgent (auth-atom derivation) and VService (infer-atom
+//     derivation).
 //
 // Steps 1 and 3 are eval-level and byte-for-byte identical to the
-// pre-hierkeys protocol; steps 2, 4 and 5 are introduced by the
-// lattigo-hierkeys split for the LLKN hierarchy. The two atom sets are
-// disjoint mechanisms: auth atoms produce raw `*rlwe.GaloisKey`s (no
-// hierarchical derivation), infer atoms produce `*hierkeys.MasterKey`s.
+// pre-hierkeys protocol; steps 2 and 4 are introduced by the
+// lattigo-hierkeys split for the LLKN hierarchy. There is only one wire
+// atom set (`MasterAtoms()`): the auth-atom and infer-atom rotation keys
+// are derived locally by VAgent and VService respectively from the
+// shared master atom set via `hierkeys.LevelExpansion`.
 // See `docs/DESIGN.md` for the level-dimension rationale.
 package protocol
 
@@ -45,8 +45,8 @@ const crsDomain = "ppiav-crs/v1"
 // from the session id. Both VClient and VAgent construct it identically;
 // no CRS material crosses the wire. See docs/DESIGN.md §`internal/protocol`.
 //
-// Steps 4/5 of the canonical CRP draw order iterate `Params.AuthAtoms()`
-// and `Params.InferAtoms()` respectively (see package doc above).
+// Step 4 of the canonical CRP draw order iterates `Params.MasterAtoms()`
+// (see package doc above).
 func NewSessionCRS(sid SessionID) (*sampling.KeyedPRNG, error) {
 	prng, err := sampling.NewKeyedPRNG([]byte(crsDomain + "|" + string(sid)))
 	if err != nil {

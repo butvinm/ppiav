@@ -79,20 +79,19 @@ func smallParamsForCRSTest(t *testing.T) Params {
 	}
 }
 
-// canonicalDrawAll runs the 5-step canonical CRP draw against a CRS and
+// canonicalDrawAll runs the 4-step canonical CRP draw against a CRS and
 // returns the binary-serialized CRP bytes per step. The order mirrors the
 // package doc-comment in `crs.go`; this helper is the executable
 // reference for "both parties consume the CRS identically".
 //
 // Returned slice layout:
-//   - [0]:                       pk_eval CRP
-//   - [1]:                       pk_top  CRP
-//   - [2]:                       rlk     CRP
-//   - [3 .. 3+|auth|):           one Galois CRP per ascending auth atom (eval-level)
-//   - [3+|auth| .. end):         one Galois CRP per ascending infer atom (top-level)
+//   - [0]:                     pk_eval CRP
+//   - [1]:                     pk_top  CRP
+//   - [2]:                     rlk     CRP
+//   - [3 .. 3+|master|):       one Galois CRP per ascending master atom (top-level)
 func canonicalDrawAll(t *testing.T, params Params, crs *sampling.KeyedPRNG) [][]byte {
 	t.Helper()
-	out := make([][]byte, 0, 3+len(params.AuthAtoms())+len(params.InferAtoms()))
+	out := make([][]byte, 0, 3+len(params.MasterAtoms()))
 
 	// Step 1: pk_eval — eval-level public key.
 	pkEval := multiparty.NewPublicKeyGenProtocol(params.CKKS)
@@ -115,18 +114,9 @@ func canonicalDrawAll(t *testing.T, params Params, crs *sampling.KeyedPRNG) [][]
 	require.NoError(t, err)
 	out = append(out, b)
 
-	// Step 4: auth atoms ascending — eval-level Galois CRPs.
-	gkgEval := multiparty.NewGaloisKeyGenProtocol(params.CKKS)
-	for range params.AuthAtoms() {
-		crp := gkgEval.SampleCRP(crs)
-		b, err := crp.Value.MarshalBinary()
-		require.NoError(t, err)
-		out = append(out, b)
-	}
-
-	// Step 5: infer atoms ascending — top-level Galois CRPs.
+	// Step 4: master atoms ascending — top-level Galois CRPs.
 	gkgTop := multiparty.NewGaloisKeyGenProtocol(params.LLKN.Top())
-	for range params.InferAtoms() {
+	for range params.MasterAtoms() {
 		crp := gkgTop.SampleCRP(crs)
 		b, err := crp.Value.MarshalBinary()
 		require.NoError(t, err)
@@ -138,9 +128,7 @@ func canonicalDrawAll(t *testing.T, params Params, crs *sampling.KeyedPRNG) [][]
 
 // drawLabel returns a human-readable name for the n-th canonical draw —
 // used in test failures so a regression points at the exact step.
-func drawLabel(params Params, n int) string {
-	authStart := 3
-	authEnd := authStart + len(params.AuthAtoms())
+func drawLabel(_ Params, n int) string {
 	switch {
 	case n == 0:
 		return "pk_eval"
@@ -148,10 +136,8 @@ func drawLabel(params Params, n int) string {
 		return "pk_top"
 	case n == 2:
 		return "rlk"
-	case n < authEnd:
-		return "auth_atom"
 	default:
-		return "infer_atom"
+		return "master_atom"
 	}
 }
 
@@ -174,8 +160,8 @@ func TestCRSDrawOrderLockstep(t *testing.T) {
 	require.NoError(t, err)
 	agentDraws := canonicalDrawAll(t, params, agentCRS)
 
-	// Step count: 1 (pk_eval) + 1 (pk_top) + 1 (rlk) + |auth| + |infer|.
-	expectedSteps := 3 + len(params.AuthAtoms()) + len(params.InferAtoms())
+	// Step count: 1 (pk_eval) + 1 (pk_top) + 1 (rlk) + |master|.
+	expectedSteps := 3 + len(params.MasterAtoms())
 	require.Len(t, clientDraws, expectedSteps)
 	require.Len(t, agentDraws, expectedSteps)
 

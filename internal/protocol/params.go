@@ -46,9 +46,12 @@ const DefaultLLKNBase = 4
 // `ExtraRotationIndices` carries the inference-circuit labels (already in
 // the signed-label convention above) on top of the authenticator's
 // canonical positive set. The `Defaults()` caller leaves it nil; the
-// Orion path populates it via `vservice.NewWithOrion`. The auth-side and
-// infer-side handshakes iterate the disjoint atom sets returned by
-// `Params.AuthAtoms()` and `Params.InferAtoms()` respectively.
+// Orion path populates it via `vservice.NewWithOrion`. The single master
+// atom set returned by `Params.MasterAtoms()` is shipped on the wire and
+// consumed by both VAgent (to derive negative auth-atom keys at eval
+// level) and VService (to derive Orion's signed-label rotation set at
+// eval level). `Params.AuthAtoms()` reports the negative-direction
+// auth-atom targets VAgent derives locally at session open.
 //
 // `InputLevel` is the ciphertext level at which `EncryptImage` produces
 // the encrypted input. The synthetic-x² path leaves it zero, which
@@ -125,8 +128,11 @@ func BuildLLKNParams(p ckks.Parameters) (llkn.Parameters, error) {
 // `Lambda`. Auth rotates by `-j` for `j ∈ [1, Lambda)`; each `j` is
 // decomposed via `popcount` and the chain calls
 // `GaloisElement(-atom)` per bit set. The set is **eval-level** and lives
-// outside the lattigo-hierkeys hierarchy — the keys minted from these
-// atoms are raw `*rlwe.GaloisKey`s, used directly by `*ckks.Evaluator`.
+// outside the wire payload: VAgent derives one `*rlwe.GaloisKey` per
+// `-atom` locally at session open via `hierkeys.LevelExpansion.Derive`
+// against the wire-transported master atom set returned by `MasterAtoms()`.
+// These derived keys are used directly by `*ckks.Evaluator` for the
+// chain rotation in `authenticator.Auth`.
 func (p Params) AuthAtoms() []int {
 	if p.Authenticator.Lambda <= 1 {
 		return nil
@@ -139,22 +145,24 @@ func (p Params) AuthAtoms() []int {
 	return out
 }
 
-// InferAtoms returns the ascending base-`LLKNBase` master atom set used
-// by VService's inference-side hierarchical key derivation. At LogN=16
-// with `LLKNBase=4` the set is `{1, 4, 16, 64, 256, 1024, 4096, 16384}`
+// MasterAtoms returns the ascending base-`LLKNBase` master atom set
+// shipped on the wire (the SINGLE master set). At LogN=16 with
+// `LLKNBase=4` the set is `{1, 4, 16, 64, 256, 1024, 4096, 16384}`
 // (8 atoms across the half-slot range). These atoms are emitted with
 // **positive** Galois elements per the hierkeys convention and live at
-// the **top** level of the LLKN hierarchy. VService runs
-// `hierkeys.LevelExpansion` over this set to derive the full per-target
-// inference key bundle locally.
+// the **top** level of the LLKN hierarchy. Both VAgent and VService run
+// `hierkeys.LevelExpansion` over this set to derive their respective
+// per-target rotation key bundles locally: VAgent for the auth-atom
+// negatives (`-1, -2, ..., -(Lambda/2)`), VService for the Orion-circuit
+// signed-label rotation set.
 //
 // `LLKNBase < 2` is invalid and panics — every production caller stamps
 // `LLKNBase: DefaultLLKNBase` via `Defaults()` / `LoadOrionParams()`, so
 // a zero value indicates a constructed-from-scratch params bug rather
 // than something to paper over with a fallback.
-func (p Params) InferAtoms() []int {
+func (p Params) MasterAtoms() []int {
 	if p.LLKNBase < 2 {
-		panic(fmt.Sprintf("protocol: Params.InferAtoms: LLKNBase=%d < 2 (set LLKNBase: DefaultLLKNBase)", p.LLKNBase))
+		panic(fmt.Sprintf("protocol: Params.MasterAtoms: LLKNBase=%d < 2 (set LLKNBase: DefaultLLKNBase)", p.LLKNBase))
 	}
 	return hierkeys.MasterRotationsForBase(p.LLKNBase, p.CKKS.MaxSlots())
 }

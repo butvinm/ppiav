@@ -69,22 +69,22 @@ func TestParams_AuthAtoms_VariedLambda(t *testing.T) {
 	}
 }
 
-func TestParams_InferAtoms_DefaultsBase4LogN16(t *testing.T) {
+func TestParams_MasterAtoms_DefaultsBase4LogN16(t *testing.T) {
 	params, err := Defaults()
 	require.NoError(t, err)
 
 	// MaxSlots=32768, base=4 → {1,4,16,64,256,1024,4096,16384}.
 	want := []int{1, 4, 16, 64, 256, 1024, 4096, 16384}
-	assert.Equal(t, want, params.InferAtoms())
+	assert.Equal(t, want, params.MasterAtoms())
 }
 
-func TestParams_InferAtoms_PanicsWhenBaseUnset(t *testing.T) {
+func TestParams_MasterAtoms_PanicsWhenBaseUnset(t *testing.T) {
 	params, err := Defaults()
 	require.NoError(t, err)
 	params.LLKNBase = 0
 	// Constructed-from-scratch params with LLKNBase < 2 is a programmer
 	// error — every production site stamps LLKNBase: DefaultLLKNBase.
-	assert.Panics(t, func() { _ = params.InferAtoms() })
+	assert.Panics(t, func() { _ = params.MasterAtoms() })
 }
 
 func TestParams_ProjectSKToEval_RoundTrip(t *testing.T) {

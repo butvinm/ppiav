@@ -224,18 +224,16 @@ func TestVClientGaloisSharesBinaryRoundTrip(t *testing.T) {
 	eval := smallCKKS(t)
 	top := smallLLKN(t, eval)
 
-	auth := galoisSharesForAtoms(t, eval.Parameters, []int{1, 2, 4}, -1)
-	infer := galoisSharesForAtoms(t, top.Top(), []int{1, 4, 16}, +1)
+	master := galoisSharesForAtoms(t, top.Top(), []int{1, 4, 16}, +1)
 
-	original := VClientGaloisShares{AuthAtomShares: auth, InferAtomShares: infer}
+	original := VClientGaloisShares{MasterShares: master}
 	data, err := original.MarshalBinary()
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
 
 	var got VClientGaloisShares
 	require.NoError(t, got.UnmarshalBinary(data))
-	require.Len(t, got.AuthAtomShares, len(auth))
-	require.Len(t, got.InferAtomShares, len(infer))
+	require.Len(t, got.MasterShares, len(master))
 
 	again, err := got.MarshalBinary()
 	require.NoError(t, err)
@@ -247,25 +245,23 @@ func TestVClientGaloisSharesUnmarshalShortHeader(t *testing.T) {
 	require.Error(t, got.UnmarshalBinary([]byte{0x00, 0x01}))
 }
 
-// Both share lists may be empty: marshal/unmarshal must round-trip the
-// "no atoms" boundary cleanly (8 zero bytes — auth count 0, infer count 0).
+// An empty share list must round-trip cleanly (4 zero bytes — master count 0).
 func TestVClientGaloisSharesUnmarshalEmpty(t *testing.T) {
 	original := VClientGaloisShares{}
 	data, err := original.MarshalBinary()
 	require.NoError(t, err)
-	require.Equal(t, []byte{0, 0, 0, 0, 0, 0, 0, 0}, data)
+	require.Equal(t, []byte{0, 0, 0, 0}, data)
 
 	var got VClientGaloisShares
 	require.NoError(t, got.UnmarshalBinary(data))
-	assert.Empty(t, got.AuthAtomShares)
-	assert.Empty(t, got.InferAtomShares)
+	assert.Empty(t, got.MasterShares)
 }
 
 // A malicious header that claims many more shares than the remaining
 // payload can possibly contain must be rejected before the
 // `make([]GaloisKeyGenShare, count)` allocation runs.
 func TestVClientGaloisSharesUnmarshalCountExceedsPayload(t *testing.T) {
-	// auth count = 0xFFFFFFFF, no further bytes → 1 byte after the header.
+	// master count = 0xFFFFFFFF, no further bytes → 1 byte after the header.
 	data := []byte{0xff, 0xff, 0xff, 0xff, 0x00}
 	var got VClientGaloisShares
 	require.Error(t, got.UnmarshalBinary(data))
@@ -304,7 +300,7 @@ func buildInferEvalKeysFixture(t *testing.T, atoms []int) (InferEvalKeys, ckks.P
 		masterKeys[a] = mk
 	}
 
-	return InferEvalKeys{RLK: rlk, PKTop: pkTop, GKSMasterInfer: masterKeys}, eval, top
+	return InferEvalKeys{RLK: rlk, PKTop: pkTop, GKSMaster: masterKeys}, eval, top
 }
 
 func TestInferEvalKeysBinaryRoundTrip(t *testing.T) {
@@ -319,12 +315,12 @@ func TestInferEvalKeysBinaryRoundTrip(t *testing.T) {
 	require.NoError(t, got.UnmarshalBinary(data))
 	require.NotNil(t, got.RLK)
 	require.NotNil(t, got.PKTop)
-	require.Len(t, got.GKSMasterInfer, len(atoms))
+	require.Len(t, got.GKSMaster, len(atoms))
 
 	// Each atom survives round-trip, keyed identically, and its underlying
 	// Galois element matches `top.GaloisElement(+atom)`.
 	for _, a := range atoms {
-		mk, ok := got.GKSMasterInfer[a]
+		mk, ok := got.GKSMaster[a]
 		require.Truef(t, ok, "atom %d missing after round-trip", a)
 		require.NotNil(t, mk)
 		assert.Equalf(t, top.Top().GaloisElement(a), mk.GaloisElement(),
@@ -348,7 +344,7 @@ func TestInferEvalKeysMarshalRejectsNilRLK(t *testing.T) {
 	skTop := rlwe.NewKeyGenerator(top.Top()).GenSecretKeyNew()
 	pkTop := rlwe.NewKeyGenerator(top.Top()).GenPublicKeyNew(skTop)
 
-	k := InferEvalKeys{RLK: nil, PKTop: pkTop, GKSMasterInfer: map[int]*hierkeys.MasterKey{}}
+	k := InferEvalKeys{RLK: nil, PKTop: pkTop, GKSMaster: map[int]*hierkeys.MasterKey{}}
 	_, err := k.MarshalBinary()
 	require.Error(t, err)
 }
@@ -358,7 +354,7 @@ func TestInferEvalKeysMarshalRejectsNilPKTop(t *testing.T) {
 	sk := rlwe.NewKeyGenerator(eval).GenSecretKeyNew()
 	rlk := rlwe.NewKeyGenerator(eval).GenRelinearizationKeyNew(sk)
 
-	k := InferEvalKeys{RLK: rlk, PKTop: nil, GKSMasterInfer: map[int]*hierkeys.MasterKey{}}
+	k := InferEvalKeys{RLK: rlk, PKTop: nil, GKSMaster: map[int]*hierkeys.MasterKey{}}
 	_, err := k.MarshalBinary()
 	require.Error(t, err)
 }
@@ -373,7 +369,7 @@ func TestInferEvalKeysEmptyMasterMap(t *testing.T) {
 	require.NoError(t, got.UnmarshalBinary(data))
 	assert.NotNil(t, got.RLK)
 	assert.NotNil(t, got.PKTop)
-	assert.Empty(t, got.GKSMasterInfer)
+	assert.Empty(t, got.GKSMaster)
 }
 
 // EncryptedImage and AuthenticatedResult marshal as the bare
