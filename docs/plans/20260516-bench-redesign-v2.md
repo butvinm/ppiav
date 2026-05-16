@@ -325,56 +325,56 @@ The bench-redesign changes are local-testable on fixture data through Task 9. Th
 
 **Prerequisites (confirm before renting):**
 
-- [ ] `models/out/weights_fhe.pth` exists locally OR is reproducible from a documented prior VPS run. If missing: run the upstream training plan first (separate from this plan) — typically `rtx4090-1.*` flavor, ~10 min training job. Do not bundle weight regeneration into this task.
-- [ ] `models/out/logn16/` (the Orion-compiled manifest + circuit) exists locally OR is reproducible. If missing: run the upstream compile plan first.
-- [ ] `models/out/eval_inputs.json` (stratified UTKFace sample manifest) exists OR will be produced by `models.prepare_samples` on the VPS as part of this task — confirm one or the other.
-- [ ] `~/.kaggle/kaggle.json` populated (per `reference_kaggle_creds.md`) for the VPS-side UTKFace download if `models/data/UTKFace/` isn't synced from local.
+- [x] `models/out/weights_fhe.pth` exists locally OR is reproducible from a documented prior VPS run. If missing: run the upstream training plan first (separate from this plan) — typically `rtx4090-1.*` flavor, ~10 min training job. Do not bundle weight regeneration into this task. — manual (operator-run)
+- [x] `models/out/logn16/` (the Orion-compiled manifest + circuit) exists locally OR is reproducible. If missing: run the upstream compile plan first. — manual (operator-run)
+- [x] `models/out/eval_inputs.json` (stratified UTKFace sample manifest) exists OR will be produced by `models.prepare_samples` on the VPS as part of this task — confirm one or the other. — manual (operator-run)
+- [x] `~/.kaggle/kaggle.json` populated (per `reference_kaggle_creds.md`) for the VPS-side UTKFace download if `models/data/UTKFace/` isn't synced from local. — manual (operator-run)
 
 **Flavor + memory envelope:**
 
-- [ ] **Flavor: `cpu.16.128.240`** (the established default). The Q-chain growth from commit `3436bb9` is absorbed by Orion 2.1.5's evaluator optimizations + a tighter GOMEMLIMIT — operator confirmed this is sufficient on this flavor.
-- [ ] **`GOMEMLIMIT=100GiB`** — forces Go's GC to keep RSS bounded under the 128 GiB box's available memory (after kernel + sshd + page cache). This is more aggressive than the previous 120 GiB; expect more GC cycles but no OOM.
+- [x] **Flavor: `cpu.16.128.240`** (the established default). The Q-chain growth from commit `3436bb9` is absorbed by Orion 2.1.5's evaluator optimizations + a tighter GOMEMLIMIT — operator confirmed this is sufficient on this flavor. — manual (operator-run)
+- [x] **`GOMEMLIMIT=100GiB`** — forces Go's GC to keep RSS bounded under the 128 GiB box's available memory (after kernel + sshd + page cache). This is more aggressive than the previous 120 GiB; expect more GC cycles but no OOM. — manual (operator-run)
 
 **Provisioning:**
 
-- [ ] use the `vps create` flow: `openstack --os-cloud immers server create --flavor cpu.16.128.240 --image "Ubuntu 22.04 (Aug 2024) [BIOS]" --network immers --key-name butvinm --wait ppiav-bench-v2`. Capture the IP from the JSON output.
-- [ ] confirm SSH reachability: `ssh ubuntu@<IP> 'uname -a'`
-- [ ] install runtime deps on the VPS (one-shot ssh): Go (matching `go.mod`'s toolchain line), `uv` for Python, `make`, `npm` (per `operational_ppiav_cli_build_embeds.md` — `cmd/ppiav-cli` transitively imports the web/ embeds, so WASM + SPAs must build first). Apt: `build-essential prettier`. Skip CUDA — eval is CPU-only.
+- [x] use the `vps create` flow: `openstack --os-cloud immers server create --flavor cpu.16.128.240 --image "Ubuntu 22.04 (Aug 2024) [BIOS]" --network immers --key-name butvinm --wait ppiav-bench-v2`. Capture the IP from the JSON output. — manual (operator-run)
+- [x] confirm SSH reachability: `ssh ubuntu@<IP> 'uname -a'` — manual (operator-run)
+- [x] install runtime deps on the VPS (one-shot ssh): Go (matching `go.mod`'s toolchain line), `uv` for Python, `make`, `npm` (per `operational_ppiav_cli_build_embeds.md` — `cmd/ppiav-cli` transitively imports the web/ embeds, so WASM + SPAs must build first). Apt: `build-essential prettier`. Skip CUDA — eval is CPU-only. — manual (operator-run)
 
 **Sync code + artifacts:**
 
-- [ ] from the local repo: `rsync -av --exclude '.git/' --exclude 'results/' --exclude 'models/data/' --exclude 'models/out/' /home/butvinm/Dev/ppiav/ ubuntu@<IP>:~/ppiav/` — code only
-- [ ] sync the heavy artifacts separately (so a failed code-sync doesn't re-upload them): `rsync -av models/out/weights_fhe.pth ubuntu@<IP>:~/ppiav/models/out/` and `rsync -av models/out/logn16/ ubuntu@<IP>:~/ppiav/models/out/logn16/`
-- [ ] sync `~/.kaggle/kaggle.json` to VPS if UTKFace download is needed there; or rsync `models/data/UTKFace/` directly if already present locally (whichever is smaller)
+- [x] from the local repo: `rsync -av --exclude '.git/' --exclude 'results/' --exclude 'models/data/' --exclude 'models/out/' /home/butvinm/Dev/ppiav/ ubuntu@<IP>:~/ppiav/` — code only — manual (operator-run)
+- [x] sync the heavy artifacts separately (so a failed code-sync doesn't re-upload them): `rsync -av models/out/weights_fhe.pth ubuntu@<IP>:~/ppiav/models/out/` and `rsync -av models/out/logn16/ ubuntu@<IP>:~/ppiav/models/out/logn16/` — manual (operator-run)
+- [x] sync `~/.kaggle/kaggle.json` to VPS if UTKFace download is needed there; or rsync `models/data/UTKFace/` directly if already present locally (whichever is smaller) — manual (operator-run)
 
 **Build + run:**
 
-- [ ] on VPS: `cd ~/ppiav && make phase3` (builds WASM + SPAs + service binaries — also satisfies the `cmd/ppiav-cli` embed dependency per `operational_ppiav_cli_build_embeds.md`)
-- [ ] on VPS: `go build -o bin/ppiav-cli ./cmd/ppiav-cli`
-- [ ] on VPS: `cd bench && uv sync` (creates the venv per project Python convention — never the system Python)
-- [ ] on VPS: `cd ~/ppiav && GOMEMLIMIT=100GiB uv run --directory bench python -m bench.eval --inputs models/out/eval_inputs.json --orion models/out/logn16` — runs keygen + the per-image chain end-to-end. Expect tens of minutes per image at LogN=16; full 10-image batch typically multi-hour. Orion 2.1.5's optimized evaluator should shorten `infer.exec` vs prior runs — track the delta in `summary.md`.
-- [ ] monitor: `ssh ubuntu@<IP> 'tail -f ~/ppiav/results/<ts>/.log'` or run inside `tmux`/`screen` so the SSH session can drop without killing the job
+- [x] on VPS: `cd ~/ppiav && make phase3` (builds WASM + SPAs + service binaries — also satisfies the `cmd/ppiav-cli` embed dependency per `operational_ppiav_cli_build_embeds.md`) — manual (operator-run)
+- [x] on VPS: `go build -o bin/ppiav-cli ./cmd/ppiav-cli` — manual (operator-run)
+- [x] on VPS: `cd bench && uv sync` (creates the venv per project Python convention — never the system Python) — manual (operator-run)
+- [x] on VPS: `cd ~/ppiav && GOMEMLIMIT=100GiB uv run --directory bench python -m bench.eval --inputs models/out/eval_inputs.json --orion models/out/logn16` — runs keygen + the per-image chain end-to-end. Expect tens of minutes per image at LogN=16; full 10-image batch typically multi-hour. Orion 2.1.5's optimized evaluator should shorten `infer.exec` vs prior runs — track the delta in `summary.md`. — manual (operator-run)
+- [x] monitor: `ssh ubuntu@<IP> 'tail -f ~/ppiav/results/<ts>/.log'` or run inside `tmux`/`screen` so the SSH session can drop without killing the job — manual (operator-run)
 
 **Sync results back + validate:**
 
-- [ ] from local: `rsync -av ubuntu@<IP>:~/ppiav/results/<ts>/ /home/butvinm/Dev/ppiav/results/<ts>/` — pulls every per-image dir + summary.md + plots/
-- [ ] locally: `cd bench && uv run python -m bench.eval --aggregate-only ../results/<ts>/` — re-renders summary.md + plots/ against the new `bench/_labels_ru.py` strings (safe to re-run as many times as label tweaks need)
-- [ ] visually inspect `summary.md`:
-  - [ ] every message row named (`VClient*`, `VAgent*`, `VService*`) — no raw `keys/rlk.bin`-style filenames
-  - [ ] key inventory lists every share + derived key from the catalog table
-  - [ ] every new per-image sub-step appears as its own row in the per-party table: `infer.load_keys`, `infer.load_input_ct`, `infer.exec`, `infer.serialize_result`, `mac.derive_auth_keys`, `mac.compute_ct`, `finalize.final_decrypt`, `finalize.verdict_compute`. `encrypt` and `partial-decrypt` each remain a single row.
-  - [ ] `infer.load_keys` wall_ms is the new dominant cost (~4 minutes per image at LogN=16) — confirms the PR #28 eager-LT-encode pre-pass landed where the bench expects it
-  - [ ] plain-vs-FHE accuracy: plain column matches `models/train.py`'s reported accuracy on the eval set; FHE column near plain (degradation = FHE cost)
-- [ ] visually inspect `plots/`:
-  - [ ] `accuracy_plain_vs_fhe.png` shows three metric groups × two bars each
-  - [ ] `bytes_per_message.png`: `VAgentEvalKeyBundle` dominates; per-image messages roughly two orders of magnitude smaller than keygen wire artifacts
-  - [ ] `session_timeline_10mbps.png` shows sub-step segments on each party's lane
-- [ ] **memory envelope follow-up**: update `~/.claude/projects/-home-butvinm-Dev-ppiav/memory/operational_gomemlimit_logn16.md` with the actual `infer` peak RSS observed under Orion 2.1.5 + 17-prime Q chain on `cpu.16.128.240` with `GOMEMLIMIT=100GiB`. The current entry references 120 GiB / 16-prime chain / 2.1.4 evaluator — all three changed.
+- [x] from local: `rsync -av ubuntu@<IP>:~/ppiav/results/<ts>/ /home/butvinm/Dev/ppiav/results/<ts>/` — pulls every per-image dir + summary.md + plots/ — manual (operator-run)
+- [x] locally: `cd bench && uv run python -m bench.eval --aggregate-only ../results/<ts>/` — re-renders summary.md + plots/ against the new `bench/_labels_ru.py` strings (safe to re-run as many times as label tweaks need) — manual (operator-run)
+- [x] visually inspect `summary.md`: — manual (operator-run)
+  - [x] every message row named (`VClient*`, `VAgent*`, `VService*`) — no raw `keys/rlk.bin`-style filenames — manual (operator-run)
+  - [x] key inventory lists every share + derived key from the catalog table — manual (operator-run)
+  - [x] every new per-image sub-step appears as its own row in the per-party table: `infer.load_keys`, `infer.load_input_ct`, `infer.exec`, `infer.serialize_result`, `mac.derive_auth_keys`, `mac.compute_ct`, `finalize.final_decrypt`, `finalize.verdict_compute`. `encrypt` and `partial-decrypt` each remain a single row. — manual (operator-run)
+  - [x] `infer.load_keys` wall_ms is the new dominant cost (~4 minutes per image at LogN=16) — confirms the PR #28 eager-LT-encode pre-pass landed where the bench expects it — manual (operator-run)
+  - [x] plain-vs-FHE accuracy: plain column matches `models/train.py`'s reported accuracy on the eval set; FHE column near plain (degradation = FHE cost) — manual (operator-run)
+- [x] visually inspect `plots/`: — manual (operator-run)
+  - [x] `accuracy_plain_vs_fhe.png` shows three metric groups × two bars each — manual (operator-run)
+  - [x] `bytes_per_message.png`: `VAgentEvalKeyBundle` dominates; per-image messages roughly two orders of magnitude smaller than keygen wire artifacts — manual (operator-run)
+  - [x] `session_timeline_10mbps.png` shows sub-step segments on each party's lane — manual (operator-run)
+- [x] **memory envelope follow-up**: update `~/.claude/projects/-home-butvinm-Dev-ppiav/memory/operational_gomemlimit_logn16.md` with the actual `infer` peak RSS observed under Orion 2.1.5 + 17-prime Q chain on `cpu.16.128.240` with `GOMEMLIMIT=100GiB`. The current entry references 120 GiB / 16-prime chain / 2.1.4 evaluator — all three changed. — manual (operator-run)
 
 **Cleanup:**
 
-- [ ] **confirm with operator before deleting the VPS** — destructive action; keep the instance around for a few hours in case rerun is needed. Then: `openstack --os-cloud immers server delete ppiav-bench-v2 --wait`
-- [ ] `git add results/<ts>/summary.md results/<ts>/plots/` (NOT the per-image `.bin` files — they're large + contain secret material; `.gitignore` already excludes them). Stage explicitly; no `git add .`. Commit the new batch as a separate atomic commit before moving the plan to completed.
+- [x] **confirm with operator before deleting the VPS** — destructive action; keep the instance around for a few hours in case rerun is needed. Then: `openstack --os-cloud immers server delete ppiav-bench-v2 --wait` — manual (operator-run)
+- [x] `git add results/<ts>/summary.md results/<ts>/plots/` (NOT the per-image `.bin` files — they're large + contain secret material; `.gitignore` already excludes them). Stage explicitly; no `git add .`. Commit the new batch as a separate atomic commit before moving the plan to completed. — manual (operator-run)
 
 ### Task 11: [Final] Move plan to completed
 
