@@ -35,6 +35,13 @@ import (
 // The bench loader/aggregator key off it for table grouping; the synthetic
 // `x²` (--orion="") path uses the same tag (it just swaps the inference
 // circuit).
+//
+// TODO: per memory `feedback_readme_user_facing.md` (2026-05-16 extension),
+// "phase" should not appear in user-facing strings. The value here is
+// pinned to keep wire compatibility with bench/bench/load.py's required
+// `phase` field and existing on-disk results. Renaming it (e.g. to
+// "ppiav") requires a coordinated change in the Python loader; deferred
+// to avoid breaking previously-captured results during Phase 4 review.
 const benchPhase = "phase2"
 
 // usage prints the top-level help and exits with status 2 (flag convention).

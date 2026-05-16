@@ -155,9 +155,14 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, sid protoco
 }
 
 // paramsWire is the JSON representation of protocol.Params. CKKS uses
-// Lattigo's codec; the rest survives encoding/json untouched.
+// Lattigo's codec; the rest survives encoding/json untouched. LLKNBase and
+// LLKNLogPHK are serialized explicitly so the WASM bridge fails loud if
+// either side ever diverges from the canonical schedule — see
+// web/ppiav/bridge/ppiav/core.go ParseParamsJSON.
 type paramsWire struct {
 	CKKS                 json.RawMessage `json:"ckks"`
+	LLKNBase             int             `json:"llkn_base"`
+	LLKNLogPHK           []int           `json:"llkn_log_phk"`
 	AuthenticatorLambda  int             `json:"authenticator_lambda"`
 	AuthenticatorEpsilon float64         `json:"authenticator_epsilon"`
 	FloodSigma           float64         `json:"flood_sigma"`
@@ -172,6 +177,8 @@ func writeParams(w http.ResponseWriter, p protocol.Params) error {
 	}
 	pw := paramsWire{
 		CKKS:                 ckksBytes,
+		LLKNBase:             p.LLKNBase,
+		LLKNLogPHK:           protocol.DefaultLLKNLogPHK,
 		AuthenticatorLambda:  p.Authenticator.Lambda,
 		AuthenticatorEpsilon: p.Authenticator.Epsilon,
 		FloodSigma:           p.FloodSigma,

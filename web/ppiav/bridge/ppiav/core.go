@@ -28,6 +28,8 @@ import (
 // avoids pulling vservice into the WASM bridge (it imports net/http).
 type paramsWire struct {
 	CKKS                 json.RawMessage `json:"ckks"`
+	LLKNBase             int             `json:"llkn_base"`
+	LLKNLogPHK           []int           `json:"llkn_log_phk"`
 	AuthenticatorLambda  int             `json:"authenticator_lambda"`
 	AuthenticatorEpsilon float64         `json:"authenticator_epsilon"`
 	FloodSigma           float64         `json:"flood_sigma"`
@@ -37,26 +39,33 @@ type paramsWire struct {
 
 // ParseParamsJSON decodes the JSON written by vservice.writeParams into a
 // protocol.Params. The LLKN hierarchy is reconstructed locally from the
-// decoded CKKS params using the canonical `DefaultLLKNLogPHK` schedule —
-// VService and the bridge MUST agree on the schedule, so we keep both
-// pinned in `protocol`. Exported for tests.
+// decoded CKKS params using the wire LLKNLogPHK schedule, validated
+// against the bridge's own DefaultLLKNLogPHK to fail loud on any silent
+// drift between Go and WASM builds. LLKNBase is likewise validated
+// against DefaultLLKNBase. Exported for tests.
 func ParseParamsJSON(data []byte) (protocol.Params, error) {
 	var pw paramsWire
 	if err := json.Unmarshal(data, &pw); err != nil {
 		return protocol.Params{}, fmt.Errorf("ppiav: decode params: %w", err)
 	}
+	if pw.LLKNBase != protocol.DefaultLLKNBase {
+		return protocol.Params{}, fmt.Errorf("ppiav: LLKNBase mismatch (wire=%d, bridge expects %d)", pw.LLKNBase, protocol.DefaultLLKNBase)
+	}
+	if !equalIntSlice(pw.LLKNLogPHK, protocol.DefaultLLKNLogPHK) {
+		return protocol.Params{}, fmt.Errorf("ppiav: LLKNLogPHK mismatch (wire=%v, bridge expects %v)", pw.LLKNLogPHK, protocol.DefaultLLKNLogPHK)
+	}
 	var ckksParams ckks.Parameters
 	if err := ckksParams.UnmarshalJSON(pw.CKKS); err != nil {
 		return protocol.Params{}, fmt.Errorf("ppiav: decode CKKS params: %w", err)
 	}
-	llknParams, err := llkn.NewParameters(ckksParams.Parameters, [][]int{protocol.DefaultLLKNLogPHK})
+	llknParams, err := llkn.NewParameters(ckksParams.Parameters, [][]int{pw.LLKNLogPHK})
 	if err != nil {
 		return protocol.Params{}, fmt.Errorf("ppiav: build LLKN parameters: %w", err)
 	}
 	return protocol.Params{
 		CKKS:     ckksParams,
 		LLKN:     llknParams,
-		LLKNBase: protocol.DefaultLLKNBase,
+		LLKNBase: pw.LLKNBase,
 		Authenticator: authenticator.Config{
 			Lambda:  pw.AuthenticatorLambda,
 			Epsilon: pw.AuthenticatorEpsilon,
@@ -65,6 +74,20 @@ func ParseParamsJSON(data []byte) (protocol.Params, error) {
 		ExtraRotationIndices: pw.ExtraRotationIndices,
 		InputLevel:           pw.InputLevel,
 	}, nil
+}
+
+// equalIntSlice reports whether two int slices have the same length and
+// element-wise contents. Used for LLKNLogPHK schedule validation.
+func equalIntSlice(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // handles stores *vclient.Client instances keyed by an integer handle

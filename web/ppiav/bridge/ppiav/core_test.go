@@ -63,6 +63,8 @@ func paramsJSON(t *testing.T, p protocol.Params) []byte {
 	require.NoError(t, err)
 	out, err := json.Marshal(paramsWire{
 		CKKS:                 ckksBytes,
+		LLKNBase:             p.LLKNBase,
+		LLKNLogPHK:           protocol.DefaultLLKNLogPHK,
 		AuthenticatorLambda:  p.Authenticator.Lambda,
 		AuthenticatorEpsilon: p.Authenticator.Epsilon,
 		FloodSigma:           p.FloodSigma,

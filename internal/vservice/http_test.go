@@ -43,6 +43,8 @@ func TestHTTPGetParams(t *testing.T) {
 	assert.Equal(t, params.FloodSigma, wire.FloodSigma)
 	assert.Equal(t, params.InputLevel, wire.InputLevel)
 	assert.NotEmpty(t, wire.CKKS, "CKKS params JSON should be embedded")
+	assert.Equal(t, params.LLKNBase, wire.LLKNBase, "LLKNBase must be serialized for bridge validation")
+	assert.Equal(t, protocol.DefaultLLKNLogPHK, wire.LLKNLogPHK, "LLKNLogPHK schedule must be serialized for bridge validation")
 }
 
 func TestHTTPGetParamsRejectsPost(t *testing.T) {

@@ -92,6 +92,10 @@ func unmarshalDualPKShare(data []byte, eval, top *multiparty.PublicKeyGenShare) 
 	if err := top.UnmarshalBinary(data[off : off+m]); err != nil {
 		return fmt.Errorf("dual pk share: unmarshal top share: %w", err)
 	}
+	off += m
+	if off != len(data) {
+		return fmt.Errorf("dual pk share: trailing bytes (%d unread)", len(data)-off)
+	}
 	return nil
 }
 

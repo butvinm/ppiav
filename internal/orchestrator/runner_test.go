@@ -150,6 +150,11 @@ func TestRunnerRejectsNegativeLogit(t *testing.T) {
 	ckksParams, err := ckks.NewParametersFromLiteral(lit)
 	require.NoError(t, err)
 	params.CKKS = ckksParams
+	// LLKN was built against the original Defaults() CKKS — rebuild against
+	// the override so params.LLKN.Top() matches the dimensions skTop is
+	// derived from. Mirrors vservice.NewWithOrion / NewWithState.
+	params.LLKN, err = protocol.BuildLLKNParams(ckksParams)
+	require.NoError(t, err)
 
 	inner := vservice.New(params)
 	mock := &negatingInferrer{inner: inner, params: params}
