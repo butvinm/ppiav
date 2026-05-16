@@ -278,11 +278,11 @@ All three subcommands follow the same refactor pattern: take the single `bench.M
 
 (The fixture batch dir was created in Task 4.)
 
-- [ ] in `eval.py`, add `_classify_plain(manifest_by_idx)` reusing the existing `_classify` for the math (verdict = `"accept" if ref_logit > 0 else "reject"`, no `Unknown`)
-- [ ] add `_accuracy_compare_table_md(fhe_stats, plain_stats, n_total)` rendering a 2-column table (plain | FHE) for tp/tn/fp/fn/unknown/fpr/fnr/accuracy
-- [ ] replace the existing `## Protocol verdict accuracy` section with `## Accuracy: plain vs FHE C3AE` using the new comparison table
-- [ ] write tests asserting: (a) plain classifier on the fixture gives the expected confusion matrix; (b) FHE classifier on the fixture gives the expected confusion matrix; (c) the rendered comparison table contains both columns
-- [ ] run `cd bench && uv run pytest` — must pass
+- [x] in `eval.py`, add `_classify_plain(manifest_by_idx)` reusing the existing `_classify` for the math (verdict = `"accept" if ref_logit > 0 else "reject"`, no `Unknown`)
+- [x] add `_accuracy_compare_table_md(fhe_stats, plain_stats, n_total)` rendering a 2-column table (plain | FHE) for tp/tn/fp/fn/unknown/fpr/fnr/accuracy
+- [x] replace the existing `## Protocol verdict accuracy` section with `## Accuracy: plain vs FHE C3AE` using the new comparison table (Russian section header `## Точность: C3AE открытый текст vs FHE` via `SECTION_HEADERS['accuracy_plain_vs_fhe']`)
+- [x] write tests asserting: (a) plain classifier on the fixture gives the expected confusion matrix; (b) FHE classifier on the fixture gives the expected confusion matrix; (c) the rendered comparison table contains both columns
+- [x] run `cd bench && uv run pytest` — must pass (50 passed; pre-existing `test_load_run_parses_all_fields` phase1/phase2 mismatch unrelated)
 
 ### Task 7: Promote per-image sub-steps into the per-party table
 

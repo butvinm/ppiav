@@ -38,6 +38,7 @@ import numpy as np
 
 from bench import _messages
 from bench._labels_ru import (
+    ACCURACY_METRIC_NAMES,
     KEY_LOCATION_NAMES,
     KEYGEN_ROUND_SUBSTEPS,
     PARTY_BY_STEP,
@@ -476,6 +477,22 @@ def _classify(verdicts: list[str], labels: list[int]) -> dict[str, int | float]:
     }
 
 
+def _classify_plain(manifest_by_idx: dict[int, dict[str, Any]]) -> dict[str, int | float]:
+    """Cleartext baseline: apply ``m > 0 ? accept : reject`` to each ref_logit.
+
+    No Auth gate exists in the plaintext flow, so ``unknown`` is always 0.
+    Re-uses ``_classify`` for the confusion-matrix math so plain and FHE
+    columns are computed by identical code paths.
+    """
+    verdicts: list[str] = []
+    labels: list[int] = []
+    for entry in manifest_by_idx.values():
+        ref_logit = float(entry.get("ref_logit", 0.0))
+        verdicts.append("accept" if ref_logit > 0 else "reject")
+        labels.append(int(entry["label"]))
+    return _classify(verdicts, labels)
+
+
 def _noise_stats(noise: Sequence[float]) -> dict[str, float]:
     if not noise:
         return {"n": 0, "mean": 0.0, "min": 0.0, "max": 0.0, "std": 0.0}
@@ -752,6 +769,50 @@ def _verdict_table_md(stats: dict[str, int | float], n_total: int) -> str:
     return "\n".join(lines)
 
 
+def _accuracy_compare_table_md(
+    fhe_stats: dict[str, int | float],
+    plain_stats: dict[str, int | float],
+    n_total: int,
+) -> str:
+    """Side-by-side plain vs FHE confusion-matrix + rate table.
+
+    Plaintext column has no Auth gate so ``unknown`` is always 0 there; the
+    FHE column carries whatever the protocol reported. Rate rows (FPR/FNR/
+    accuracy) render to three decimals to match ``_verdict_table_md``.
+    """
+    metric_col = TABLE_HEADERS["metric"]
+    plain_col = TABLE_HEADERS["plain_column"]
+    fhe_col = TABLE_HEADERS["fhe_column"]
+
+    def _cell(stats: dict[str, int | float], key: str) -> str:
+        if key in ("fpr", "fnr", "accuracy"):
+            return f"{float(stats[key]):.3f}"
+        return str(int(stats[key]))
+
+    rows: list[tuple[str, str, str]] = [
+        (
+            ACCURACY_METRIC_NAMES["samples"],
+            str(n_total),
+            str(n_total),
+        ),
+    ]
+    for key in ("tp", "tn", "fp", "fn", "unknown", "fpr", "fnr", "accuracy"):
+        rows.append(
+            (
+                ACCURACY_METRIC_NAMES[key],
+                _cell(plain_stats, key),
+                _cell(fhe_stats, key),
+            )
+        )
+
+    lines: list[str] = []
+    lines.append(f"| {metric_col} | {plain_col} | {fhe_col} |")
+    lines.append("|---|---:|---:|")
+    for name, plain_val, fhe_val in rows:
+        lines.append(f"| {name} | {plain_val} | {fhe_val} |")
+    return "\n".join(lines)
+
+
 def _noise_block_md(noise_stats: dict[str, float], snr: list[tuple[int, float, float]]) -> str:
     lines: list[str] = []
     lines.append("**Noise across all (image x non-S slot) pairs:**")
@@ -831,6 +892,7 @@ def aggregate(batch_dir: Path) -> None:
     bytes_rows = _per_message_bytes(batch_dir, samples_by_name)
     key_rows = _key_inventory_rows(batch_dir, samples_by_name)
     verdict_stats = _classify(verdicts, labels)
+    plain_stats = _classify_plain(manifest_by_idx)
     noise_stats = _noise_stats(all_noise)
     snr = _snr_per_image(img_dirs, decoded_by_idx)
 
@@ -857,9 +919,9 @@ def aggregate(batch_dir: Path) -> None:
     sections.append("")
     sections.append(_key_inventory_md(key_rows))
     sections.append("")
-    sections.append("## Protocol verdict accuracy")
+    sections.append(f"## {SECTION_HEADERS['accuracy_plain_vs_fhe']}")
     sections.append("")
-    sections.append(_verdict_table_md(verdict_stats, len(img_dirs)))
+    sections.append(_accuracy_compare_table_md(verdict_stats, plain_stats, len(img_dirs)))
     sections.append("")
     sections.append("## Noise + SNR")
     sections.append("")
@@ -895,6 +957,7 @@ def aggregate(batch_dir: Path) -> None:
         "message_bytes_rows": bytes_rows,
         "key_rows": key_rows,
         "verdict_stats": verdict_stats,
+        "plain_stats": plain_stats,
         "noise_stats": noise_stats,
         "snr": snr,
         "all_noise": all_noise,

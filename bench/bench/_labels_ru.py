@@ -122,6 +122,7 @@ SECTION_HEADERS: dict[str, str] = {
     "per_message_bytes": "Размер сообщений",
     "key_inventory": "Инвентарь ключей",
     "network_wire_time": "Время передачи по сети",
+    "accuracy_plain_vs_fhe": "Точность: C3AE открытый текст vs FHE",
 }
 
 # Column headers for the per-message bytes / key inventory tables. Kept
@@ -140,6 +141,24 @@ TABLE_HEADERS: dict[str, str] = {
     "on_wire_yes": "да",
     "on_wire_no": "нет",
     "empty": "—",
+    "metric": "метрика",
+    "plain_column": "открытый текст",
+    "fhe_column": "FHE",
+}
+
+# Russian labels for the confusion-matrix / rate rows used by the
+# plain-vs-FHE accuracy comparison table. Keys mirror the dict returned
+# by ``_classify`` plus a synthetic ``samples`` row.
+ACCURACY_METRIC_NAMES: dict[str, str] = {
+    "samples": "выборка (всего)",
+    "tp": "истинно-положительные",
+    "tn": "истинно-отрицательные",
+    "fp": "ложно-положительные",
+    "fn": "ложно-отрицательные",
+    "unknown": "не определено",
+    "fpr": "FPR",
+    "fnr": "FNR",
+    "accuracy": "точность",
 }
 
 # Display names for KeyEntry.location values (KeyLocation literal).

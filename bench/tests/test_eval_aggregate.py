@@ -55,6 +55,22 @@ def test_aggregate_contains_section_headers(batch_dir: Path) -> None:
     assert f"## {SECTION_HEADERS['per_message_bytes']}" in summary
     assert f"## {SECTION_HEADERS['key_inventory']}" in summary
     assert f"## {SECTION_HEADERS['network_wire_time']}" in summary
+    assert f"## {SECTION_HEADERS['accuracy_plain_vs_fhe']}" in summary
+
+
+def test_aggregate_accuracy_section_has_plain_and_fhe_columns(batch_dir: Path) -> None:
+    """The Task-6 plain-vs-FHE table must include both column headers + metric rows."""
+    from bench._labels_ru import ACCURACY_METRIC_NAMES, TABLE_HEADERS
+
+    aggregate(batch_dir)
+    summary = _read_summary(batch_dir)
+    assert TABLE_HEADERS["plain_column"] in summary
+    assert TABLE_HEADERS["fhe_column"] in summary
+    # Sanity-check that the canonical metric rows appear at least once.
+    for key in ("tp", "tn", "fp", "fn", "unknown", "fpr", "fnr", "accuracy"):
+        assert ACCURACY_METRIC_NAMES[key] in summary, (
+            f"metric row {key!r} ({ACCURACY_METRIC_NAMES[key]!r}) missing from summary.md"
+        )
 
 
 def test_aggregate_per_message_section_lists_every_message_id(batch_dir: Path) -> None:
