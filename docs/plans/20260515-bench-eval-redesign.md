@@ -550,10 +550,31 @@ Scope: confirm everything builds and unit tests pass on the dev box. Full chain 
 
 **Files:** none
 
-- [ ] open `results/phase2/eval-<ts>/summary.md` and read the tables: FPR + FNR + accuracy populated; noise mean within reasonable order of magnitude (likely 10^-4 to 10^-2 absolute); SNR > 10 for most images; per-step time + RSS tables non-empty; byte table sums to a sensible total; all 7 plots open as valid PNGs
-- [ ] verify all Implementation Step checkboxes 1-26 are marked `[x]`
-- [ ] verify no `⚠️` blockers remain
-- [ ] if any metric looks off, document in a new ➕ task with diagnosis; do NOT move to Task 28 until resolved
+- [x] open `results/phase2/eval-20260516T002209Z/summary.md` and read the tables — FPR + FNR + accuracy populated (0.000 / 1.000 / 0.500 — see ➕ task below); per-step time + RSS tables fully populated; byte table sums to ~73 MB total (mostly `glk_full.bin` + `pk.bin`); all 7 plots render as valid PNGs
+- [x] verify all Implementation Step checkboxes 1-26 are marked `[x]`
+- [x] verify no `⚠️` blockers remain — none in plan body
+- [x] document anomaly in ➕ task below; per user direction, Task 27 is closed and the anomaly is tracked as future work (a separate plan will own the fix)
+
+### ➕ Task 27a: ref_logit / Orion output scale mismatch (DEFERRED — separate plan)
+
+**Symptom:** Protocol verdict is Reject for all 10 samples (FPR=0, FNR=1.0, accuracy=0.5). Per-image `noise_per_slot` has mean ≈ -158, std ≈ 375 — orders of magnitude above the plan's 10⁻⁴..10⁻² estimate.
+
+**Diagnosis:**
+
+- `ref_logit` is computed in `models/prepare_samples.compute_ref_logits` by running the **PyTorch** `C3AE_FHE` (Quad activation) model. The values for our 10 stratified samples range over ~[-79, +1217], far outside a typical logit range.
+- The compiled **Orion** model produces FHE-evaluated slot values that, after joint decryption, look close to zero (so `slot - ref_logit ≈ -ref_logit`, giving the huge negative noise mean).
+- This means the PyTorch model and the compiled Orion model produce non-comparable scalar outputs. Likely causes (in order of likelihood):
+  1. Orion's compile step normalizes / rescales the final fit output to keep CKKS noise in a tractable range — the FHE eval output is on a different scale than the PyTorch forward pass.
+  2. `C3AE_FHE` PyTorch model is uncalibrated post-training (no sigmoid / output normalization), so raw logits are huge while the compiled circuit's effective output is bounded.
+  3. A weight-scaling step is applied during `models.compile` that PyTorch does not mirror.
+
+**Fix candidates (out of scope for this plan):**
+
+- Replace the cleartext reference with Orion's **Go** cleartext evaluator (the Go evaluator is allowed; only the Python `orion-v2-evaluator` package is prohibited per `feedback_orion_evaluator_python_prohibited.md`).
+- Probe the compiled model's effective output scaling and apply the inverse to `ref_logit` before threshold comparison.
+- Change the verdict threshold to be derived from the compiled model's output range rather than assuming a logit-scale threshold.
+
+**Status:** Deferred. Mechanical pipeline + per-step timing + per-message bytes + RSS + plots are all valid measurements of the protocol's cost and footprint, which IS what the bench-eval-redesign plan was about. The FPR/FNR correctness of the threshold-vs-noise comparison is a separate concern best handled in a follow-up plan.
 
 ### Task 28: Move plan to completed/
 
