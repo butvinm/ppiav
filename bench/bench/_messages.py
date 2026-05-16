@@ -14,6 +14,15 @@ an explicit ``Share`` suffix; ``VAgentInferenceKeys`` → ``VAgentEvalKeyBundle`
 ``gks_infer``); per-image messages reference ``img_0/`` as the canonical
 sample since all images produce identically-sized ciphertexts at fixed
 CKKS parameters.
+
+Scope: this catalog covers VClient↔VAgent and VAgent↔VService wire
+messages. Resource-service-side traffic (ResourceClient↔ResourceService and
+ResourceService↔VerificationAgent in ``docs/protocol.puml`` — L14-L15,
+L18, L23-L24, L27-L28, L93-L95, L98, L101-L107) is explicitly out of scope
+per the bench-redesign-v2 plan: the bench measures the FHE protocol
+itself, not the surrounding resource-access plumbing. ``VAgentSessionInit``
+covers the ``POST /sessions`` round-trip initiated by the VAgent regardless
+of whether the upstream trigger comes from the resource service or a CLI.
 """
 
 from __future__ import annotations
@@ -113,12 +122,32 @@ MESSAGES: list[Message] = [
         label_ru="Запрос сессии (агент → сервис)",
         bytes_source=Synthetic(64),
     ),
+    # VServiceSessionResponse bundles two HTTP round-trips into one logical
+    # wire message: docs/protocol.puml L21 (sid reply to POST /sessions) and
+    # L33 (params reply to GET /sessions/:sid/params). Both responses travel
+    # vservice -> vagent on the same physical link and together establish the
+    # session params + sid the VAgent caches. We measure the dominant payload
+    # (params.json) since sid.txt is a 64-byte uuid.
     Message(
         id="VServiceSessionResponse",
         sender="service",
         receiver="agent",
         label_ru="Параметры протокола + sid",
         bytes_source=FilePath("keys/params.json"),
+    ),
+    Message(
+        id="VClientParamsRequest",
+        sender="client",
+        receiver="agent",
+        label_ru="Запрос параметров протокола (клиент → агент)",
+        bytes_source=Synthetic(64),
+    ),
+    Message(
+        id="VAgentParamsRequest",
+        sender="agent",
+        receiver="service",
+        label_ru="Запрос параметров протокола (агент → сервис)",
+        bytes_source=Synthetic(64),
     ),
     Message(
         id="VAgentSessionParams",
@@ -231,6 +260,13 @@ MESSAGES: list[Message] = [
         receiver="agent",
         label_ru="Частично расшифрованный шифротекст",
         bytes_source=FilePath("img_0/client_share.bin"),
+    ),
+    Message(
+        id="VAgentVerificationAck",
+        sender="agent",
+        receiver="client",
+        label_ru="Подтверждение завершения верификации",
+        bytes_source=Synthetic(32),
     ),
 ]
 

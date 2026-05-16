@@ -311,13 +311,13 @@ All three subcommands follow the same refactor pattern: take the single `bench.M
 
 ### Task 9: Verify acceptance criteria
 
-- [ ] every message in `docs/protocol.puml` maps to either a catalog `Message` entry or an explicit "out of scope (resource-service-side)" exclusion
-- [ ] every key listed in the Technical Details inventory has a `KEYS` entry
-- [ ] `infer`, `mac`, `finalize` each emit ≥ 2 Samples; `encrypt` and `partial-decrypt` keep emitting 1 Sample (documented exceptions)
-- [ ] `summary.md` contains all sections: Per-step time+memory by party, Keygen by round, Per-message bytes, **Key inventory**, **Accuracy: plain vs FHE C3AE**, Noise + SNR, Network wire time
-- [ ] run `cd bench && uv run pytest && uv run ruff check . && uv run mypy bench tests`
-- [ ] run `go test ./...` **without** `PPIAV_RUN_HEAVY=1` (LogN=14 fast variants only — per `feedback_no_logn15_local.md`, LogN=15/16 tests OOM the dev box). VPS handles heavy runs.
-- [ ] dry-run the aggregator on the committed fixture: `cd bench && uv run python -m bench.eval --aggregate-only tests/fixtures/sample_batch/` — inspect generated `summary.md`
+- [x] every message in `docs/protocol.puml` maps to either a catalog `Message` entry or an explicit "out of scope (resource-service-side)" exclusion (added `VClientParamsRequest`, `VAgentParamsRequest`, `VAgentVerificationAck`; added explicit resource-service out-of-scope comment in `_messages.py` module docstring; `VServiceSessionResponse` bundles L21+L33 as documented in inline comment)
+- [x] every key listed in the Technical Details inventory has a `KEYS` entry (17 keys present: sk_c/sk_a, pk_c/pk_a/pk_eval/pk_top, 4× rlk shares, rlk aggregate, 2× gks^master shares, gks^master aggregate, gks^auth derived, gks^infer derived, mac_key)
+- [x] `infer`, `mac`, `finalize` each emit ≥ 2 Samples; `encrypt` and `partial-decrypt` keep emitting 1 Sample (verified: infer=4, mac=2, finalize=2, encrypt=1, partial-decrypt=1)
+- [x] `summary.md` contains all sections: Per-step time+memory by party, Keygen by round, Per-message bytes, **Key inventory**, **Accuracy: plain vs FHE C3AE**, Noise + SNR, Network wire time (all 7 headers confirmed in generated fixture summary.md)
+- [x] run `cd bench && uv run pytest && uv run ruff check . && uv run mypy bench tests` (51 passed; ruff clean; mypy clean — pre-existing `test_load_run_parses_all_fields` phase1/phase2 mismatch unrelated to this plan, traced to commit `7839be6` "feat: delete synthetic.bin + generator and update references" which changed the fixture but not the test)
+- [x] run `go test ./...` **without** `PPIAV_RUN_HEAVY=1` (LogN=14 fast variants only — per `feedback_no_logn15_local.md`, LogN=15/16 tests OOM the dev box). VPS handles heavy runs. (all packages ok)
+- [x] dry-run the aggregator on the committed fixture: `cd bench && uv run python -m bench.eval --aggregate-only tests/fixtures/sample_batch/` — inspect generated `summary.md` (aggregate completed; all 21 message rows + 17 key rows + 7 sections render)
 
 ### Task 10: Rent VPS, run full LogN=16 eval, sync results back
 

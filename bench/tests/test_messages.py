@@ -50,6 +50,8 @@ def test_messages_catalog_has_expected_entries() -> None:
     expected_ids = {
         "VAgentSessionInit",
         "VServiceSessionResponse",
+        "VClientParamsRequest",
+        "VAgentParamsRequest",
         "VAgentSessionParams",
         "VClientPKShare",
         "VAgentPKShare",
@@ -66,6 +68,7 @@ def test_messages_catalog_has_expected_entries() -> None:
         "VServiceResultCT",
         "VAgentAuthCT",
         "VClientPartialShare",
+        "VAgentVerificationAck",
     }
     actual_ids = {m.id for m in MESSAGES}
     assert actual_ids == expected_ids
