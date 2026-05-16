@@ -154,7 +154,7 @@ func runKeygen(args []string) error {
 				return 0, e
 			}
 			clientShare = cs
-			return uint64(cs.ShareEval.BinarySize() + cs.ShareTop.BinarySize()), nil
+			return pkShareBytes(cs), nil
 		}); err != nil {
 			writeRunOnExit()
 			return fmt.Errorf("keygen: pk.client_gen: %w", err)
@@ -165,7 +165,7 @@ func runKeygen(args []string) error {
 				return 0, e
 			}
 			agentShare = as
-			return uint64(as.ShareEval.BinarySize() + as.ShareTop.BinarySize()), nil
+			return agentPKShareBytes(as), nil
 		}); err != nil {
 			writeRunOnExit()
 			return fmt.Errorf("keygen: pk.agent_gen: %w", err)
@@ -196,7 +196,7 @@ func runKeygen(args []string) error {
 				return 0, e
 			}
 			clientR1 = cs
-			return uint64(cs.BinarySize()), nil
+			return rlkShareBytes(cs), nil
 		}); err != nil {
 			writeRunOnExit()
 			return fmt.Errorf("keygen: rlk-r1.client_gen: %w", err)
@@ -207,7 +207,7 @@ func runKeygen(args []string) error {
 				return 0, e
 			}
 			agentR1 = as
-			return uint64(as.BinarySize()), nil
+			return rlkShareBytes(as), nil
 		}); err != nil {
 			writeRunOnExit()
 			return fmt.Errorf("keygen: rlk-r1.agent_gen: %w", err)
@@ -235,7 +235,7 @@ func runKeygen(args []string) error {
 				return 0, e
 			}
 			clientR2 = cs
-			return uint64(cs.BinarySize()), nil
+			return rlkShareBytes(cs), nil
 		}); err != nil {
 			writeRunOnExit()
 			return fmt.Errorf("keygen: rlk-r2.client_gen: %w", err)
@@ -245,7 +245,7 @@ func runKeygen(args []string) error {
 			if e != nil {
 				return 0, e
 			}
-			return uint64(as.BinarySize()), nil
+			return rlkShareBytes(as), nil
 		}); err != nil {
 			writeRunOnExit()
 			return fmt.Errorf("keygen: rlk-r2.agent_gen: %w", err)
@@ -277,11 +277,7 @@ func runKeygen(args []string) error {
 				return 0, e
 			}
 			clientMasterShares = cm
-			var total uint64
-			for i := range cm {
-				total += uint64(cm[i].BinarySize())
-			}
-			return total, nil
+			return galoisShareBytes(cm), nil
 		}); err != nil {
 			writeRunOnExit()
 			return fmt.Errorf("keygen: galois.client_gen: %w", err)
@@ -291,11 +287,7 @@ func runKeygen(args []string) error {
 			if e != nil {
 				return 0, e
 			}
-			var total uint64
-			for i := range am {
-				total += uint64(am[i].BinarySize())
-			}
-			return total, nil
+			return galoisShareBytes(am), nil
 		}); err != nil {
 			writeRunOnExit()
 			return fmt.Errorf("keygen: galois.agent_gen: %w", err)
@@ -440,4 +432,32 @@ func fileSize(workdir, name string) (int64, error) {
 		return 0, err
 	}
 	return info.Size(), nil
+}
+
+// PK share size = sum of the dual-level (eval + top) BinarySize accessors.
+// Shared between the runKeygen `measureShareStep` closures and the bench
+// share-size regression test so any change to the on-wire arithmetic
+// propagates through one definition.
+func pkShareBytes(cs protocol.VClientPKShare) uint64 {
+	return uint64(cs.ShareEval.BinarySize() + cs.ShareTop.BinarySize())
+}
+
+func agentPKShareBytes(as protocol.VAgentPKShare) uint64 {
+	return uint64(as.ShareEval.BinarySize() + as.ShareTop.BinarySize())
+}
+
+// RLK shares (rounds 1 + 2) are single-level lattigo multiparty shares —
+// BinarySize is the canonical on-wire length.
+func rlkShareBytes(s multiparty.RelinearizationKeyGenShare) uint64 {
+	return uint64(s.BinarySize())
+}
+
+// Galois master shares are a slice of lattigo GaloisKeyGenShare; the on-wire
+// payload sums BinarySize across every atom.
+func galoisShareBytes(shares []multiparty.GaloisKeyGenShare) uint64 {
+	var total uint64
+	for i := range shares {
+		total += uint64(shares[i].BinarySize())
+	}
+	return total
 }

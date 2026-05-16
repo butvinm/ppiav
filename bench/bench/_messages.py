@@ -54,6 +54,17 @@ class FilePath:
 
 
 @dataclass(frozen=True)
+class MultiFilePath:
+    """Sum of stat sizes across multiple ``batch_dir / rel`` paths.
+
+    Returns ``None`` if ANY file is missing — the message renders as ``—``
+    rather than silently undercounting the bundle.
+    """
+
+    rels: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class SampleBytes:
     """Size resolved by reading ``samples_by_name[name][0].bytes``."""
 
@@ -67,14 +78,7 @@ class Synthetic:
     bytes_: int
 
 
-@dataclass(frozen=True)
-class Unavailable:
-    """Size cannot be measured — renders as em-dash with the reason in a footnote."""
-
-    reason: str
-
-
-BytesSource = FilePath | SampleBytes | Synthetic | Unavailable
+BytesSource = FilePath | MultiFilePath | SampleBytes | Synthetic
 
 
 @dataclass(frozen=True)
@@ -209,8 +213,10 @@ MESSAGES: list[Message] = [
         id="VAgentEvalKeyBundle",
         sender="agent",
         receiver="service",
-        label_ru="rlk + gks_master → сервису",
-        bytes_source=FilePath("keys/rlk.bin"),
+        label_ru="rlk + pk_top + gks_master → сервису",
+        bytes_source=MultiFilePath(
+            ("keys/rlk.bin", "keys/pk_top.bin", "keys/gks_master.bin"),
+        ),
     ),
     Message(
         id="VServiceKeysAck",
@@ -307,7 +313,7 @@ KEYS: list[KeyEntry] = [
     ),
     KeyEntry(
         name="pk_top",
-        location="derived_service",
+        location="aggregated_all",
         on_wire=True,
         bytes_source=FilePath("keys/pk_top.bin"),
     ),
@@ -390,19 +396,28 @@ def _resolve_bytes_source(
     Returns:
         - ``FilePath(rel)``: ``(batch_dir / rel).stat().st_size`` if the file
           exists, else ``None``.
+        - ``MultiFilePath(rels)``: sum of ``stat().st_size`` across every rel;
+          ``None`` if ANY file is missing (no silent under-counting).
         - ``SampleBytes(name)``: ``samples_by_name[name][0].bytes`` if the name
           is present and its first sample has a non-zero Bytes field, else
           ``None``. We treat ``Bytes == 0`` as "not measured" so callers can
           distinguish from a genuine zero-byte payload (which never occurs in
           practice for our share types).
         - ``Synthetic(n)``: ``n``.
-        - ``Unavailable(reason)``: ``None``.
     """
     if isinstance(source, FilePath):
         path = batch_dir / source.rel
         if not path.is_file():
             return None
         return path.stat().st_size
+    if isinstance(source, MultiFilePath):
+        total = 0
+        for rel in source.rels:
+            path = batch_dir / rel
+            if not path.is_file():
+                return None
+            total += path.stat().st_size
+        return total
     if isinstance(source, SampleBytes):
         samples = samples_by_name.get(source.name)
         if not samples:
@@ -413,8 +428,6 @@ def _resolve_bytes_source(
         return first.bytes
     if isinstance(source, Synthetic):
         return source.bytes_
-    if isinstance(source, Unavailable):
-        return None
     raise TypeError(f"unknown BytesSource variant: {type(source).__name__}")
 
 

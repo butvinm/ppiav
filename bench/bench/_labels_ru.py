@@ -268,14 +268,16 @@ PARTY_BY_STEP: dict[str, str] = {
     "finalize.verdict_compute": "agent",
 }
 
-# Producer → consumer mapping for the per-image transfer arrows in the
-# session-timeline Gantt. Mirrors the message flow in protocol.puml's
-# inference + verifiable-decryption sections. Each tuple is
-# (sender_party, receiver_party, artifact_filename); the artifact is
-# sized via os.stat at aggregate time.
-TRANSFERS_PER_IMAGE: tuple[tuple[str, str, str], ...] = (
-    ("client", "service", "input_ct.bin"),
-    ("service", "agent", "result_ct.bin"),
-    ("agent", "client", "auth_ct.bin"),
-    ("client", "agent", "client_share.bin"),
+# Per-image transfer events for the session-timeline Gantt. Mirrors the
+# message flow in protocol.puml's inference + verifiable-decryption sections.
+# Each tuple is (after_parent_stage, sender_party, receiver_party, message_id);
+# the resolver pulls bytes from the per-message catalog row to size the rect.
+# input_ct hops twice on the wire: VClient -> VAgent (VClientInputCT) then
+# VAgent -> VService (VAgentInputCT); both are charged separately.
+TRANSFERS_PER_IMAGE: tuple[tuple[str, str, str, str], ...] = (
+    ("encrypt", "client", "agent", "VClientInputCT"),
+    ("encrypt", "agent", "service", "VAgentInputCT"),
+    ("infer", "service", "agent", "VServiceResultCT"),
+    ("mac", "agent", "client", "VAgentAuthCT"),
+    ("partial-decrypt", "client", "agent", "VClientPartialShare"),
 )

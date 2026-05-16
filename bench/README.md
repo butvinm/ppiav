@@ -51,22 +51,20 @@ results/<UTC-ts>/
 │   └── decoded.json            # verdict + ref_logit + slots_in_s + noise_per_slot
 ├── img_1/ ... img_9/
 ├── eval_inputs.json            # copy of the input manifest (self-contained batch dir)
-├── keygen.json                 # per-round timing + RSS (one Run, five Samples)
-├── bytes.json                  # cached wire sizes for replot when .bin files are stripped
-├── summary.md                  # combined per-party time+memory / bytes / FPR-FNR / noise / SNR / network tables
+├── keygen.json                 # per-party sub-step timing + RSS (one Run, 18 Samples; share sub-steps carry Bytes)
+├── summary.md                  # per-party time+memory / keygen by round / per-message bytes / key inventory / plain vs FHE accuracy / noise + SNR / network wire time
 └── plots/
-    ├── rss_per_step.png
     ├── bytes_per_message.png
+    ├── bandwidth_per_message.png
+    ├── accuracy_plain_vs_fhe.png
     ├── noise_histogram.png
     ├── snr_per_image.png
-    ├── bandwidth_per_message.png
     └── session_timeline_10mbps.png   # 3-row swim-lane Gantt (client/service/agent)
 ```
 
 Per-step peak RSS is correct per-process now (each subcommand is a fresh
 process); per-message byte sizes come straight from `os.Stat` on the on-disk
-artifacts (and from `bytes.json` when those have been pruned for git
-commit).
+artifacts.
 
 Plot strings are in Russian via `bench/_labels_ru.py`; edit that module to
 adjust labels and rerun `--aggregate-only` to re-render.
@@ -74,7 +72,8 @@ adjust labels and rerun `--aggregate-only` to re-render.
 ## Layout
 
 - `bench/eval.py` — driver + aggregator (`python -m bench.eval`).
-- `bench/plots_eval.py` — 6 PNG generators called by the aggregator.
+- `bench/plots_eval.py` — 6 PNG generators called by the aggregator (bytes / bandwidth / plain-vs-FHE accuracy / noise / SNR / swim-lane Gantt).
+- `bench/_messages.py` — protocol message + key catalog (`MESSAGES`, `KEYS`); single source of truth for the per-message bytes + key inventory tables.
 - `bench/_labels_ru.py` — user-editable Russian label glossary.
 - `bench/load.py` — parse `Run`/`Sample` JSON into dataclasses; carries
   `pre_vm_hwm` so callers can compute `delta_rss_mib` (op-attributable RSS
@@ -82,6 +81,7 @@ adjust labels and rerun `--aggregate-only` to re-render.
 - `bench/tables.py` — `render_tables(runs)` + `__main__` for ad-hoc table
   rendering against any `results/<ts>/` tree.
 - `tests/fixtures/sample_run.json` — committed schema example.
+- `tests/fixtures/sample_batch/` — committed mini-batch (keygen.json with all 18 sub-step samples, four per-image dirs with five sub-step JSONs each, `eval_inputs.json`, decoded.json with verdict + noise + ref_logit, placeholder `.bin` files) driving the `test_eval_aggregate.py` and `test_messages.py` suites.
 
 ## Heavy local tests
 

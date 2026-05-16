@@ -260,15 +260,6 @@ def run_pipeline(
 # catalog so the bench and the protocol-message catalog stay in sync.
 _PER_IMAGE_STEPS: tuple[str, ...] = _messages.PER_IMAGE_STEPS
 
-# Keygen sub-step labels emitted by `ppiav-cli keygen` (see cmd/ppiav-cli/keygen.go).
-_KEYGEN_SUBSTEPS: tuple[str, ...] = (
-    "keygen.open",
-    "keygen.pk",
-    "keygen.rlk-r1",
-    "keygen.rlk-r2",
-    "keygen.galois",
-)
-
 # Network bandwidth points reported in the wire-time table (Mbps).
 _BANDWIDTHS_MBPS: tuple[int, ...] = (1, 10, 100)
 
@@ -343,6 +334,10 @@ def _load_step_runs(
     contains one or more Samples whose ``name`` is the sub-step key (e.g.
     ``infer.exec``, ``mac.derive_auth_keys``). The bucket is keyed by Sample
     name so the per-party table can render one row per sub-step.
+
+    Unknown Sample names (not in ``_PER_IMAGE_STEPS``) raise loudly. A stale
+    single-block ``Sample.name == "infer"`` from a partially-regenerated batch
+    must not be silently absorbed under a non-catalog key.
     """
     stage_files: tuple[str, ...] = (
         "encrypt",
@@ -351,12 +346,19 @@ def _load_step_runs(
         "partial-decrypt",
         "finalize",
     )
+    allowed = set(_PER_IMAGE_STEPS)
     bucket: dict[str, list[Sample]] = {step: [] for step in _PER_IMAGE_STEPS}
     for _, img_dir in img_dirs:
         for stage in stage_files:
-            run = load_run(img_dir / f"{stage}.json")
+            json_path = img_dir / f"{stage}.json"
+            run = load_run(json_path)
             for sample in run.samples:
-                bucket.setdefault(sample.name, []).append(sample)
+                if sample.name not in allowed:
+                    raise ValueError(
+                        f"{json_path}: unknown sample name {sample.name!r} "
+                        f"(expected one of {sorted(allowed)})"
+                    )
+                bucket[sample.name].append(sample)
     return bucket
 
 
@@ -374,58 +376,18 @@ def _per_message_bytes(
     """Per-message wire sizes driven by ``_messages.MESSAGES``.
 
     Each catalog entry resolves its size via ``resolve_message_bytes``. Missing
-    files and ``Unavailable`` sources yield ``bytes=None`` (rendered as ``—``).
-
-    A bytes cache at ``<batch>/bytes.json`` persists the catalog-keyed rows so
-    re-aggregation works after stripping ``.bin`` artifacts (e.g. for commit).
-    Cache writes happen only when at least one row has a real (non-None) size;
-    otherwise the cache wins. The cache shape is checked on load — if the first
-    row has the old ``{"name", "bytes"}`` layout, the file is deleted and the
-    catalog is re-resolved.
+    files yield ``bytes=None`` (rendered as ``—``).
     """
-    rows: list[MessageBytesRow] = []
-    saw_real_byte = False
-    for msg in _messages.MESSAGES:
-        size = _messages.resolve_message_bytes(msg, batch_dir, samples_by_name)
-        if size is not None:
-            saw_real_byte = True
-        rows.append((msg.id, msg.label_ru, msg.sender, msg.receiver, size))
-
-    bytes_json = batch_dir / "bytes.json"
-    if saw_real_byte:
-        payload = [
-            {
-                "message_id": mid,
-                "label_ru": lab,
-                "sender": snd,
-                "receiver": rcv,
-                "bytes": size,
-            }
-            for mid, lab, snd, rcv, size in rows
-        ]
-        with bytes_json.open("w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, ensure_ascii=False)
-        return rows
-
-    # Nothing resolved on-disk; try the cache if present.
-    if bytes_json.is_file():
-        with bytes_json.open("r", encoding="utf-8") as f:
-            cached: list[dict[str, Any]] = json.load(f)
-        if cached and "message_id" not in cached[0]:
-            # Old cache shape — drop and re-resolve next time.
-            bytes_json.unlink()
-            return rows
-        return [
-            (
-                str(e["message_id"]),
-                str(e["label_ru"]),
-                str(e["sender"]),
-                str(e["receiver"]),
-                None if e.get("bytes") is None else int(e["bytes"]),
-            )
-            for e in cached
-        ]
-    return rows
+    return [
+        (
+            msg.id,
+            msg.label_ru,
+            msg.sender,
+            msg.receiver,
+            _messages.resolve_message_bytes(msg, batch_dir, samples_by_name),
+        )
+        for msg in _messages.MESSAGES
+    ]
 
 
 # Per-key inventory row: (key_name, location_label, on_wire_label, bytes_or_None).
@@ -560,11 +522,9 @@ def _format_with_prettier(path: Path) -> None:
 def _format_seconds(seconds: float) -> str:
     """Compact human-readable wall-time for the network table.
 
-    Reports up to days because the service-side `gks_infer.bin` transfers
-    at 1 Mbps land in the tens-of-hours range; formatting them as minutes
-    hides the scale. `gks_master.bin` (the compressed seed bundle, the
-    actual wire artifact) is far smaller but the same scale applies for
-    the largest baseline artefacts.
+    Steps through ms / s / min / h so the largest catalog wire payloads
+    (the compressed `gks_master.bin` bundle inside ``VAgentEvalKeyBundle``)
+    render in the right unit at slow bandwidths.
     """
     if seconds < 1.0:
         return f"{seconds * 1000:.1f} ms"
@@ -572,16 +532,7 @@ def _format_seconds(seconds: float) -> str:
         return f"{seconds:.2f} s"
     if seconds < 3600.0:
         return f"{seconds / 60.0:.2f} min"
-    if seconds < 86400.0:
-        return f"{seconds / 3600.0:.2f} h"
-    return f"{seconds / 86400.0:.2f} d"
-
-
-def _has_per_party_keygen(keygen_run: Run) -> bool:
-    """True if keygen.json was produced by the instrumented driver."""
-    return any(
-        s.name in PARTY_BY_STEP and PARTY_BY_STEP[s.name] != "joint" for s in keygen_run.samples
-    )
+    return f"{seconds / 3600.0:.2f} h"
 
 
 def _party_step_table_md(
@@ -590,9 +541,8 @@ def _party_step_table_md(
 ) -> str:
     """Per-party table — every row attributes to exactly one party.
 
-    Rows: per-party keygen sub-steps (when the instrumented driver produced
-    them) followed by per-image protocol steps. Joint round-level samples
-    are NOT placed here — see ``_keygen_by_round_table_md``.
+    Rows: per-party keygen sub-steps followed by per-image protocol steps.
+    Joint round-level totals are rendered separately in ``_keygen_by_round_table_md``.
     """
     lines: list[str] = []
     header = (
@@ -601,22 +551,21 @@ def _party_step_table_md(
     lines.append(header)
     lines.append("|---|---|---:|---:|---:|---:|---:|")
 
-    if _has_per_party_keygen(keygen_run):
-        for substeps in KEYGEN_ROUND_SUBSTEPS.values():
-            for substep in substeps:
-                matching = [s for s in keygen_run.samples if s.name == substep]
-                if not matching:
-                    continue
-                mean, _p50, p95 = _wall_ms(matching)
-                delta, hwm = _rss_stats(matching)
-                n = len(matching)
-                party = PARTY_NAMES[PARTY_BY_STEP[substep]]
-                label = STEP_NAMES.get(substep, substep)
-                lines.append(
-                    f"| {party} | {label} | {n} | "
-                    f"{_format_ms(mean)} | {_format_ms(p95)} | "
-                    f"{_format_mib(delta)} | {_format_mib(hwm)} |"
-                )
+    for substeps in KEYGEN_ROUND_SUBSTEPS.values():
+        for substep in substeps:
+            matching = [s for s in keygen_run.samples if s.name == substep]
+            if not matching:
+                continue
+            mean, _p50, p95 = _wall_ms(matching)
+            delta, hwm = _rss_stats(matching)
+            n = len(matching)
+            party = PARTY_NAMES[PARTY_BY_STEP[substep]]
+            label = STEP_NAMES.get(substep, substep)
+            lines.append(
+                f"| {party} | {label} | {n} | "
+                f"{_format_ms(mean)} | {_format_ms(p95)} | "
+                f"{_format_mib(delta)} | {_format_mib(hwm)} |"
+            )
 
     for step in _PER_IMAGE_STEPS:
         samples = per_image.get(step, [])
@@ -648,10 +597,8 @@ def _party_step_table_md(
 def _keygen_by_round_table_md(keygen_run: Run) -> str:
     """Round-level keygen table — joint rounds, no party column.
 
-    Each row's wall = sum of its sub-step walls (or the round-level
-    sample's wall if no per-party data is present). VM HWM = max
-    across the round's samples (peak resident set at any point during
-    the round).
+    Each row's wall = sum of its sub-step walls; VM HWM = max across the
+    round's samples (peak resident set at any point during the round).
     """
     lines: list[str] = []
     lines.append("| round | n | total wall ms | peak VM HWM MiB |")
@@ -659,26 +606,17 @@ def _keygen_by_round_table_md(keygen_run: Run) -> str:
     for round_name, substeps in KEYGEN_ROUND_SUBSTEPS.items():
         round_label = STEP_NAMES.get(round_name, round_name)
         sub_samples = [s for s in keygen_run.samples if s.name in substeps]
-        if sub_samples:
-            wall = sum(s.wall_ms for s in sub_samples)
-            hwm = max(s.vm_hwm for s in sub_samples) / (1024.0 * 1024.0)
-            n_each = [sum(1 for s in sub_samples if s.name == sub) for sub in substeps]
-            n = max([x for x in n_each if x > 0], default=1)
-            lines.append(f"| {round_label} | {n} | {_format_ms(wall)} | {_format_mib(hwm)} |")
+        if not sub_samples:
             continue
-        legacy = [s for s in keygen_run.samples if s.name == round_name]
-        if legacy:
-            wall = sum(s.wall_ms for s in legacy)
-            hwm = max(s.vm_hwm for s in legacy) / (1024.0 * 1024.0)
-            lines.append(
-                f"| {round_label} | {len(legacy)} | {_format_ms(wall)} | {_format_mib(hwm)} |"
-            )
+        wall = sum(s.wall_ms for s in sub_samples)
+        hwm = max(s.vm_hwm for s in sub_samples) / (1024.0 * 1024.0)
+        n_each = [sum(1 for s in sub_samples if s.name == sub) for sub in substeps]
+        n = max([x for x in n_each if x > 0], default=1)
+        lines.append(f"| {round_label} | {n} | {_format_ms(wall)} | {_format_mib(hwm)} |")
     lines.append("")
     lines.append(
         "_Rounds execute bilaterally inside one `ppiav-cli keygen` process. "
-        "The per-party breakdown is in the table above when the bench run "
-        "captured per-party sub-step samples; legacy round-level runs report "
-        "joint round totals only._"
+        "Each row sums its per-party sub-step samples from the table above._"
     )
     return "\n".join(lines)
 
@@ -759,22 +697,6 @@ def _network_table_md(rows: Sequence[MessageBytesRow]) -> str:
     return "\n".join(lines)
 
 
-def _verdict_table_md(stats: dict[str, int | float], n_total: int) -> str:
-    lines: list[str] = []
-    lines.append("| metric | value |")
-    lines.append("|---|---:|")
-    lines.append(f"| samples (total) | {n_total} |")
-    lines.append(f"| true positives | {stats['tp']} |")
-    lines.append(f"| true negatives | {stats['tn']} |")
-    lines.append(f"| false positives | {stats['fp']} |")
-    lines.append(f"| false negatives | {stats['fn']} |")
-    lines.append(f"| unknown | {stats['unknown']} |")
-    lines.append(f"| FPR | {float(stats['fpr']):.3f} |")
-    lines.append(f"| FNR | {float(stats['fnr']):.3f} |")
-    lines.append(f"| accuracy | {float(stats['accuracy']):.3f} |")
-    return "\n".join(lines)
-
-
 def _accuracy_compare_table_md(
     fhe_stats: dict[str, int | float],
     plain_stats: dict[str, int | float],
@@ -784,7 +706,7 @@ def _accuracy_compare_table_md(
 
     Plaintext column has no Auth gate so ``unknown`` is always 0 there; the
     FHE column carries whatever the protocol reported. Rate rows (FPR/FNR/
-    accuracy) render to three decimals to match ``_verdict_table_md``.
+    accuracy) render to three decimals.
     """
     metric_col = TABLE_HEADERS["metric"]
     plain_col = TABLE_HEADERS["plain_column"]
@@ -943,23 +865,14 @@ def aggregate(batch_dir: Path) -> None:
     _format_with_prettier(summary_path)
 
     agg_data: dict[str, Any] = {
-        "batch_dir": str(batch_dir),
         "keygen_run": keygen_run,
         "per_image_samples": per_image_samples,
-        "samples_by_name": samples_by_name,
         "message_bytes_rows": bytes_rows,
-        "key_rows": key_rows,
         "verdict_stats": verdict_stats,
         "plain_stats": plain_stats,
-        "noise_stats": noise_stats,
         "snr": snr,
         "all_noise": all_noise,
-        "decoded_by_idx": decoded_by_idx,
-        "manifest_by_idx": manifest_by_idx,
-        "image_indices": [idx for idx, _ in img_dirs],
         "bandwidths_mbps": _BANDWIDTHS_MBPS,
-        "per_image_steps": _PER_IMAGE_STEPS,
-        "keygen_substeps": _KEYGEN_SUBSTEPS,
     }
 
     # Lazy import — keeps a broken matplotlib backend (e.g. missing system

@@ -403,3 +403,36 @@ func TestKeygenMethodsRejectUnknownSid(t *testing.T) {
 	_, _, err = a.GenMasterShares(sid)
 	require.Error(t, err)
 }
+
+func TestGksAuthUnknownSidReturnsNotOk(t *testing.T) {
+	params := smallParams(t)
+	a, err := New(params)
+	require.NoError(t, err)
+	got, ok := a.GksAuth(protocol.SessionID("never-opened"))
+	require.False(t, ok, "unknown sid must report not-found")
+	require.Nil(t, got, "unknown sid must return a nil slice")
+}
+
+func TestGksAuthAfterAggregateReturnsPopulatedSlice(t *testing.T) {
+	params := smallParams(t)
+	a, err := New(params)
+	require.NoError(t, err)
+	sid := protocol.SessionID("gks-auth-sid")
+	require.NoError(t, a.OpenSession(sid))
+	stub := newVClientStub(t, params, sid)
+
+	runHandshakeUpToGalois(t, a, sid, stub)
+	_, agentMasterLabels, err := a.GenMasterShares(sid)
+	require.NoError(t, err)
+	clientMaster := generateClientGaloisShares(t, stub, params, agentMasterLabels)
+	_, _, _, err = a.AggregateGaloisShares(sid,
+		protocol.VClientGaloisShares{MasterShares: clientMaster})
+	require.NoError(t, err)
+
+	gksAuth, ok := a.GksAuth(sid)
+	require.True(t, ok, "known sid must report present after AggregateGaloisShares")
+	require.Len(t, gksAuth, len(params.AuthAtoms()), "gksAuth must cover every auth atom")
+	for i, gk := range gksAuth {
+		require.NotNil(t, gk, "auth atom %d Galois key is nil", i)
+	}
+}

@@ -12,8 +12,8 @@ from bench._messages import (
     MESSAGES,
     FilePath,
     Message,
+    MultiFilePath,
     SampleBytes,
-    Unavailable,
     resolve_key_bytes,
     resolve_message_bytes,
 )
@@ -152,17 +152,31 @@ def test_resolve_filepath_returns_stat_size() -> None:
     assert size == 0
 
 
-def test_resolve_unavailable_returns_none() -> None:
-    """Unavailable bytes_source resolves to None (renders as em-dash)."""
+def test_resolve_multifile_sums_sizes() -> None:
+    """MultiFilePath sums sizes across every file when all present."""
     samples = _samples_by_name()
-    fake_msg = Message(
-        id="FakeUnavailableProbe",
-        sender="client",
-        receiver="agent",
-        label_ru="фейковая недоступная метка",
-        bytes_source=Unavailable("type lacks BinarySize"),
+    msg = next(m for m in MESSAGES if m.id == "VAgentEvalKeyBundle")
+    size = resolve_message_bytes(msg, FIXTURE, samples)
+    expected = sum(
+        (FIXTURE / rel).stat().st_size
+        for rel in ("keys/rlk.bin", "keys/pk_top.bin", "keys/gks_master.bin")
     )
-    assert resolve_message_bytes(fake_msg, FIXTURE, samples) is None
+    assert size == expected
+
+
+def test_resolve_multifile_missing_returns_none(tmp_path: Path) -> None:
+    """MultiFilePath returns None if ANY rel is missing — no silent undercount."""
+    (tmp_path / "keys").mkdir()
+    (tmp_path / "keys" / "a.bin").write_bytes(b"x" * 16)
+    # b.bin is intentionally missing.
+    fake_msg = Message(
+        id="FakeMultiMissing",
+        sender="agent",
+        receiver="service",
+        label_ru="фейковый составной",
+        bytes_source=MultiFilePath(("keys/a.bin", "keys/b.bin")),
+    )
+    assert resolve_message_bytes(fake_msg, tmp_path, {}) is None
 
 
 def test_resolve_missing_filepath_returns_none(tmp_path: Path) -> None:

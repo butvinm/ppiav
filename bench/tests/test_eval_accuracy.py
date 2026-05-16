@@ -97,6 +97,45 @@ def test_accuracy_compare_table_contains_both_columns_and_all_rows() -> None:
         assert label in table, f"missing metric row {key!r} ({label})"
 
 
+def test_classify_plain_empty_manifest() -> None:
+    """Empty manifest must produce all-zero stats without a divide-by-zero."""
+    stats = _classify_plain({})
+    assert stats["tp"] == 0
+    assert stats["tn"] == 0
+    assert stats["fp"] == 0
+    assert stats["fn"] == 0
+    assert stats["unknown"] == 0
+    assert stats["fpr"] == 0.0
+    assert stats["fnr"] == 0.0
+    assert stats["accuracy"] == 0.0
+
+
+def test_classify_plain_ref_logit_zero_is_reject() -> None:
+    """ref_logit == 0 must classify as reject (verdict rule is strict >0).
+
+    The fixture uses one entry: ref_logit=0.0, label=0 -> verdict=reject ->
+    a single true-negative.
+    """
+    manifest: dict[int, dict[str, Any]] = {0: {"label": 0, "ref_logit": 0.0}}
+    stats = _classify_plain(manifest)
+    assert stats["tn"] == 1
+    assert stats["tp"] == 0
+    assert stats["fp"] == 0
+    assert stats["fn"] == 0
+
+
+def test_classify_plain_missing_ref_logit_defaults_to_reject() -> None:
+    """A manifest entry without ref_logit falls through to the .get default (0.0).
+
+    Documents the current strict contract: missing key -> default reject. If
+    upstream tightens this to strict-required, this test goes red and the
+    contract must be re-decided explicitly.
+    """
+    manifest: dict[int, dict[str, Any]] = {0: {"label": 0}}
+    stats = _classify_plain(manifest)
+    assert stats["tn"] == 1
+
+
 def test_accuracy_compare_table_plain_unknown_is_zero() -> None:
     """Plaintext column never reports ``unknown`` — no Auth gate exists there.
 

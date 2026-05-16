@@ -89,22 +89,6 @@ def test_aggregate_key_inventory_section_lists_every_key(batch_dir: Path) -> Non
         assert key.name in summary, f"key name {key.name!r} missing from summary.md"
 
 
-def test_aggregate_writes_bytes_cache(batch_dir: Path) -> None:
-    """First aggregate run writes bytes.json with catalog-keyed entries."""
-    import json
-
-    aggregate(batch_dir)
-    cache = batch_dir / "bytes.json"
-    assert cache.is_file()
-    with cache.open("r", encoding="utf-8") as f:
-        data = json.load(f)
-    assert isinstance(data, list)
-    assert data, "bytes.json should not be empty after a successful aggregate"
-    # New schema sentinel — the row carries message_id, not the old "name" field.
-    assert "message_id" in data[0]
-    assert "name" not in data[0]
-
-
 def test_party_step_table_lists_each_substep_with_party(batch_dir: Path) -> None:
     """Every per-image sub-step renders as its own row with its assigned party tag."""
     from bench._labels_ru import PARTY_BY_STEP, PARTY_NAMES, STEP_NAMES
@@ -142,31 +126,111 @@ def test_party_step_table_lists_each_substep_with_party(batch_dir: Path) -> None
                 break
 
 
-def test_aggregate_drops_old_shape_cache(batch_dir: Path) -> None:
-    """An existing bytes.json with the old {name, bytes} shape must be deleted.
+def test_key_inventory_renders_on_wire_flags_correctly(batch_dir: Path) -> None:
+    """on_wire flag + location strings render exactly per the labels module."""
+    from bench._labels_ru import KEY_LOCATION_NAMES, TABLE_HEADERS
+    from bench.eval import _key_inventory_md, _key_inventory_rows
 
-    This exercises the no-migration cache-shape check: if the on-disk cache
-    predates Task 5, we drop it rather than carrying compat code.
+    rows = _key_inventory_rows(batch_dir, {})
+    table = _key_inventory_md(rows)
+
+    def _row_for(key_name: str) -> str:
+        for line in table.splitlines():
+            cells = [c.strip() for c in line.strip("|").split("|")]
+            if cells and cells[0] == key_name:
+                return line
+        raise AssertionError(f"key {key_name!r} missing from inventory table")
+
+    # gks^master is on the wire as the catalog aggregate — must carry the yes label.
+    assert TABLE_HEADERS["on_wire_yes"] in _row_for("gks^master")
+    # gks^master_a (agent's master share) is local-only — must carry the no label.
+    assert TABLE_HEADERS["on_wire_no"] in _row_for("gks^master_a")
+    # sk_c is client-local — its location must carry the client-local label.
+    assert KEY_LOCATION_NAMES["client_local"] in _row_for("sk_c")
+
+
+def test_network_table_bandwidth_arithmetic() -> None:
+    """Bandwidth column must compute seconds = bytes * 8 / (mbps * 1e6).
+
+    Synthesizes a single row (1 MB, 8 Mbps) and asserts the rendered cell is
+    "1.00 s" — a regression that swapped bits<->bytes (factor of 8) would land
+    on "0.13 s" or "8.00 s" and fail loudly.
+    """
+    from bench.eval import _network_table_md
+
+    rows = [("ProbeMsg", "проба", "client", "agent", 1_000_000)]
+    table = _network_table_md(rows)
+    # _BANDWIDTHS_MBPS is (1, 10, 100); 10 Mbps -> 1e6 / 1.25e6 = 0.80s.
+    # We synthesize for 1 Mbps which yields 1e6 / 1.25e5 = 8.00s.
+    # The header is "t @ 1 Mbps", so the value lands on the same row.
+    line = next(line for line in table.splitlines() if "ProbeMsg" in line)
+    cells = [c.strip() for c in line.strip("|").split("|")]
+    # cells = [id, bytes, t@1Mbps, t@10Mbps, t@100Mbps]
+    assert cells[1] == "1000000"
+    assert cells[2] == "8.00 s"
+    assert cells[3] == "800.0 ms"
+    assert cells[4] == "80.0 ms"
+
+
+def test_load_step_runs_rejects_unknown_sample_name(tmp_path: Path) -> None:
+    """An unknown Sample.name in a per-image JSON must surface as a loud error.
+
+    Guards against silent regression where a stale single-block ``Sample.name
+    == "infer"`` from a partially-regenerated batch lands under a non-catalog
+    bucket key and disappears from every downstream table.
+    """
+    from bench.eval import _load_step_runs
+
+    img_dir = tmp_path / "img_0"
+    img_dir.mkdir()
+    # Write the five per-stage files. Four are valid; infer.json carries the
+    # legacy single-block "infer" name (not in PER_IMAGE_STEPS post-redesign).
+    _write_run(img_dir / "encrypt.json", "encrypt", ["encrypt"])
+    _write_run(img_dir / "mac.json", "mac", ["mac.derive_auth_keys"])
+    _write_run(
+        img_dir / "partial-decrypt.json", "partial-decrypt", ["partial-decrypt"]
+    )
+    _write_run(img_dir / "finalize.json", "finalize", ["finalize.final_decrypt"])
+    _write_run(img_dir / "infer.json", "infer", ["infer"])
+    with pytest.raises(ValueError, match="unknown sample name"):
+        _load_step_runs([(0, img_dir)])
+
+
+def _write_run(path: Path, run_name: str, sample_names: list[str]) -> None:
+    """Helper: write a bench.Run JSON shell with the given sample names.
+
+    Mirrors the on-disk schema produced by ``internal/bench`` so ``load_run``
+    can parse it. Required envelope fields default to neutral values.
     """
     import json
 
-    cache = batch_dir / "bytes.json"
-    # Strip every .bin so the resolver has nothing fresh to write; the old
-    # cache would otherwise be overwritten before the shape check runs.
-    for path in batch_dir.rglob("*.bin"):
-        path.unlink()
-    cache.write_text(
-        json.dumps([{"name": "keys/legacy.bin", "bytes": 999}]),
-        encoding="utf-8",
-    )
+    base = {
+        "name": run_name,
+        "phase": "phase2",
+        "started": "2026-05-16T12:00:00Z",
+        "go_version": "go1.23.0",
+        "goos": "linux",
+        "goarch": "amd64",
+        "num_cpu": 1,
+        "samples": [
+            {
+                "name": sample_name,
+                "iter": 0,
+                "wall": 0,
+                "heap_alloc": 0,
+                "heap_inuse": 0,
+                "sys": 0,
+                "alloc_delta": 0,
+                "num_gc": 0,
+                "pause_ns": 0,
+                "vm_hwm": 0,
+                "bytes": 0,
+                "pre_vm_hwm": 0,
+            }
+            for sample_name in sample_names
+        ],
+        "metadata": {},
+    }
+    path.write_text(json.dumps(base), encoding="utf-8")
 
-    aggregate(batch_dir)
 
-    # Cache file should have been removed by the shape check (no fresh writes
-    # this round because every .bin is gone and Sample.Bytes is the only
-    # remaining real source — still some SampleBytes resolve, so file may be
-    # re-written in NEW shape). Either it's gone OR rewritten in new shape.
-    if cache.is_file():
-        with cache.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-        assert "message_id" in data[0], "bytes.json should not retain the legacy shape"

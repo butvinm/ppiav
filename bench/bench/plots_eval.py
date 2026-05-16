@@ -42,9 +42,10 @@ from bench._labels_ru import (
     PARTY_SHORT_NAMES,
     STEP_NAMES,
     TABLE_HEADERS,
+    TRANSFERS_PER_IMAGE,
 )
 from bench._messages import PER_IMAGE_STEPS
-from bench.eval import _KEYGEN_SUBSTEPS, MessageBytesRow
+from bench.eval import MessageBytesRow
 from bench.load import Run, Sample
 
 # Macro-phase color palette. setup = blue, inference = orange, verify = green.
@@ -71,11 +72,6 @@ _SUBSTEP_FAMILIES: dict[str, tuple[str, int]] = {
     "finalize": ("Purples", 2),
 }
 
-_PHASE_SETUP: frozenset[str] = frozenset(_KEYGEN_SUBSTEPS)
-_PHASE_INFER: frozenset[str] = frozenset({"encrypt", "infer"})
-_PHASE_VERIFY: frozenset[str] = frozenset({"mac", "partial-decrypt", "finalize"})
-
-
 def _parent_stage(step: str) -> str:
     """Return the parent-stage name for a per-image step or sub-step."""
     return step.split(".", 1)[0]
@@ -83,7 +79,7 @@ def _parent_stage(step: str) -> str:
 
 def _phase_color(step: str) -> str:
     parent = _parent_stage(step)
-    if step in _PHASE_SETUP:
+    if parent == "keygen":
         return _COLOR_SETUP
     if parent in {"encrypt", "infer"}:
         return _COLOR_INFER
@@ -125,7 +121,7 @@ def _mean_wall_ms(samples: Sequence[Sample]) -> float:
 
 
 def _keygen_samples_by_name(keygen_run: Run) -> dict[str, list[Sample]]:
-    bucket: dict[str, list[Sample]] = {name: [] for name in _KEYGEN_SUBSTEPS}
+    bucket: dict[str, list[Sample]] = {}
     for s in keygen_run.samples:
         bucket.setdefault(s.name, []).append(s)
     return bucket
@@ -135,11 +131,12 @@ def _ordered_steps_and_means(
     keygen_run: Run,
     per_image: dict[str, list[Sample]],
 ) -> list[tuple[str, float]]:
-    """Return ordered `(step, mean_ms)` for keygen substeps + per-image sub-steps."""
+    """Return ordered `(step, mean_ms)` for keygen sub-steps + per-image sub-steps."""
     out: list[tuple[str, float]] = []
     keygen_bucket = _keygen_samples_by_name(keygen_run)
-    for name in _KEYGEN_SUBSTEPS:
-        out.append((name, _mean_wall_ms(keygen_bucket.get(name, []))))
+    for substeps in KEYGEN_ROUND_SUBSTEPS.values():
+        for sub in substeps:
+            out.append((sub, _mean_wall_ms(keygen_bucket.get(sub, []))))
     for step in PER_IMAGE_STEPS:
         out.append((step, _mean_wall_ms(per_image.get(step, []))))
     return out
@@ -157,7 +154,7 @@ def _plot_bytes_per_message(path: Path, rows: Sequence[MessageBytesRow]) -> None
     ids = [r[0] for r in rows]
     senders = [r[2] for r in rows]
     # Coerce None → 1 byte so the log axis is safe; matches the existing
-    # bytes_per_message convention. Catalog `Unavailable` rows get the same
+    # bytes_per_message convention. Missing-file rows get the same
     # treatment but the table-side renders an em-dash to disambiguate.
     sizes = [max(r[4] or 1, 1) for r in rows]
     colors = [_SENDER_COLORS.get(s, "#888888") for s in senders]
@@ -329,41 +326,16 @@ def _set_macro_phase_legend(ax: Any, *, transfer: bool) -> None:
 
 
 # Lane order for the swim-lane Gantt: client / service / agent.
-# Joint rounds (legacy keygen.json) are drawn as multi-lane spanning blocks.
 _LANE_ORDER: tuple[str, ...] = ("client", "service", "agent")
 
-# For each keygen round, the set of party lanes the round's compute spans
-# when only round-level (not per-party) samples are available.
-_KEYGEN_ROUND_LANES: dict[str, tuple[str, ...]] = {
-    "keygen.open": ("client", "service", "agent"),
-    "keygen.pk": ("client", "agent"),
-    "keygen.rlk-r1": ("client", "agent"),
-    "keygen.rlk-r2": ("client", "agent"),
-    "keygen.galois": ("client", "service", "agent"),
-}
 
-
-def _bytes_for_per_image_artifact(
+def _bytes_for_message(
     bytes_rows: Sequence[MessageBytesRow],
-    artifact_filename: str,
+    message_id: str,
 ) -> int:
-    """Resolve a per-image transfer's wire size from the message catalog.
-
-    Maps each `img_0/<artifact>` filename onto the catalog message that
-    forwards it on the wire. Used by the Gantt to size the inter-party
-    transfer rectangles.
-    """
-    artifact_to_msg = {
-        "input_ct.bin": "VAgentInputCT",
-        "result_ct.bin": "VServiceResultCT",
-        "auth_ct.bin": "VAgentAuthCT",
-        "client_share.bin": "VClientPartialShare",
-    }
-    target = artifact_to_msg.get(artifact_filename)
-    if target is None:
-        return 0
+    """Resolve a message's wire size from the catalog rows; 0 if missing."""
     for mid, _label, _sender, _receiver, size in bytes_rows:
-        if mid == target:
+        if mid == message_id:
             return int(size) if size is not None else 0
     return 0
 
@@ -406,39 +378,16 @@ def _plot_session_timeline_swimlane(
     events: list[dict[str, Any]] = []
     t = 0.0
 
-    # 1. Keygen: per-party sub-substeps if available (instrumented driver),
-    # else round-level spanning blocks across the involved party lanes.
-    sub_party_names: list[str] = [
-        sub for substeps in KEYGEN_ROUND_SUBSTEPS.values() for sub in substeps
-    ]
-    has_per_party = any(step_ms.get(sub, 0.0) > 0 for sub in sub_party_names)
-
-    if has_per_party:
-        for substeps in KEYGEN_ROUND_SUBSTEPS.values():
-            for sub in substeps:
-                ms = step_ms.get(sub, 0.0)
-                if ms <= 0:
-                    continue
-                party = PARTY_BY_STEP.get(sub, "client")
-                events.append(
-                    {
-                        "lanes": (party,),
-                        "kind": "compute",
-                        "t_start": t,
-                        "t_end": t + ms,
-                        "label": _step_label(sub),
-                        "color": _phase_color(sub),
-                    }
-                )
-                t += ms
-    else:
-        for sub in _KEYGEN_SUBSTEPS:
+    # 1. Keygen: per-party sub-step blocks on each party's lane.
+    for substeps in KEYGEN_ROUND_SUBSTEPS.values():
+        for sub in substeps:
             ms = step_ms.get(sub, 0.0)
             if ms <= 0:
                 continue
+            party = PARTY_BY_STEP.get(sub, "client")
             events.append(
                 {
-                    "lanes": _KEYGEN_ROUND_LANES.get(sub, ("client", "agent")),
+                    "lanes": (party,),
                     "kind": "compute",
                     "t_start": t,
                     "t_end": t + ms,
@@ -449,24 +398,24 @@ def _plot_session_timeline_swimlane(
             t += ms
 
     # 2. Per-image protocol sub-steps + their post-stage transfers.
-    # Transfers are keyed by parent stage (the sub-step that ends the stage
-    # emits the message). Sub-steps inherit shaded colors from their parent.
-    transfer_after_parent: dict[str, tuple[str, str, str]] = {
-        # encrypt → input_ct from client to service (via agent forwarder)
-        "encrypt": ("client", "service", "input_ct.bin"),
-        # infer → result_ct from service to agent
-        "infer": ("service", "agent", "result_ct.bin"),
-        # mac → auth_ct from agent to client
-        "mac": ("agent", "client", "auth_ct.bin"),
-        # partial-decrypt → client_share from client to agent
-        "partial-decrypt": ("client", "agent", "client_share.bin"),
-        # finalize → no outgoing message
-    }
-
+    # Transfers come from the canonical TRANSFERS_PER_IMAGE list (single
+    # source of truth in _labels_ru); each tuple names the parent stage
+    # after which the transfer fires, the sender/receiver, and the catalog
+    # message_id whose bytes size the rect. input_ct hops twice
+    # (VClient->VAgent then VAgent->VService) — both rendered separately.
     ordinals = _substep_ordinals(PER_IMAGE_STEPS)
-    seen_parents: set[str] = set()
+    last_substep_of_parent: dict[str, str] = {}
     for step in PER_IMAGE_STEPS:
-        parent = _parent_stage(step)
+        last_substep_of_parent[_parent_stage(step)] = step
+
+    transfers_after_step: dict[str, list[tuple[str, str, str]]] = {}
+    for after_parent, sender, receiver, message_id in TRANSFERS_PER_IMAGE:
+        anchor = last_substep_of_parent.get(after_parent)
+        if anchor is None:
+            continue
+        transfers_after_step.setdefault(anchor, []).append((sender, receiver, message_id))
+
+    for step in PER_IMAGE_STEPS:
         ms = step_ms.get(step, 0.0)
         if ms > 0:
             party = PARTY_BY_STEP.get(step, "joint")
@@ -484,31 +433,26 @@ def _plot_session_timeline_swimlane(
             )
             t += ms
 
-        # Emit the post-stage transfer exactly once — when the LAST sub-step
-        # of the parent stage is reached. Sub-step order in PER_IMAGE_STEPS
-        # is chronological, so the last hit is the trailing sub-step.
-        # We rely on a "saw at least one sample for this step" gate: empty
-        # sub-steps don't anchor a transfer.
-        if parent in transfer_after_parent and ms > 0:
-            same_parent = [s for s in PER_IMAGE_STEPS if _parent_stage(s) == parent]
-            is_last = step == same_parent[-1]
-            if is_last and parent not in seen_parents:
-                seen_parents.add(parent)
-                sender, receiver, artifact = transfer_after_parent[parent]
-                size = _bytes_for_per_image_artifact(bytes_rows, artifact)
-                if size > 0:
-                    tx_ms = (size / bps) * 1000.0
-                    events.append(
-                        {
-                            "lanes": (sender, receiver),
-                            "kind": "transfer",
-                            "t_start": t,
-                            "t_end": t + tx_ms,
-                            "label": artifact,
-                            "color": _phase_color(step),
-                        }
-                    )
-                    t += tx_ms
+        # Anchor transfers to the trailing sub-step of each parent stage; do
+        # not emit transfers when the parent's sub-steps had no real samples.
+        if ms <= 0:
+            continue
+        for sender, receiver, message_id in transfers_after_step.get(step, []):
+            size = _bytes_for_message(bytes_rows, message_id)
+            if size <= 0:
+                continue
+            tx_ms = (size / bps) * 1000.0
+            events.append(
+                {
+                    "lanes": (sender, receiver),
+                    "kind": "transfer",
+                    "t_start": t,
+                    "t_end": t + tx_ms,
+                    "label": message_id,
+                    "color": _phase_color(step),
+                }
+            )
+            t += tx_ms
 
     total_ms = t if t > 0 else 1.0
     use_seconds = total_ms >= 1000.0
@@ -542,33 +486,6 @@ def _plot_session_timeline_swimlane(
                     ha="center",
                     va="center",
                     fontsize=6,
-                    color="white",
-                )
-        elif ev["kind"] == "compute":
-            # Multi-lane spanning compute: legacy joint keygen round drawn
-            # across the involved party lanes as one tall hatched rect.
-            ys = sorted(_LANE_ORDER.index(p) for p in lanes)
-            y_mid = (ys[0] + ys[-1]) / 2.0
-            tall_height = (ys[-1] - ys[0]) + bar_height
-            ax.barh(
-                y_mid,
-                width,
-                left=t_start,
-                height=tall_height,
-                color=ev["color"],
-                alpha=0.55,
-                hatch="\\\\",
-                edgecolor="white",
-                linewidth=0.4,
-            )
-            if width > total_ms / scale * 0.02:
-                ax.text(
-                    t_start + width / 2,
-                    y_mid,
-                    ev["label"],
-                    ha="center",
-                    va="center",
-                    fontsize=7,
                     color="white",
                 )
         else:

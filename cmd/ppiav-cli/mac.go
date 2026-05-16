@@ -116,7 +116,7 @@ func runMAC(args []string) error {
 		agent = a
 		gksAuth, ok := agent.GksAuth(sid)
 		if !ok {
-			return 0, nil
+			return 0, fmt.Errorf("VAgent.GksAuth: no derived auth-atom keys for sid %q", sid)
 		}
 		var total uint64
 		for _, gk := range gksAuth {
