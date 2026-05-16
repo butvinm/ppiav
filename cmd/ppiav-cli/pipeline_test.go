@@ -60,18 +60,17 @@ func TestKeygenToMacToInferPipeline(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, agent.AggregateRLKRound2(sid, cR2))
 
-	// Dual-atom-set Galois handshake.
-	cAuthShares, cInferShares, _, _, err := client.GenAuthAndInferShares()
+	// Single master-atom-set Galois handshake.
+	cMasterShares, _, err := client.GenMasterShares()
 	require.NoError(t, err)
-	_, _, _, _, err = agent.GenAuthAndInferShares(sid)
+	_, _, err = agent.GenMasterShares(sid)
 	require.NoError(t, err)
 	clientShares := protocol.VClientGaloisShares{
-		AuthAtomShares:  cAuthShares,
-		InferAtomShares: cInferShares,
+		MasterShares: cMasterShares,
 	}
-	rlk, pkTop, gksMasterInfer, err := agent.AggregateGaloisShares(sid, clientShares)
+	rlk, pkTop, gksMaster, err := agent.AggregateGaloisShares(sid, clientShares)
 	require.NoError(t, err)
-	require.NoError(t, svc.StoreEvalKeys(sid, rlk, pkTop, gksMasterInfer))
+	require.NoError(t, svc.StoreEvalKeys(sid, rlk, pkTop, gksMaster))
 
 	// --- persist via writeKeygenArtifacts -----------------------------------
 	clientState, err := client.ExportState()
@@ -82,14 +81,14 @@ func TestKeygenToMacToInferPipeline(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, writeKeygenArtifacts(dir, params, sid, clientState, agentState, svcState))
 
-	// Every Task-10 artifact must land on disk. gks_infer.bin is written
-	// in all modes — even synthetic-x² (no ExtraRotationIndices) produces
-	// a well-formed empty container that the loader can read back.
+	// Every artifact must land on disk. gks_infer.bin is written in all
+	// modes — even synthetic-x² (no ExtraRotationIndices) produces a
+	// well-formed empty container that the loader can read back.
 	wantFiles := []string{
 		artifactSID, artifactParams,
 		artifactPKEval, artifactPKTop,
 		artifactSKClient, artifactSKAgent,
-		artifactRLK, artifactGKSAuth, artifactGKSMasterInfer, artifactGKSInfer,
+		artifactRLK, artifactGKSMaster, artifactGKSInfer,
 		artifactMacKey,
 	}
 	for _, name := range wantFiles {
@@ -108,9 +107,7 @@ func TestKeygenToMacToInferPipeline(t *testing.T) {
 	require.NoError(t, err)
 	rlkDisk, err := readRelinearizationKey(dir)
 	require.NoError(t, err)
-	gksAuth, err := readGaloisKeys(dir, artifactGKSAuth)
-	require.NoError(t, err)
-	gksMasterDisk, err := readMasterKeys(dir, artifactGKSMasterInfer)
+	gksMasterDisk, err := readMasterKeys(dir, artifactGKSMaster)
 	require.NoError(t, err)
 	gksInfer, err := readGaloisKeys(dir, artifactGKSInfer)
 	require.NoError(t, err)
@@ -124,8 +121,7 @@ func TestKeygenToMacToInferPipeline(t *testing.T) {
 	require.NotNil(t, pkEval)
 	require.NotNil(t, pkTopDisk)
 	require.NotNil(t, rlkDisk)
-	require.NotEmpty(t, gksAuth, "gks_auth must round-trip a non-empty slice")
-	require.NotEmpty(t, gksMasterDisk, "gks_master_infer must round-trip a non-empty map")
+	require.NotEmpty(t, gksMasterDisk, "gks_master must round-trip a non-empty map")
 	// gksInfer may be nil in synthetic-x² mode (no ExtraRotationIndices).
 	// Real Orion runs populate it; the pipeline test runs in synthetic mode.
 	_ = gksInfer
@@ -133,11 +129,11 @@ func TestKeygenToMacToInferPipeline(t *testing.T) {
 	require.NotNil(t, skC)
 
 	// Atom-set sanity check: the master-key bundle must cover the
-	// canonical InferAtoms set.
-	inferAtoms := params.InferAtoms()
-	for _, a := range inferAtoms {
+	// canonical MasterAtoms set.
+	masterAtoms := params.MasterAtoms()
+	for _, a := range masterAtoms {
 		_, ok := gksMasterDisk[a]
-		assert.True(t, ok, "atom %d missing from gks_master_infer", a)
+		assert.True(t, ok, "atom %d missing from gks_master", a)
 	}
 
 	// loadParams() in production returns protocol.Defaults() (λ=128) with
@@ -153,14 +149,13 @@ func TestKeygenToMacToInferPipeline(t *testing.T) {
 	}
 
 	macAgent, err := vagent.NewWithState(loadedParams, &vagent.ExportedState{
-		SID:            sid,
-		SkTop:          skA,
-		MacKey:         macKey,
-		PkAgg:          pkEval,
-		PkTop:          pkTopDisk,
-		Rlk:            rlkDisk,
-		GksAuth:        gksAuth,
-		GksMasterInfer: gksMasterDisk,
+		SID:       sid,
+		SkTop:     skA,
+		MacKey:    macKey,
+		PkAgg:     pkEval,
+		PkTop:     pkTopDisk,
+		Rlk:       rlkDisk,
+		GksMaster: gksMasterDisk,
 	})
 	require.NoError(t, err)
 
@@ -178,11 +173,11 @@ func TestKeygenToMacToInferPipeline(t *testing.T) {
 
 	// --- rebuild VService from disk (infer path) ----------------------------
 	inferSvc, err := vservice.NewWithState(loadedParams, "", &vservice.ExportedState{
-		SID:            sid,
-		Rlk:            rlkDisk,
-		PKTop:          pkTopDisk,
-		GksMasterInfer: gksMasterDisk,
-		GksInfer:       gksInfer,
+		SID:       sid,
+		Rlk:       rlkDisk,
+		PKTop:     pkTopDisk,
+		GksMaster: gksMasterDisk,
+		GksInfer:  gksInfer,
 	})
 	require.NoError(t, err)
 
@@ -208,16 +203,14 @@ func TestKeygenToMacToInferPipeline(t *testing.T) {
 	require.NoError(t, enc.Decode(dec.DecryptNew(resultCt), decoded))
 	assert.InDelta(t, 0.09, decoded[0], 1e-3, "synthetic-x² Infer must yield 0.3² at slot 0")
 
-	// mac path must consume the rebuilt VAgent.
+	// mac path must consume the rebuilt VAgent. BuildAuthenticatedCt
+	// implicitly exercises the locally-derived gksAuth that
+	// NewWithState produced from gksMaster + pkTop.
 	authCt, err := macAgent.BuildAuthenticatedCt(sid, resultCt)
 	require.NoError(t, err)
 	require.NotNil(t, authCt)
 
-	// Cross-check that gks_auth came back with the same atom count the
-	// canonical AuthAtoms() set demands.
-	require.Equal(t, len(loadedParams.AuthAtoms()), len(gksAuth))
-
-	// Confirm gks_master_infer hierkeys cookie set survived round-trip.
+	// Confirm gks_master hierkeys cookie set survived round-trip.
 	for atom, mk := range gksMasterDisk {
 		require.NotNil(t, mk, "MasterKey for atom %d is nil after round-trip", atom)
 	}

@@ -22,7 +22,7 @@ import (
 // `vservice.Service` satisfies it; tests inject mocks via NewRunnerWithInferrer.
 type Inferrer interface {
 	OpenSession() (protocol.SessionID, error)
-	StoreEvalKeys(sid protocol.SessionID, rlk *rlwe.RelinearizationKey, pkTop *rlwe.PublicKey, gksMasterInfer map[int]*hierkeys.MasterKey) error
+	StoreEvalKeys(sid protocol.SessionID, rlk *rlwe.RelinearizationKey, pkTop *rlwe.PublicKey, gksMaster map[int]*hierkeys.MasterKey) error
 	Infer(sid protocol.SessionID, in *rlwe.Ciphertext) (*rlwe.Ciphertext, error)
 	Params() protocol.Params
 }
@@ -216,33 +216,34 @@ func (r *Runner) Setup() error {
 		return fmt.Errorf("orchestrator: VAgent.AggregateRLKRound2: %w", err)
 	}
 
-	// Stage 2d — dual atom-set Galois handshake. VClient emits
-	// auth-atom shares (eval level) + infer-atom shares (top level);
-	// VAgent finalises them into raw eval-level *rlwe.GaloisKeys (used
-	// internally by Auth's chain rotator) + a `map[int]*hierkeys.MasterKey`
-	// for the inference side. The orchestrator forwards only the
-	// inference-side payload to VService — `gksAuth` stays inside VAgent.
-	clientAuthShares, clientInferShares, _, _, err := r.vclient.GenAuthAndInferShares()
+	// Stage 2d — single master atom set Galois handshake. VClient emits
+	// master-atom shares (top level); VAgent aggregates into a
+	// `map[int]*hierkeys.MasterKey`, then derives the negative auth-atom
+	// keys locally via `hierkeys.LevelExpansion` to build its
+	// authenticator chain rotator. The same master bundle is forwarded
+	// verbatim to VService (which derives its own signed-label rotation
+	// set).
+	clientMasterShares, _, err := r.vclient.GenMasterShares()
 	if err != nil {
-		return fmt.Errorf("orchestrator: VClient.GenAuthAndInferShares: %w", err)
+		return fmt.Errorf("orchestrator: VClient.GenMasterShares: %w", err)
 	}
-	if _, _, _, _, err := r.vagent.GenAuthAndInferShares(r.sid); err != nil {
-		return fmt.Errorf("orchestrator: VAgent.GenAuthAndInferShares: %w", err)
+	if _, _, err := r.vagent.GenMasterShares(r.sid); err != nil {
+		return fmt.Errorf("orchestrator: VAgent.GenMasterShares: %w", err)
 	}
 	clientShares := protocol.VClientGaloisShares{
-		AuthAtomShares:  clientAuthShares,
-		InferAtomShares: clientInferShares,
+		MasterShares: clientMasterShares,
 	}
-	rlk, pkTop, gksMasterInfer, err := r.vagent.AggregateGaloisShares(r.sid, clientShares)
+	rlk, pkTop, gksMaster, err := r.vagent.AggregateGaloisShares(r.sid, clientShares)
 	if err != nil {
 		return fmt.Errorf("orchestrator: VAgent.AggregateGaloisShares: %w", err)
 	}
 
 	// VService runs `hierkeys.LevelExpansion + FinalizeKey` against
-	// `(pkTop, gksMasterInfer)` to derive the full per-target Galois-key
-	// set locally; the orchestrator only forwards the compact inbound
-	// payload. `gksAuth` stays inside the VAgent session.
-	if err := r.vsvc.StoreEvalKeys(r.sid, rlk, pkTop, gksMasterInfer); err != nil {
+	// `(pkTop, gksMaster)` to derive the full per-target Galois-key set
+	// locally; the orchestrator only forwards the compact inbound
+	// payload. The auth-atom rotation keys are derived inside
+	// AggregateGaloisShares and stay inside the VAgent session.
+	if err := r.vsvc.StoreEvalKeys(r.sid, rlk, pkTop, gksMaster); err != nil {
 		return fmt.Errorf("orchestrator: VService.StoreEvalKeys: %w", err)
 	}
 

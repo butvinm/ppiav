@@ -284,14 +284,12 @@ func runKeygenViaHTTP(t *testing.T, base string, sid protocol.SessionID, stub *v
 
 	runKeygenUpToGKS(t, base, sid, stub, params)
 
-	// Dual atom-set Galois shares (auth + infer).
-	authLabels := params.AuthAtoms()
-	inferLabels := params.InferAtoms()
-	clientAuth, clientInfer := generateClientGaloisShares(t, stub, params, authLabels, inferLabels)
+	// Single master atom set Galois shares.
+	masterLabels := params.MasterAtoms()
+	clientMaster := generateClientGaloisShares(t, stub, params, masterLabels)
 
 	gksBytes, err := protocol.VClientGaloisShares{
-		AuthAtomShares:  clientAuth,
-		InferAtomShares: clientInfer,
+		MasterShares: clientMaster,
 	}.MarshalBinary()
 	require.NoError(t, err)
 	gksResp := postOctet(t, base, "/sessions/"+string(sid)+"/gks-shares", gksBytes)
@@ -356,10 +354,9 @@ func TestHTTPVAgent_GKSShares_LabelMismatchReturns400(t *testing.T) {
 	stub := newVClientStub(t, params, sid)
 	runKeygenUpToGKS(t, vagentSrv.URL, sid, stub, params)
 
-	// Zero shares < expected atom-set sizes → count mismatch → 400.
+	// Zero shares < expected atom-set size → count mismatch → 400.
 	emptyBytes, err := protocol.VClientGaloisShares{
-		AuthAtomShares:  nil,
-		InferAtomShares: nil,
+		MasterShares: nil,
 	}.MarshalBinary()
 	require.NoError(t, err)
 	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/gks-shares", emptyBytes)
@@ -367,28 +364,23 @@ func TestHTTPVAgent_GKSShares_LabelMismatchReturns400(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
-// TestHTTPVAgent_GKSShares_RejectsPhase13ShapedBody asserts that the
-// pre-hierkeys wire shape (single `VClientGaloisKeyShare` list, no
-// trailing infer-atom list) is rejected by the new `VClientGaloisShares`
-// decoder. The phase 1-3 wire is `[count:4][share_len:4][share]...` —
-// after the new decoder eats the auth list it then trips on the missing
-// 4-byte infer count header.
-func TestHTTPVAgent_GKSShares_RejectsPhase13ShapedBody(t *testing.T) {
-	_, vagentSrv, _, _, _, _ := newHTTPFixture(t)
+// TestHTTPVAgent_GKSShares_RejectsCountMismatch asserts the design-A
+// decoder rejects a well-formed but short share list (zero shares when
+// the master atom set has >0 atoms). Distinct from a malformed-bytes 400
+// — the body parses cleanly here, but the count mismatch fires inside
+// AggregateGaloisShares.
+func TestHTTPVAgent_GKSShares_RejectsCountMismatch(t *testing.T) {
+	_, vagentSrv, _, _, _, params := newHTTPFixture(t)
 	sid := openSessionViaHTTP(t, vagentSrv)
+	stub := newVClientStub(t, params, sid)
+	runKeygenUpToGKS(t, vagentSrv.URL, sid, stub, params)
 
-	// Build a phase 1-3 body: a single list of zero shares — wire form is
-	// just the 4-byte count prefix `[0, 0, 0, 0]`. The new format expects
-	// two such lists in succession (auth then infer); with only one list
-	// present the decoder reports "short infer header".
-	phase13Body := []byte{0x00, 0x00, 0x00, 0x00}
+	// Well-formed zero-share body — single 4-byte zero count.
+	zeroBody := []byte{0x00, 0x00, 0x00, 0x00}
 
-	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/gks-shares", phase13Body)
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/gks-shares", zeroBody)
 	defer resp.Body.Close()
-	require.Equal(t, http.StatusBadRequest, resp.StatusCode, "phase 1-3 wire shape must be rejected")
-	var body httputil.ErrorBody
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	assert.Contains(t, body.Error, "VClientGaloisShares")
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode, "count-mismatch shares must be rejected")
 }
 
 func TestHTTPVAgent_UnknownPathReturns404(t *testing.T) {
@@ -441,13 +433,11 @@ func TestHTTPVAgent_GKSShares_VServiceForwardFailure(t *testing.T) {
 	stub := newVClientStub(t, params, sid)
 	runKeygenUpToGKS(t, vagentSrv.URL, sid, stub, params)
 
-	// Build valid dual-atom-set gks shares.
-	authLabels := params.AuthAtoms()
-	inferLabels := params.InferAtoms()
-	clientAuth, clientInfer := generateClientGaloisShares(t, stub, params, authLabels, inferLabels)
+	// Build valid master-atom-set gks shares.
+	masterLabels := params.MasterAtoms()
+	clientMaster := generateClientGaloisShares(t, stub, params, masterLabels)
 	gksBytes, err := protocol.VClientGaloisShares{
-		AuthAtomShares:  clientAuth,
-		InferAtomShares: clientInfer,
+		MasterShares: clientMaster,
 	}.MarshalBinary()
 	require.NoError(t, err)
 	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/gks-shares", gksBytes)
@@ -1151,14 +1141,12 @@ func TestHTTPVAgent_GKSShares_EvalKeysForwardFailureRejectsAndEvicts(t *testing.
 	stub := newVClientStub(t, params, sid)
 	runKeygenUpToGKS(t, vagentSrv.URL, sid, stub, params)
 
-	// Build valid dual-atom-set gks shares so the handler reaches the
+	// Build valid master-atom-set gks shares so the handler reaches the
 	// VService forward.
-	authLabels := params.AuthAtoms()
-	inferLabels := params.InferAtoms()
-	clientAuth, clientInfer := generateClientGaloisShares(t, stub, params, authLabels, inferLabels)
+	masterLabels := params.MasterAtoms()
+	clientMaster := generateClientGaloisShares(t, stub, params, masterLabels)
 	gksBytes, err := protocol.VClientGaloisShares{
-		AuthAtomShares:  clientAuth,
-		InferAtomShares: clientInfer,
+		MasterShares: clientMaster,
 	}.MarshalBinary()
 	require.NoError(t, err)
 

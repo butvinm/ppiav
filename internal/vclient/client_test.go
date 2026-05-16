@@ -17,9 +17,10 @@ import (
 // |S|=4 and 3 auth atoms ({1,2,4}, since AuthAtoms returns powers of two
 // strictly less than λ; at λ=8 that's {1,2,4}), FloodSigma=2^16. The LLKN
 // hierarchy is a 1-level extension with a single 40-bit P prime, just
-// enough to exercise the dual atom-set keygen path (`InferAtoms` returns
-// `{1,4,16,...}` up to half-slots, ascending). Kept here (not in test
-// helpers) so each *_test.go file in the package can import it directly.
+// enough to exercise the single master atom set keygen path
+// (`MasterAtoms` returns `{1,4,16,...}` up to half-slots, ascending).
+// Kept here (not in test helpers) so each *_test.go file in the package
+// can import it directly.
 func smallParams(t *testing.T) protocol.Params {
 	t.Helper()
 	lit := ckks.ParametersLiteral{

@@ -105,8 +105,8 @@ func (n *negatingInferrer) OpenSession() (protocol.SessionID, error) {
 	return n.inner.OpenSession()
 }
 
-func (n *negatingInferrer) StoreEvalKeys(sid protocol.SessionID, rlk *rlwe.RelinearizationKey, pkTop *rlwe.PublicKey, gksMasterInfer map[int]*hierkeys.MasterKey) error {
-	return n.inner.StoreEvalKeys(sid, rlk, pkTop, gksMasterInfer)
+func (n *negatingInferrer) StoreEvalKeys(sid protocol.SessionID, rlk *rlwe.RelinearizationKey, pkTop *rlwe.PublicKey, gksMaster map[int]*hierkeys.MasterKey) error {
+	return n.inner.StoreEvalKeys(sid, rlk, pkTop, gksMaster)
 }
 
 func (n *negatingInferrer) Params() protocol.Params { return n.params }

@@ -122,72 +122,44 @@ func (c *Client) GenRLKShareRound2() (multiparty.RelinearizationKeyGenShare, err
 	return share2, nil
 }
 
-// GenAuthAndInferShares produces the two parallel share lists VAgent's
-// dual-atom-set Galois handshake consumes:
+// GenMasterShares produces the single master-atom share list VAgent's
+// Galois handshake consumes:
 //
-//   - Auth atoms (eval level, NEGATIVE Galois elements). One share per
-//     atom in `c.params.AuthAtoms()` (e.g. `{1,2,4,8,16,32,64}` for λ=128).
-//     `gkg = multiparty.NewGaloisKeyGenProtocol(c.params.CKKS)`. Secret-key
-//     arg is `skEval`. Each call uses `c.params.CKKS.GaloisElement(-atom)`.
-//     The aggregated keys are raw `*rlwe.GaloisKey`s used directly by the
-//     authenticator chain-rotation (no hierkeys conversion).
-//   - Infer atoms (top level, POSITIVE Galois elements). One share per
-//     atom in `c.params.InferAtoms()` (e.g. `{1,4,...,16384}` at LogN=16,
-//     base=4). `gkg = multiparty.NewGaloisKeyGenProtocol(c.params.LLKN.Top())`.
+//   - One share per atom in `c.params.MasterAtoms()` (e.g. `{1,4,...,16384}`
+//     at LogN=16, base=4). `gkg = multiparty.NewGaloisKeyGenProtocol(c.params.LLKN.Top())`.
 //     Secret-key arg is `skTop`. Each call uses
 //     `c.params.LLKN.Top().GaloisElement(+atom)`. The aggregated keys are
 //     converted via `hierkeys.GaloisKeyToMasterKey` (VAgent's job) into
-//     the master-key bundle VService runs `hierkeys.LevelExpansion` over.
+//     the master-key bundle used by BOTH VAgent (locally derives the
+//     negative auth-atom keys for the authenticator chain) and VService
+//     (locally derives the Orion-circuit signed-label rotation set).
 //
 // CRS draw order: per the package contract, draws here follow pk_eval,
-// pk_top, rlk. First all `len(AuthAtoms())` auth CRPs are drawn at eval
-// level in ascending atom order, then all `len(InferAtoms())` infer CRPs
-// at top level in ascending atom order. VAgent draws in lockstep.
+// pk_top, rlk. All `len(MasterAtoms())` master CRPs are drawn at top
+// level in ascending atom order. VAgent draws in lockstep.
 //
-// The returned label slices are parallel to the share slices: `authShares[k]`
-// corresponds to `authLabels[k]`, similarly for infer.
-func (c *Client) GenAuthAndInferShares() (
-	authShares []multiparty.GaloisKeyGenShare,
-	inferShares []multiparty.GaloisKeyGenShare,
-	authLabels []int,
-	inferLabels []int,
+// The returned label slice is parallel to the share slice: `shares[k]`
+// corresponds to `labels[k]`.
+func (c *Client) GenMasterShares() (
+	shares []multiparty.GaloisKeyGenShare,
+	labels []int,
 	err error,
 ) {
-	skEval, err := c.skEval()
-	if err != nil {
-		return nil, nil, nil, nil, err
+	labels = c.params.MasterAtoms()
+	shares = make([]multiparty.GaloisKeyGenShare, len(labels))
+	if len(labels) == 0 {
+		return shares, labels, nil
 	}
-
-	authLabels = c.params.AuthAtoms()
-	authShares = make([]multiparty.GaloisKeyGenShare, len(authLabels))
-	if len(authLabels) > 0 {
-		gkgEval := multiparty.NewGaloisKeyGenProtocol(c.params.CKKS)
-		for i, a := range authLabels {
-			crp := gkgEval.SampleCRP(c.crs)
-			share := gkgEval.AllocateShare()
-			galEl := c.params.CKKS.GaloisElement(-a)
-			if err := gkgEval.GenShare(skEval, galEl, crp, &share); err != nil {
-				return nil, nil, nil, nil, fmt.Errorf("vclient: GenShare for auth atom %d: %w", a, err)
-			}
-			authShares[i] = share
+	topParams := c.params.LLKN.Top()
+	gkgTop := multiparty.NewGaloisKeyGenProtocol(topParams)
+	for i, a := range labels {
+		crp := gkgTop.SampleCRP(c.crs)
+		share := gkgTop.AllocateShare()
+		galEl := topParams.GaloisElement(+a)
+		if err := gkgTop.GenShare(c.skTop, galEl, crp, &share); err != nil {
+			return nil, nil, fmt.Errorf("vclient: GenShare for master atom %d: %w", a, err)
 		}
+		shares[i] = share
 	}
-
-	inferLabels = c.params.InferAtoms()
-	inferShares = make([]multiparty.GaloisKeyGenShare, len(inferLabels))
-	if len(inferLabels) > 0 {
-		topParams := c.params.LLKN.Top()
-		gkgTop := multiparty.NewGaloisKeyGenProtocol(topParams)
-		for i, a := range inferLabels {
-			crp := gkgTop.SampleCRP(c.crs)
-			share := gkgTop.AllocateShare()
-			galEl := topParams.GaloisElement(+a)
-			if err := gkgTop.GenShare(c.skTop, galEl, crp, &share); err != nil {
-				return nil, nil, nil, nil, fmt.Errorf("vclient: GenShare for infer atom %d: %w", a, err)
-			}
-			inferShares[i] = share
-		}
-	}
-
-	return authShares, inferShares, authLabels, inferLabels, nil
+	return shares, labels, nil
 }

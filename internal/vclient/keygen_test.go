@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	hierkeys "github.com/butvinm/lattigo-hierkeys"
+	"github.com/butvinm/lattigo-hierkeys/llkn"
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -55,13 +56,13 @@ func jointSk(t *testing.T, params protocol.Params, skCEval, skAEval *rlwe.Secret
 
 // runFullKeygen drives every Gen*/Aggregate* step in the canonical CRS
 // order. Returns the eval-level joint sk plus the finalised rlk and
-// per-auth-atom Galois keys (raw eval-level keys, ready for
+// per-auth-atom Galois keys (eval-level keys derived from the joint
+// master-atom bundle via hierkeys.LevelExpansion, ready for
 // `rlwe.NewMemEvaluationKeySet`). Used by both keygen_test.go and the
 // downstream image_test.go / partial_decrypt_test.go round-trips.
 //
 // CRS order followed exactly: pk_eval, pk_top, rlk (single CRP), then
-// auth atoms (eval level, ascending), then infer atoms (top level,
-// ascending). The stub draws in lockstep.
+// master atoms (top level, ascending). The stub draws in lockstep.
 func runFullKeygen(t *testing.T, c *Client, stub *vagentStub) (
 	*rlwe.SecretKey,
 	*rlwe.RelinearizationKey,
@@ -87,6 +88,15 @@ func runFullKeygen(t *testing.T, c *Client, stub *vagentStub) (
 	agentCRPTop := pkProtoTop.SampleCRP(stub.crs)
 	agentPKShareTop := pkProtoTop.AllocateShare()
 	pkProtoTop.GenShare(stub.skATop, agentCRPTop, &agentPKShareTop)
+
+	// Aggregate the top-level pk so we can seed PubToRot for the
+	// auth-atom derivation below. The Client already aggregates the
+	// eval-level pk via AggregatePK; we mirror the top-level branch on
+	// the stub side because vclient does not retain pkTop.
+	aggPKTopShare := pkProtoTop.AllocateShare()
+	pkProtoTop.AggregateShares(clientPK.ShareTop, agentPKShareTop, &aggPKTopShare)
+	pkTop := rlwe.NewPublicKey(params.LLKN.Top())
+	pkProtoTop.GenPublicKey(aggPKTopShare, agentCRPTop, pkTop)
 
 	require.NoError(t, c.AggregatePK(protocol.VAgentPKShare{
 		ShareEval: agentPKShareEval,
@@ -115,50 +125,52 @@ func runFullKeygen(t *testing.T, c *Client, stub *vagentStub) (
 	rlk := rlwe.NewRelinearizationKey(params.CKKS)
 	rlkProto.GenRelinearizationKey(agentRLK1Agg, rlkRound2Agg, rlk)
 
-	// Stage 2d — dual atom-set Galois shares.
-	authShares, inferShares, authLabels, inferLabels, err := c.GenAuthAndInferShares()
+	// Stage 2d — single master-atom-set Galois shares.
+	masterShares, masterLabels, err := c.GenMasterShares()
 	require.NoError(t, err)
-	require.Equal(t, params.AuthAtoms(), authLabels, "client auth labels must match AuthAtoms()")
-	require.Equal(t, params.InferAtoms(), inferLabels, "client infer labels must match InferAtoms()")
-	require.Equal(t, len(authLabels), len(authShares))
-	require.Equal(t, len(inferLabels), len(inferShares))
+	require.Equal(t, params.MasterAtoms(), masterLabels, "client master labels must match MasterAtoms()")
+	require.Equal(t, len(masterLabels), len(masterShares))
 
-	// Auth-atom finalisation (eval level, negative galEl, raw *rlwe.GaloisKey).
-	gkgEval := multiparty.NewGaloisKeyGenProtocol(params.CKKS)
-	gks := make([]*rlwe.GaloisKey, len(authLabels))
-	for i, a := range authLabels {
-		crp := gkgEval.SampleCRP(stub.crs)
-		agentShare := gkgEval.AllocateShare()
-		galEl := params.CKKS.GaloisElement(-a)
-		require.NoError(t, gkgEval.GenShare(stub.skAEval, galEl, crp, &agentShare))
-
-		agg := gkgEval.AllocateShare()
-		require.NoError(t, gkgEval.AggregateShares(authShares[i], agentShare, &agg))
-
-		gk := rlwe.NewGaloisKey(params.CKKS)
-		require.NoError(t, gkgEval.GenGaloisKey(agg, crp, gk))
-		require.Equal(t, galEl, gk.GaloisElement, "auth atom %d → element mismatch", a)
-		gks[i] = gk
-	}
-
-	// Infer-atom finalisation (top level, positive galEl). We finalise
-	// them and discard inside this helper — Task 6 wires the master-key
-	// bundle into the wire payload; here we only need to prove the stub
-	// can aggregate against VClient's emitted top-level shares without
-	// CRP misalignment.
+	// Master-atom finalisation (top level, positive galEl). Convert each
+	// finalised top-level GaloisKey into a hierkeys.MasterKey so we can
+	// run LevelExpansion to derive the auth-atom keys (eval level,
+	// negative galEls) — same derivation VAgent does in production.
 	gkgTop := multiparty.NewGaloisKeyGenProtocol(params.LLKN.Top())
-	for i, a := range inferLabels {
+	masterKeys := make(map[int]*hierkeys.MasterKey, len(masterLabels))
+	for i, a := range masterLabels {
 		crp := gkgTop.SampleCRP(stub.crs)
 		agentShare := gkgTop.AllocateShare()
 		galEl := params.LLKN.Top().GaloisElement(+a)
 		require.NoError(t, gkgTop.GenShare(stub.skATop, galEl, crp, &agentShare))
 
 		agg := gkgTop.AllocateShare()
-		require.NoError(t, gkgTop.AggregateShares(inferShares[i], agentShare, &agg))
+		require.NoError(t, gkgTop.AggregateShares(masterShares[i], agentShare, &agg))
 
 		gk := rlwe.NewGaloisKey(params.LLKN.Top())
 		require.NoError(t, gkgTop.GenGaloisKey(agg, crp, gk))
-		require.Equal(t, galEl, gk.GaloisElement, "infer atom %d → element mismatch", a)
+		require.Equal(t, galEl, gk.GaloisElement, "master atom %d → element mismatch", a)
+		mk, err := hierkeys.GaloisKeyToMasterKey(params.LLKN.Top(), gk)
+		require.NoError(t, err)
+		masterKeys[a] = mk
+	}
+
+	// Derive auth-atom keys via the same LevelExpansion path VAgent uses.
+	authAtoms := params.AuthAtoms()
+	authTargets := make([]int, len(authAtoms))
+	for i, atom := range authAtoms {
+		authTargets[i] = -atom
+	}
+	llknEval := llkn.NewEvaluator(params.LLKN)
+	shift0, err := hierkeys.PubToRot(params.LLKN.Eval(), params.LLKN.Top(), pkTop)
+	require.NoError(t, err)
+	exp := llknEval.NewLevelExpansion(0, shift0, masterKeys, authTargets)
+	gks := make([]*rlwe.GaloisKey, len(authTargets))
+	for i, r := range authTargets {
+		mk, err := exp.Derive(r)
+		require.NoError(t, err)
+		gk, err := llknEval.FinalizeKey(mk)
+		require.NoError(t, err)
+		gks[i] = gk
 	}
 
 	// Project sk_c_top → sk_c_eval so the joint key is well-defined at
@@ -284,74 +296,62 @@ func TestAuthAtomKeysEnableRotation(t *testing.T) {
 	assert.InDelta(t, want[1], got[2], 1e-3, "Rot(ct, -1) via atom-1 key places slot 1 at slot 2")
 }
 
-// TestGenAuthAndInferSharesShape checks the share/label counts emitted by
-// VClient match the canonical atom sets from `Params`. This is the
+// TestGenMasterSharesShape checks the share/label counts emitted by
+// VClient match the canonical master atom set from `Params`. This is the
 // load-bearing invariant that downstream VAgent aggregation relies on.
-func TestGenAuthAndInferSharesShape(t *testing.T) {
+func TestGenMasterSharesShape(t *testing.T) {
 	params := smallParams(t)
 	c, err := New(params, protocol.SessionID("shape-sid"))
 	require.NoError(t, err)
 
-	authShares, inferShares, authLabels, inferLabels, err := c.GenAuthAndInferShares()
+	shares, labels, err := c.GenMasterShares()
 	require.NoError(t, err)
 
-	expectedAuth := params.AuthAtoms()
-	expectedInfer := params.InferAtoms()
-	require.Equal(t, expectedAuth, authLabels)
-	require.Equal(t, expectedInfer, inferLabels)
-	require.Equal(t, len(expectedAuth), len(authShares))
-	require.Equal(t, len(expectedInfer), len(inferShares))
+	expected := params.MasterAtoms()
+	require.Equal(t, expected, labels)
+	require.Equal(t, len(expected), len(shares))
 
 	// Ascending labels — load-bearing for the wire ordering contract.
-	for i := 1; i < len(authLabels); i++ {
-		require.Greater(t, authLabels[i], authLabels[i-1], "auth labels not ascending at %d", i)
-	}
-	for i := 1; i < len(inferLabels); i++ {
-		require.Greater(t, inferLabels[i], inferLabels[i-1], "infer labels not ascending at %d", i)
+	for i := 1; i < len(labels); i++ {
+		require.Greater(t, labels[i], labels[i-1], "master labels not ascending at %d", i)
 	}
 }
 
-// TestInferAtomShareConvertsToMasterKey verifies the top-level infer-atom
-// shares VClient emits aggregate cleanly with a stub's matching shares
-// and the resulting `*rlwe.GaloisKey` converts to a `*hierkeys.MasterKey`
-// via `hierkeys.GaloisKeyToMasterKey`. This is the contract VAgent's
-// AggregateGaloisShares depends on (Task 6).
-func TestInferAtomShareConvertsToMasterKey(t *testing.T) {
+// TestMasterAtomShareConvertsToMasterKey verifies the top-level
+// master-atom shares VClient emits aggregate cleanly with a stub's
+// matching shares and the resulting `*rlwe.GaloisKey` converts to a
+// `*hierkeys.MasterKey` via `hierkeys.GaloisKeyToMasterKey`. This is the
+// contract VAgent's AggregateGaloisShares depends on.
+func TestMasterAtomShareConvertsToMasterKey(t *testing.T) {
 	params := smallParams(t)
-	sid := protocol.SessionID("infer-mk-sid")
+	sid := protocol.SessionID("master-mk-sid")
 	c, err := New(params, sid)
 	require.NoError(t, err)
 	stub := newVAgentStub(t, params, sid)
 
 	// Walk the canonical draw order on the stub up to the point of
-	// infer-atom CRPs: pk_eval, pk_top, rlk, auth-atom CRPs in order.
-	// Doing this with throwaway draws keeps the stub's CRS aligned with
-	// the Client's emissions.
+	// master-atom CRPs: pk_eval, pk_top, rlk. Doing this with throwaway
+	// draws keeps the stub's CRS aligned with the Client's emissions.
 	_ = multiparty.NewPublicKeyGenProtocol(params.CKKS).SampleCRP(stub.crs)
 	_ = multiparty.NewPublicKeyGenProtocol(params.LLKN.Top()).SampleCRP(stub.crs)
 	_ = multiparty.NewRelinearizationKeyGenProtocol(params.CKKS).SampleCRP(stub.crs)
-	authLabels := params.AuthAtoms()
-	gkgEvalDrain := multiparty.NewGaloisKeyGenProtocol(params.CKKS)
-	for range authLabels {
-		_ = gkgEvalDrain.SampleCRP(stub.crs)
-	}
 
-	// VClient emits the full share list (this consumes ALL CRPs on
-	// VClient's CRS — pk_eval, pk_top, rlk, auth atoms, infer atoms).
-	_, inferShares, _, inferLabels, err := c.GenAuthAndInferShares()
+	// VClient emits the share list (this consumes the master CRPs on
+	// VClient's CRS).
+	masterShares, masterLabels, err := c.GenMasterShares()
 	require.NoError(t, err)
-	require.NotEmpty(t, inferLabels)
+	require.NotEmpty(t, masterLabels)
 
-	// Stub matches just the infer-atom shares.
+	// Stub matches the master-atom shares.
 	gkgTop := multiparty.NewGaloisKeyGenProtocol(params.LLKN.Top())
-	for i, a := range inferLabels {
+	for i, a := range masterLabels {
 		crp := gkgTop.SampleCRP(stub.crs)
 		agentShare := gkgTop.AllocateShare()
 		galEl := params.LLKN.Top().GaloisElement(+a)
 		require.NoError(t, gkgTop.GenShare(stub.skATop, galEl, crp, &agentShare))
 
 		agg := gkgTop.AllocateShare()
-		require.NoError(t, gkgTop.AggregateShares(inferShares[i], agentShare, &agg))
+		require.NoError(t, gkgTop.AggregateShares(masterShares[i], agentShare, &agg))
 
 		gk := rlwe.NewGaloisKey(params.LLKN.Top())
 		require.NoError(t, gkgTop.GenGaloisKey(agg, crp, gk))

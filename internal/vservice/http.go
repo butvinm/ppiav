@@ -105,7 +105,7 @@ func (s *Server) handleEvalKeys(w http.ResponseWriter, r *http.Request, sid prot
 		httputil.WriteError(w, http.StatusBadRequest, fmt.Sprintf("unmarshal InferEvalKeys: %s", err))
 		return
 	}
-	if err := s.svc.StoreEvalKeys(sid, keys.RLK, keys.PKTop, keys.GKSMasterInfer); err != nil {
+	if err := s.svc.StoreEvalKeys(sid, keys.RLK, keys.PKTop, keys.GKSMaster); err != nil {
 		// Unknown sid is the only common error path here.
 		if errors.Is(err, ErrUnknownSession) {
 			httputil.WriteError(w, http.StatusNotFound, err.Error())

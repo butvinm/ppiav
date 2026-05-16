@@ -52,7 +52,7 @@ func TestInferSquaresInputAndDropsOneLevel(t *testing.T) {
 
 	// Single-party keys are enough for the x² circuit — the multi-party
 	// handshake is the orchestrator's job. x² uses no rotations, so we
-	// pass nil pkTop / nil gksMasterInfer; deriveGksInfer short-circuits
+	// pass nil pkTop / nil gksMaster; deriveGksInfer short-circuits
 	// when ExtraRotationIndices is empty.
 	kgen := rlwe.NewKeyGenerator(params.CKKS)
 	sk, pk := kgen.GenKeyPairNew()

@@ -35,11 +35,11 @@ func WriteError(w http.ResponseWriter, status int, msg string) {
 // Per-route body-size caps. Picked to be comfortably above the largest
 // payload each route legitimately carries while still bounding a DoS POST.
 // The big ones are the CKKS share/key blobs at LogN=16:
-//   - VClientGaloisShares: per-atom shares for AuthAtoms (eval) +
-//     InferAtoms (top) — both sized for the LogN=16 lattigo-hierkeys
-//     dual-atom-set wire payload (no longer Lambda × per-rotation).
-//   - InferEvalKeys: aggregated RLK (eval) + PKTop (top) + the
-//     gks_master_infer bundle (8 top-level MasterKeys at LogN=16).
+//   - VClientGaloisShares: per-atom shares for the single MasterAtoms
+//     set (top level) — sized for the LogN=16 lattigo-hierkeys
+//     master-atom wire payload.
+//   - InferEvalKeys: aggregated RLK (eval) + PKTop (top) + the gksMaster
+//     bundle (8 top-level MasterKeys at LogN=16).
 //
 // We split the cap by route shape so a concurrent attacker can't bank
 // the same allocation on a small-share endpoint. DESIGN.md says rate
@@ -60,15 +60,14 @@ const (
 	MaxShareBody int64 = 128 * 1024 * 1024
 
 	// MaxGksSharesBody covers the aggregated Galois-shares blob
-	// (gks-shares): AuthAtomShares (eval level, ~7 atoms at λ=128) plus
-	// InferAtomShares (top level, 8 atoms at LogN=16). Top-level shares
-	// are larger than eval-level (extra P-prime limbs). Sized to ≥1 GiB
-	// to keep margin for the LogN=16 dual-atom-set payload, which lands
-	// in the ~400-500 MiB range by estimate.
+	// (gks-shares): MasterShares (top level, 8 atoms at LogN=16).
+	// Top-level shares are larger than eval-level (extra P-prime limbs).
+	// Sized to ≥1 GiB to keep margin for the LogN=16 master-atom
+	// payload, which lands in the ~400-500 MiB range by estimate.
 	MaxGksSharesBody int64 = 2 * 1024 * 1024 * 1024
 
 	// MaxEvalKeysBody covers the InferEvalKeys forwarded to VService
-	// (RLK + PKTop + GKSMasterInfer) and the encrypted image. Sized for
+	// (RLK + PKTop + GKSMaster) and the encrypted image. Sized for
 	// LogN=16 lattigo-hierkeys: at base-4 the master atom set is 8 keys,
 	// each ~233 MiB (top-level GaloisKey with extra P primes), totalling
 	// ~1.86 GiB; RLK + PKTop push the body past 1.93 GiB. 3 GiB gives a

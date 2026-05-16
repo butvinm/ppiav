@@ -58,9 +58,9 @@ func TestExportStateRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, ctMA)
 
-	// Export and rebuild on Agent B. ExportState now populates Gks from the
-	// AggregateGaloisShares-captured slice, so the test does not have to
-	// thread the gks variable back in.
+	// Export and rebuild on Agent B. ExportState populates GksMaster from
+	// AggregateGaloisShares; NewWithState rederives gksAuth from it via
+	// hierkeys.LevelExpansion. The test does not have to thread `gks`.
 	state, err := a.ExportState(sid)
 	require.NoError(t, err)
 	require.NotNil(t, state)
@@ -69,8 +69,8 @@ func TestExportStateRoundTrip(t *testing.T) {
 	require.NotNil(t, state.PkAgg)
 	require.NotNil(t, state.PkTop)
 	require.NotNil(t, state.Rlk)
-	require.NotEmpty(t, state.GksAuth, "ExportState must populate GksAuth from AggregateGaloisShares")
-	_ = gks // gksAuth remains available for cross-reference but is no longer threaded.
+	require.NotEmpty(t, state.GksMaster, "ExportState must populate GksMaster from AggregateGaloisShares")
+	_ = gks // gksAuth remains available on the live session but is rederived on the restored Agent.
 
 	b, err := NewWithState(params, state)
 	require.NoError(t, err)
@@ -158,7 +158,7 @@ func TestNewWithStateSupportsFinalize(t *testing.T) {
 
 	state, err := a.ExportState(sid)
 	require.NoError(t, err)
-	require.NotEmpty(t, state.GksAuth, "ExportState must populate GksAuth")
+	require.NotEmpty(t, state.GksMaster, "ExportState must populate GksMaster")
 
 	b, err := NewWithState(params, state)
 	require.NoError(t, err)

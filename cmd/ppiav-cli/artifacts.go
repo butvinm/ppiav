@@ -22,34 +22,34 @@ import (
 // aggregator pulls byte sizes from os.Stat against these names — single
 // source of truth lives here.
 //
-// The lattigo-hierkeys split breaks the keygen output into three Galois-key
+// The lattigo-hierkeys split breaks the keygen output into two Galois-key
 // artifacts:
 //
-//   - gks_auth.bin         — 7 raw *rlwe.GaloisKey at eval level, negative
-//     galEls. Consumed by `mac` to drive authchain.Evaluator.
-//   - gks_master_infer.bin — VAgent's 8 *hierkeys.MasterKey wire artifact
-//     (the wire-size comparison reads this).
-//   - gks_infer.bin        — VService's expand-fully derived set, eval level.
+//   - gks_master.bin — VAgent's master *hierkeys.MasterKey bundle (top
+//     level, positive galEls). Single source of truth for both: (a) the
+//     wire-size comparison, (b) VAgent's local derivation of auth-atom
+//     keys on `mac`, (c) VService's `pk_top + master → derive` pipeline.
+//   - gks_infer.bin  — VService's expand-fully derived set, eval level.
 //     Cached at keygen because per-sample derivation is multi-minute at LogN=16.
 //
 // The pre-hierkeys pk.bin is split into pk_eval.bin (encryption + Auth's
-// encrypt-v step) and pk_top.bin (seeds hierkeys.PubToRot inside infer).
+// encrypt-v step) and pk_top.bin (seeds hierkeys.PubToRot inside both
+// infer and the mac-time auth-atom derivation).
 const (
-	artifactSID            = "sid.txt"
-	artifactParams         = "params.json"
-	artifactPKEval         = "pk_eval.bin"
-	artifactPKTop          = "pk_top.bin"
-	artifactSKClient       = "sk_c.bin"
-	artifactSKAgent        = "sk_a.bin"
-	artifactRLK            = "rlk.bin"
-	artifactGKSAuth        = "gks_auth.bin"
-	artifactGKSMasterInfer = "gks_master_infer.bin"
-	artifactGKSInfer       = "gks_infer.bin"
-	artifactMacKey         = "mac_key.bin"
-	artifactInputCt        = "input_ct.bin"
-	artifactResultCt       = "result_ct.bin"
-	artifactAuthCt         = "auth_ct.bin"
-	artifactClientShare    = "client_share.bin"
+	artifactSID         = "sid.txt"
+	artifactParams      = "params.json"
+	artifactPKEval      = "pk_eval.bin"
+	artifactPKTop       = "pk_top.bin"
+	artifactSKClient    = "sk_c.bin"
+	artifactSKAgent     = "sk_a.bin"
+	artifactRLK         = "rlk.bin"
+	artifactGKSMaster   = "gks_master.bin"
+	artifactGKSInfer    = "gks_infer.bin"
+	artifactMacKey      = "mac_key.bin"
+	artifactInputCt     = "input_ct.bin"
+	artifactResultCt    = "result_ct.bin"
+	artifactAuthCt      = "auth_ct.bin"
+	artifactClientShare = "client_share.bin"
 )
 
 // writeBytes atomically writes data to <workdir>/<name>. Thin wrapper over
@@ -213,10 +213,8 @@ func readRelinearizationKey(workdir string) (*rlwe.RelinearizationKey, error) {
 // left nil — the container shape stays well-formed and the GKS files
 // carry only Galois material (no relin bytes).
 //
-// Used for both `gks_auth.bin` (eval-level negative-galEl auth atoms,
-// consumed by `mac`) and `gks_infer.bin` (VService's eval-level derived
-// rotation set, consumed by `infer`). The two files differ only in their
-// galEl sign convention and atom set; the on-disk shape is identical.
+// Used for `gks_infer.bin` (VService's eval-level derived rotation set,
+// consumed by `infer`).
 func writeGaloisKeys(workdir, name string, gks []*rlwe.GaloisKey) error {
 	galois := structs.Map[uint64, rlwe.GaloisKey]{}
 	for _, gk := range gks {

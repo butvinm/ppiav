@@ -47,9 +47,9 @@ func RegisterJS() {
 	ns.Set("aggregateRLKRound1", js.FuncOf(jsAggregateRLKRound1))
 	ns.Set("genRLKShareRound2", js.FuncOf(jsGenRLKShareRound2))
 	// JS namespace key stays "genGaloisShares" — the underlying Go
-	// implementation renamed to GenAuthAndInferShares but the JS contract
+	// implementation renamed to GenMasterShares but the JS contract
 	// (consumed by web/vclient/ts/main.ts) is the bridge boundary.
-	ns.Set("genGaloisShares", js.FuncOf(jsGenAuthAndInferShares))
+	ns.Set("genGaloisShares", js.FuncOf(jsGenMasterShares))
 	ns.Set("encryptImage", js.FuncOf(jsEncryptImage))
 	ns.Set("partialDecrypt", js.FuncOf(jsPartialDecrypt))
 
@@ -186,12 +186,12 @@ func jsGenRLKShareRound2(_ js.Value, args []js.Value) any {
 	return jsBytesFromGo(out)
 }
 
-func jsGenAuthAndInferShares(_ js.Value, args []js.Value) any {
+func jsGenMasterShares(_ js.Value, args []js.Value) any {
 	if len(args) < 1 {
 		return jsErrorResult("genGaloisShares: need (handle)")
 	}
 	h := uint64(args[0].Float())
-	out, err := GenAuthAndInferShares(h)
+	out, err := GenMasterShares(h)
 	if err != nil {
 		return jsErrorResult(fmt.Sprintf("genGaloisShares: %v", err))
 	}

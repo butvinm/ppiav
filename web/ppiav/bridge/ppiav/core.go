@@ -220,26 +220,22 @@ func GenRLKShareRound2(h uint64) ([]byte, error) {
 	return out, nil
 }
 
-// GenAuthAndInferShares runs Stage 2d (dual atom-set Galois handshake)
-// and returns the marshaled VClientGaloisShares bytes — two
-// length-prefixed share lists, auth atoms first (eval level, ascending),
-// then infer atoms (top level, ascending). The JS-visible namespace key
-// stays `"genGaloisShares"` (see ppiav.go) so the TS client doesn't
-// need a coordinated rename.
-func GenAuthAndInferShares(h uint64) ([]byte, error) {
+// GenMasterShares runs Stage 2d (single master atom set Galois handshake)
+// and returns the marshaled VClientGaloisShares bytes — one length-
+// prefixed share list of top-level master atoms (ascending). The
+// JS-visible namespace key stays `"genGaloisShares"` (see ppiav.go) so
+// the TS client doesn't need a coordinated rename.
+func GenMasterShares(h uint64) ([]byte, error) {
 	c, err := loadClient(h)
 	if err != nil {
 		return nil, err
 	}
-	authShares, inferShares, _, _, err := c.GenAuthAndInferShares()
+	shares, _, err := c.GenMasterShares()
 	if err != nil {
-		return nil, fmt.Errorf("ppiav: GenAuthAndInferShares: %w", err)
+		return nil, fmt.Errorf("ppiav: GenMasterShares: %w", err)
 	}
-	// Either list may legitimately be empty (e.g. Lambda<=1 → no auth
-	// atoms). The wire encoding handles both lists independently.
 	msg := protocol.VClientGaloisShares{
-		AuthAtomShares:  authShares,
-		InferAtomShares: inferShares,
+		MasterShares: shares,
 	}
 	out, err := msg.MarshalBinary()
 	if err != nil {

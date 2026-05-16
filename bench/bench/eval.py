@@ -495,11 +495,11 @@ def _format_with_prettier(path: Path) -> None:
 def _format_seconds(seconds: float) -> str:
     """Compact human-readable wall-time for the network table.
 
-    Reports up to days because the auth-side `gks_auth.bin` + service-side
-    `gks_infer.bin` transfers at 1 Mbps land in the tens-of-hours range;
-    formatting them as minutes hides the scale. `gks_master_infer.bin` (the
-    compressed seed bundle, the actual wire artifact) is far smaller but the
-    same scale applies for the largest Phase 2 baseline artefacts.
+    Reports up to days because the service-side `gks_infer.bin` transfers
+    at 1 Mbps land in the tens-of-hours range; formatting them as minutes
+    hides the scale. `gks_master.bin` (the compressed seed bundle, the
+    actual wire artifact) is far smaller but the same scale applies for
+    the largest baseline artefacts.
     """
     if seconds < 1.0:
         return f"{seconds * 1000:.1f} ms"
@@ -628,13 +628,13 @@ def _bytes_table_md(rows: Sequence[tuple[str, int]]) -> str:
         lines.append(f"| {name} | {size} | {kib:.1f} | {mib:.2f} |")
     lines.append("")
     lines.append(
-        "_Note: lattigo-hierkeys splits the Galois key surface asymmetrically: "
-        "`gks_auth.bin` holds the auth-side raw multi-party keys (negative galEls, "
-        "consumed by VAgent's authchain.Evaluator); `gks_master_infer.bin` is the "
-        "compressed seed bundle that crosses the wire to VService; `gks_infer.bin` "
-        "is the per-target derived set VService caches locally — derivable from "
-        "`gks_master_infer.bin + pk_top.bin + params.json` but tens-of-GB at "
-        "LogN=16, so cached on disk to avoid multi-minute per-sample re-derivation._"
+        "_Note: lattigo-hierkeys ships a single compressed master atom set: "
+        "`gks_master.bin` is the wire artifact (top-level MasterKey bundle) "
+        "consumed by both VAgent (derives the auth-atom keys locally on `mac`) "
+        "and VService (derives the inference rotation set on `infer`). "
+        "`gks_infer.bin` is the per-target derived set VService caches locally — "
+        "derivable from `gks_master.bin + pk_top.bin + params.json` but tens-of-GB "
+        "at LogN=16, so cached on disk to avoid multi-minute per-sample re-derivation._"
     )
     return "\n".join(lines)
 

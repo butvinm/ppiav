@@ -17,23 +17,21 @@ import (
 // deterministically from SID via protocol.NewSessionCRS (mirroring
 // OpenSession).
 //
-// Aggregated keys (PkAgg, PkTop, Rlk, GksAuth, GksMasterInfer) are
-// conceptually held by VService and transported to the Agent's process
-// via separate artifact files; this struct bundles them with the
-// per-session secrets (SkTop, MacKey) for a single round-trip across the
+// Aggregated keys (PkAgg, PkTop, Rlk, GksMaster) plus per-session
+// secrets (SkTop, MacKey) are bundled for a single round-trip across the
 // CLI boundary. mac/finalize both need a fully-wired chain evaluator and
-// encryptor — PkAgg powers Auth's encrypt-v step, Rlk + GksAuth power
-// Auth's chain-rotate-and-sum. PkTop + GksMasterInfer are stashed so a
-// re-export round-trips the full keygen state.
+// encryptor — PkAgg powers Auth's encrypt-v step; Rlk + the locally
+// derived gksAuth (rederived from GksMaster inside NewWithState) power
+// Auth's chain-rotate-and-sum. GksAuth is NOT persisted: it is recomputed
+// from GksMaster + PKTop via hierkeys.LevelExpansion on restore.
 type ExportedState struct {
-	SID            protocol.SessionID
-	SkTop          *rlwe.SecretKey
-	MacKey         authenticator.Key
-	PkAgg          *rlwe.PublicKey
-	PkTop          *rlwe.PublicKey
-	Rlk            *rlwe.RelinearizationKey
-	GksAuth        []*rlwe.GaloisKey
-	GksMasterInfer map[int]*hierkeys.MasterKey
+	SID       protocol.SessionID
+	SkTop     *rlwe.SecretKey
+	MacKey    authenticator.Key
+	PkAgg     *rlwe.PublicKey
+	PkTop     *rlwe.PublicKey
+	Rlk       *rlwe.RelinearizationKey
+	GksMaster map[int]*hierkeys.MasterKey
 }
 
 // ExportState snapshots the per-session state for `sid`. Returns an error
@@ -60,19 +58,18 @@ func (a *Agent) ExportState(sid protocol.SessionID) (*ExportedState, error) {
 	// slice header.
 	sCopy := make([]int, len(sess.authKey.S))
 	copy(sCopy, sess.authKey.S)
-	// Share the gksAuth slice and gksMasterInfer map by reference:
-	// per-element entries are large and the bench caller serialises them
-	// to disk immediately. Tests and the HTTP path do not mutate the
-	// per-element entries; the shared slice/map headers are safe.
+	// Share the gksMaster map by reference: per-element entries are large
+	// and the bench caller serialises them to disk immediately. Tests and
+	// the HTTP path do not mutate the per-element entries; the shared map
+	// header is safe.
 	return &ExportedState{
-		SID:            sid,
-		SkTop:          sess.skTop,
-		MacKey:         authenticator.Key{S: sCopy, SeedF: sess.authKey.SeedF},
-		PkAgg:          sess.pkAgg,
-		PkTop:          sess.pkTopAgg,
-		Rlk:            sess.rlkAgg,
-		GksAuth:        sess.gksAuth,
-		GksMasterInfer: sess.gksMasterInfer,
+		SID:       sid,
+		SkTop:     sess.skTop,
+		MacKey:    authenticator.Key{S: sCopy, SeedF: sess.authKey.SeedF},
+		PkAgg:     sess.pkAgg,
+		PkTop:     sess.pkTopAgg,
+		Rlk:       sess.rlkAgg,
+		GksMaster: sess.gksMaster,
 	}, nil
 }
 
@@ -80,9 +77,12 @@ func (a *Agent) ExportState(sid protocol.SessionID) (*ExportedState, error) {
 // single entry built from `state`. Used by the bench CLI to recreate Agent
 // state across process boundaries. The CRS is rebuilt deterministically
 // from state.SID — the same construction OpenSession uses. When PkAgg /
-// Rlk / GksAuth are all non-nil the seeded session is ready for
-// BuildAuthenticatedCt; when nil the session is mac/finalize-incapable
-// (useful for tests that only need to verify state seeding).
+// Rlk / PkTop / GksMaster are all non-nil the seeded session is ready for
+// BuildAuthenticatedCt: the auth-atom Galois keys (gksAuth) are
+// re-derived in-process from gksMaster + pkTop via
+// hierkeys.LevelExpansion (the dominant cost at LogN=16). When nil the
+// session is mac/finalize-incapable (useful for tests that only need to
+// verify state seeding).
 func NewWithState(params protocol.Params, state *ExportedState) (*Agent, error) {
 	if state == nil {
 		return nil, fmt.Errorf("vagent: NewWithState state is nil")
@@ -119,19 +119,17 @@ func NewWithState(params protocol.Params, state *ExportedState) (*Agent, error) 
 	if state.PkTop != nil {
 		sess.pkTopAgg = state.PkTop
 	}
-	if state.Rlk != nil && state.GksAuth != nil {
-		// Validate the loaded gks_auth.bin covers the canonical AuthAtoms
-		// set at the expected (negative) Galois elements — a mismatched
-		// artifact (wrong λ, different manifest) silently produces wrong
-		// outputs at BuildAuthenticatedCt time.
+	if state.Rlk != nil && state.GksMaster != nil && state.PkTop != nil {
 		atoms := params.AuthAtoms()
-		if err := validateGksAuthCoverage(params, atoms, state.GksAuth); err != nil {
-			return nil, fmt.Errorf("vagent: NewWithState validate GksAuth: %w", err)
+		gksAuth, deriveSecs, err := deriveAuthGks(params, state.PkTop, state.GksMaster, atoms)
+		if err != nil {
+			return nil, fmt.Errorf("vagent: NewWithState derive auth Galois keys: %w", err)
 		}
 		sess.rlkAgg = state.Rlk
-		sess.gksAuth = state.GksAuth
-		sess.gksMasterInfer = state.GksMasterInfer
-		chainEval, err := authchain.New(params.CKKS, state.Rlk, state.GksAuth, atoms)
+		sess.gksAuth = gksAuth
+		sess.gksMaster = state.GksMaster
+		sess.deriveGksAuthSeconds = deriveSecs
+		chainEval, err := authchain.New(params.CKKS, state.Rlk, gksAuth, atoms)
 		if err != nil {
 			return nil, fmt.Errorf("vagent: NewWithState build authchain: %w", err)
 		}
@@ -139,31 +137,4 @@ func NewWithState(params protocol.Params, state *ExportedState) (*Agent, error) 
 	}
 	a.sessions[state.SID] = sess
 	return a, nil
-}
-
-// validateGksAuthCoverage checks the loaded gks_auth slice covers the
-// canonical auth-atom set at the expected eval-level Galois elements
-// (negative atom per the signed-label convention on `protocol.Params`).
-// A mismatch indicates a stale or cross-wired gks_auth.bin.
-func validateGksAuthCoverage(params protocol.Params, atoms []int, gks []*rlwe.GaloisKey) error {
-	if len(gks) != len(atoms) {
-		return fmt.Errorf("GksAuth length %d != AuthAtoms length %d", len(gks), len(atoms))
-	}
-	if len(atoms) == 0 {
-		return nil
-	}
-	present := make(map[uint64]struct{}, len(gks))
-	for _, gk := range gks {
-		if gk == nil {
-			return fmt.Errorf("GksAuth contains nil entry")
-		}
-		present[gk.GaloisElement] = struct{}{}
-	}
-	for _, atom := range atoms {
-		want := params.CKKS.GaloisElement(-atom)
-		if _, ok := present[want]; !ok {
-			return fmt.Errorf("GksAuth missing GaloisElement %d (atom %d)", want, atom)
-		}
-	}
-	return nil
 }

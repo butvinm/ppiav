@@ -42,11 +42,10 @@ func smallCLIParams(t *testing.T) protocol.Params {
 	}
 }
 
-// TestWriteReadGaloisKeysRoundTrip exercises the gks_auth.bin + gks_infer.bin
-// on-disk shape. Both files share writeGaloisKeys/readGaloisKeys; the test
-// generates a small slice of real *rlwe.GaloisKey at eval level via
-// Lattigo's KeyGenerator, persists them, reads them back, and asserts the
-// GaloisElement set matches.
+// TestWriteReadGaloisKeysRoundTrip exercises the gks_infer.bin on-disk
+// shape. The test generates a small slice of real *rlwe.GaloisKey at eval
+// level via Lattigo's KeyGenerator, persists them, reads them back, and
+// asserts the GaloisElement set matches.
 func TestWriteReadGaloisKeysRoundTrip(t *testing.T) {
 	params := smallCLIParams(t)
 	dir := t.TempDir()
@@ -63,8 +62,8 @@ func TestWriteReadGaloisKeysRoundTrip(t *testing.T) {
 		want[i] = kg.GenGaloisKeyNew(el, sk)
 	}
 
-	require.NoError(t, writeGaloisKeys(dir, artifactGKSAuth, want))
-	got, err := readGaloisKeys(dir, artifactGKSAuth)
+	require.NoError(t, writeGaloisKeys(dir, artifactGKSInfer, want))
+	got, err := readGaloisKeys(dir, artifactGKSInfer)
 	require.NoError(t, err)
 	require.Len(t, got, len(want))
 
@@ -77,14 +76,14 @@ func TestWriteReadGaloisKeysRoundTrip(t *testing.T) {
 	}
 
 	// The artifact file must exist on disk for the bench's os.Stat path.
-	info, err := os.Stat(filepath.Join(dir, artifactGKSAuth))
+	info, err := os.Stat(filepath.Join(dir, artifactGKSInfer))
 	require.NoError(t, err)
-	assert.Positive(t, info.Size(), "gks_auth.bin must have non-zero size")
+	assert.Positive(t, info.Size(), "gks_infer.bin must have non-zero size")
 }
 
-// TestWriteReadMasterKeysRoundTrip exercises gks_master_infer.bin. We
-// generate a DISTINCT MasterKey per atom (different rotation indices fed
-// into the hierkeys Galois-key-to-master conversion) and round-trip the
+// TestWriteReadMasterKeysRoundTrip exercises gks_master.bin. We generate
+// a DISTINCT MasterKey per atom (different rotation indices fed into the
+// hierkeys Galois-key-to-master conversion) and round-trip the
 // {atom -> MasterKey} map through writeMasterKeys/readMasterKeys, asserting
 // each readback matches its own original bytes. Using one shared MasterKey
 // across atoms would silently pass an off-by-one indexing / swap bug; the
@@ -122,8 +121,8 @@ func TestWriteReadMasterKeysRoundTrip(t *testing.T) {
 		prevBytes = b
 	}
 
-	require.NoError(t, writeMasterKeys(dir, artifactGKSMasterInfer, want))
-	got, err := readMasterKeys(dir, artifactGKSMasterInfer)
+	require.NoError(t, writeMasterKeys(dir, artifactGKSMaster, want))
+	got, err := readMasterKeys(dir, artifactGKSMaster)
 	require.NoError(t, err)
 	require.Len(t, got, len(want))
 
@@ -138,17 +137,17 @@ func TestWriteReadMasterKeysRoundTrip(t *testing.T) {
 		assert.Equalf(t, wantBytes, gotBytes, "MasterKey bytes differ for atom %d", atom)
 	}
 
-	info, err := os.Stat(filepath.Join(dir, artifactGKSMasterInfer))
+	info, err := os.Stat(filepath.Join(dir, artifactGKSMaster))
 	require.NoError(t, err)
-	assert.Positive(t, info.Size(), "gks_master_infer.bin must have non-zero size")
+	assert.Positive(t, info.Size(), "gks_master.bin must have non-zero size")
 }
 
 // TestReadMasterKeysShortHeader guards against silent corruption of the
 // length-prefixed wire format — a truncated count header must fail loudly.
 func TestReadMasterKeysShortHeader(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, writeBytes(dir, artifactGKSMasterInfer, []byte{0x00, 0x01}))
-	_, err := readMasterKeys(dir, artifactGKSMasterInfer)
+	require.NoError(t, writeBytes(dir, artifactGKSMaster, []byte{0x00, 0x01}))
+	_, err := readMasterKeys(dir, artifactGKSMaster)
 	require.Error(t, err)
 }
 

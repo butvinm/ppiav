@@ -43,7 +43,7 @@ uv run python -m bench.eval --aggregate-only ../results/<UTC-ts>/
 results/<UTC-ts>/
 ├── keys/
 │   ├── pk_eval.bin pk_top.bin sk_c.bin sk_a.bin
-│   ├── rlk.bin gks_auth.bin gks_master_infer.bin gks_infer.bin
+│   ├── rlk.bin gks_master.bin gks_infer.bin
 │   ├── mac_key.bin sid.txt params.json
 ├── img_0/
 │   ├── input_ct.bin result_ct.bin auth_ct.bin client_share.bin

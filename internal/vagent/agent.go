@@ -65,19 +65,23 @@ type sessionState struct {
 
 	// Populated by AggregateGaloisShares.
 	// `rlkAgg` is the aggregated eval-level relinearization key.
-	// `gksAuth` is the per-auth-atom raw `*rlwe.GaloisKey` slice (eval
-	// level, negative galEls). Used directly by `authchain` (no
-	// hierarchical derivation at VAgent). Stashed so ExportState can
-	// hand the full set to the bench `mac` / `finalize` subprocesses.
-	// `gksMasterInfer` is the inference-side master-key bundle
-	// (top level, positive galEls, hierkeys.GaloisKeyToMasterKey'd).
-	// Shipped to VService via InferEvalKeys.
+	// `gksMaster` is the SINGLE master-key bundle (top level, positive
+	// galEls, hierkeys.GaloisKeyToMasterKey'd). Shipped verbatim to
+	// VService inside InferEvalKeys AND consumed locally to derive
+	// gksAuth via hierkeys.LevelExpansion at negative auth atoms.
+	// `gksAuth` is the per-auth-atom `*rlwe.GaloisKey` slice (eval
+	// level, negative galEls) derived from gksMaster. Used directly by
+	// `authchain`. Stashed so ExportState can hand it to mac/finalize
+	// (or be rederived from gksMaster on NewWithState).
 	// `authchain` wraps a `*ckks.Evaluator` over rlkAgg + gksAuth and
 	// performs the binary-decompose chain rotation Auth's step 4 issues.
-	rlkAgg         *rlwe.RelinearizationKey
-	gksAuth        []*rlwe.GaloisKey
-	gksMasterInfer map[int]*hierkeys.MasterKey
-	authchain      *authchain.Evaluator
+	// `deriveGksAuthSeconds` records the wall-clock time the LevelExpansion
+	// pass spent on the negative auth atoms (surfaced for the bench).
+	rlkAgg               *rlwe.RelinearizationKey
+	gksAuth              []*rlwe.GaloisKey
+	gksMaster            map[int]*hierkeys.MasterKey
+	authchain            *authchain.Evaluator
+	deriveGksAuthSeconds float64
 
 	// PK protocol stash (between GenPKShare and AggregatePK). Two
 	// protocols run per stage — one per level. Each carries its own
@@ -98,18 +102,14 @@ type sessionState struct {
 	rlkShare1Agg multiparty.RelinearizationKeyGenShare
 	rlkShare2Loc multiparty.RelinearizationKeyGenShare
 
-	// Galois protocol stash (between GenAuthAndInferShares and
-	// AggregateGaloisShares). Two iterations run — one per atom set.
-	// Each iteration is keyed by its own CRP and local share slice in
-	// ascending atom order.
-	galProtoEval  multiparty.GaloisKeyGenProtocol
-	galCRPsAuth   []multiparty.GaloisKeyGenCRP
-	galSharesAuth []multiparty.GaloisKeyGenShare
-	authLabels    []int
-	galProtoTop   multiparty.GaloisKeyGenProtocol
-	galCRPsInfer  []multiparty.GaloisKeyGenCRP
-	galSharesInfer []multiparty.GaloisKeyGenShare
-	inferLabels   []int
+	// Galois protocol stash (between GenMasterShares and
+	// AggregateGaloisShares). Single iteration over the master atom set
+	// (top level), keyed by per-atom CRP and local share in ascending
+	// atom order.
+	galProtoTop     multiparty.GaloisKeyGenProtocol
+	galCRPsMaster   []multiparty.GaloisKeyGenCRP
+	galSharesMaster []multiparty.GaloisKeyGenShare
+	masterLabels    []int
 
 	// authResult is the Stage-3 → Stage-4a hand-off: capacity-1 buffered so
 	// the image POST handler can deposit ct_M before the SSE receiver opens
@@ -274,6 +274,22 @@ func (a *Agent) EvictSession(sid protocol.SessionID) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	delete(a.sessions, sid)
+}
+
+// DeriveGksAuthSeconds returns the wall-clock time the most recent
+// auth-key derivation pass spent for `sid`. Set inside
+// AggregateGaloisShares (and again inside NewWithState when re-deriving
+// from a serialised state). Surfaced for the bench harness so the CLI
+// `keygen` and `mac` subcommands can attribute the LevelExpansion cost.
+// Returns `0, false` for an unknown sid.
+func (a *Agent) DeriveGksAuthSeconds(sid protocol.SessionID) (float64, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	sess, ok := a.sessions[sid]
+	if !ok {
+		return 0, false
+	}
+	return sess.deriveGksAuthSeconds, true
 }
 
 func (a *Agent) sessionLocked(sid protocol.SessionID) (*sessionState, error) {

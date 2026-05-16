@@ -19,14 +19,14 @@ import (
 //   - Each party draws skTop_i; the ideal sk = sum is computed for
 //     verification only.
 //   - A collective `pkTop` is finalised via `multiparty.PublicKeyGenProtocol`.
-//   - For each master atom (`params.InferAtoms()`), a collective
+//   - For each master atom (`params.MasterAtoms()`), a collective
 //     `*rlwe.GaloisKey` is finalised via `multiparty.GaloisKeyGenProtocol`
 //     at the top-level params with `+atom` Galois elements, then converted
-//     via `hierkeys.GaloisKeyToMasterKey` into the `gksMasterInfer` map.
+//     via `hierkeys.GaloisKeyToMasterKey` into the `gksMaster` map.
 //
-// Returns `(pkTop, gksMasterInfer, skIdealTop)`. `skIdealTop` is the
-// joint top-level secret-key (sum of per-party shares); the caller
-// projects it down to eval level for decryption-side verification.
+// Returns `(pkTop, gksMaster, skIdealTop)`. `skIdealTop` is the joint
+// top-level secret-key (sum of per-party shares); the caller projects it
+// down to eval level for decryption-side verification.
 func buildMultiPartyTransmission(t *testing.T, params protocol.Params) (
 	*rlwe.PublicKey,
 	map[int]*hierkeys.MasterKey,
@@ -34,7 +34,7 @@ func buildMultiPartyTransmission(t *testing.T, params protocol.Params) (
 ) {
 	t.Helper()
 	topParams := params.LLKN.Top()
-	atoms := params.InferAtoms()
+	atoms := params.MasterAtoms()
 
 	crs, err := sampling.NewKeyedPRNG([]byte("ppiav-vservice-funceq-test-crs"))
 	require.NoError(t, err)
@@ -89,10 +89,10 @@ func buildMultiPartyTransmission(t *testing.T, params protocol.Params) (
 // the synthetic-x² Service with a non-empty ExtraRotationIndices:
 //
 //  1. Run a 2-party top-level multi-party handshake to produce
-//     `(pkTop, gksMasterInfer)`.
+//     `(pkTop, gksMaster)`.
 //  2. Project the ideal top-level sk down to eval level and synthesise
 //     an eval-level relinearization key under that secret.
-//  3. Call `StoreEvalKeys(sid, rlk, pkTop, gksMasterInfer)` — VService
+//  3. Call `StoreEvalKeys(sid, rlk, pkTop, gksMaster)` — VService
 //     runs `hierkeys.LevelExpansion + FinalizeKey` for every target.
 //  4. Encrypt a fresh ciphertext under `skEval`, rotate it via the
 //     in-process *ckks.Evaluator (built from the derived gks_infer),
@@ -117,14 +117,14 @@ func TestStoreEvalKeysFunctionalEquivalence(t *testing.T) {
 	sid, err := svc.OpenSession()
 	require.NoError(t, err)
 
-	pkTop, gksMasterInfer, skIdealTop := buildMultiPartyTransmission(t, params)
+	pkTop, gksMaster, skIdealTop := buildMultiPartyTransmission(t, params)
 
 	// Eval-level secret derived from the joint top-level sk.
 	skEval, err := params.LLKN.ProjectToEvalKey(skIdealTop)
 	require.NoError(t, err)
 	rlk := rlwe.NewKeyGenerator(params.CKKS).GenRelinearizationKeyNew(skEval)
 
-	require.NoError(t, svc.StoreEvalKeys(sid, rlk, pkTop, gksMasterInfer))
+	require.NoError(t, svc.StoreEvalKeys(sid, rlk, pkTop, gksMaster))
 
 	// Verify timing was recorded (concurrent path runs in well under a
 	// second at LogN=14 with 3 targets, but the elapsed counter must be
@@ -187,7 +187,7 @@ func TestStoreEvalKeysFunctionalEquivalence(t *testing.T) {
 
 // TestStoreEvalKeysRejectsEmptyMasterWithRotations checks the input
 // validation: if the params declare rotations to derive but the caller
-// supplies an empty gksMasterInfer (or nil pkTop), `StoreEvalKeys` must
+// supplies an empty gksMaster (or nil pkTop), `StoreEvalKeys` must
 // fail loudly instead of silently producing a Service without rotation
 // keys.
 func TestStoreEvalKeysRejectsEmptyMasterWithRotations(t *testing.T) {
@@ -208,11 +208,11 @@ func TestStoreEvalKeysRejectsEmptyMasterWithRotations(t *testing.T) {
 	// Open a fresh session — the first call left the existing one in a
 	// half-set state (no evaluator built), and a second StoreEvalKeys on
 	// the same sid would re-trigger derivation but not surface a clean
-	// failure mode in the absence of `gksMasterInfer`.
+	// failure mode in the absence of `gksMaster`.
 	sid2, err := svc.OpenSession()
 	require.NoError(t, err)
 	topKgen := rlwe.NewKeyGenerator(params.LLKN.Top())
 	pkTop := topKgen.GenPublicKeyNew(topKgen.GenSecretKeyNew())
 	err = svc.StoreEvalKeys(sid2, rlk, pkTop, nil)
-	require.Error(t, err, "nil gksMasterInfer with non-empty rotations must fail")
+	require.Error(t, err, "nil gksMaster with non-empty rotations must fail")
 }

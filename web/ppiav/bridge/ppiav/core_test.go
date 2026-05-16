@@ -146,7 +146,7 @@ func TestUnknownHandleErrors(t *testing.T) {
 	require.Error(t, AggregateRLKRound1(bogus, []byte{0}))
 	_, err = GenRLKShareRound2(bogus)
 	require.Error(t, err)
-	_, err = GenAuthAndInferShares(bogus)
+	_, err = GenMasterShares(bogus)
 	require.Error(t, err)
 	_, err = EncryptImage(bogus, make([]float64, vclient.ImageLen))
 	require.Error(t, err)
@@ -254,15 +254,13 @@ func TestFullKeygenRoundTripThroughBridge(t *testing.T) {
 	var clientRLK2 protocol.VClientRLKRound2
 	require.NoError(t, clientRLK2.UnmarshalBinary(clientRLK2Bytes))
 
-	// --- Stage 2d: dual atom-set Galois shares ---
-	galSharesBytes, err := GenAuthAndInferShares(h)
+	// --- Stage 2d: single master-atom-set Galois shares ---
+	galSharesBytes, err := GenMasterShares(h)
 	require.NoError(t, err)
 	var galShares protocol.VClientGaloisShares
 	require.NoError(t, galShares.UnmarshalBinary(galSharesBytes))
-	assert.Equal(t, len(params.AuthAtoms()), len(galShares.AuthAtomShares),
-		"bridge must emit one auth share per AuthAtoms() entry")
-	assert.Equal(t, len(params.InferAtoms()), len(galShares.InferAtomShares),
-		"bridge must emit one infer share per InferAtoms() entry")
+	assert.Equal(t, len(params.MasterAtoms()), len(galShares.MasterShares),
+		"bridge must emit one master share per MasterAtoms() entry")
 }
 
 func TestEncryptImageRequiresAggregatedPK(t *testing.T) {

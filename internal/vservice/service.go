@@ -53,7 +53,7 @@ type sessionState struct {
 	rlk                   *rlwe.RelinearizationKey
 	gksInfer              []*rlwe.GaloisKey
 	pkTop                 *rlwe.PublicKey
-	gksMasterInfer        map[int]*hierkeys.MasterKey
+	gksMaster        map[int]*hierkeys.MasterKey
 	deriveGksInferSeconds float64
 }
 
@@ -145,13 +145,13 @@ func (s *Service) OpenSession() (protocol.SessionID, error) {
 // §15.4). The total wall-clock is recorded into
 // `sess.deriveGksInferSeconds` for the bench harness.
 //
-// `gksMasterInfer` is keyed by the positive **top-level atom** under the
+// `gksMaster` is keyed by the positive **top-level atom** under the
 // hierkeys convention; the per-target `Derive(r)` calls receive
 // `r = -extraIndex` to land the derived key on `GaloisElement(+k_orion)`,
 // honoring the signed-label convention documented on `protocol.Params`
 // (and `internal/vservice/orion.go`).
 //
-// `gksMasterInfer` may be nil (synthetic-x² mode, no rotations needed);
+// `gksMaster` may be nil (synthetic-x² mode, no rotations needed);
 // in that case derivation is skipped and the evaluator is built with an
 // empty Galois-key slice — same shape as the pre-hierkeys protocol with
 // no rotations.
@@ -159,7 +159,7 @@ func (s *Service) StoreEvalKeys(
 	sid protocol.SessionID,
 	rlk *rlwe.RelinearizationKey,
 	pkTop *rlwe.PublicKey,
-	gksMasterInfer map[int]*hierkeys.MasterKey,
+	gksMaster map[int]*hierkeys.MasterKey,
 ) error {
 	s.mu.Lock()
 	if _, ok := s.sessions[sid]; !ok {
@@ -172,7 +172,7 @@ func (s *Service) StoreEvalKeys(
 	orionModel := s.orionModel
 	s.mu.Unlock()
 
-	gks, derive, err := deriveGksInfer(params, pkTop, gksMasterInfer)
+	gks, derive, err := deriveGksInfer(params, pkTop, gksMaster)
 	if err != nil {
 		return err
 	}
@@ -190,7 +190,7 @@ func (s *Service) StoreEvalKeys(
 	sess.rlk = rlk
 	sess.gksInfer = gks
 	sess.pkTop = pkTop
-	sess.gksMasterInfer = gksMasterInfer
+	sess.gksMaster = gksMaster
 	sess.deriveGksInferSeconds = derive
 	if orionModel != nil {
 		// Orion path: per-session Orion Evaluator. The model is shared.
@@ -214,13 +214,13 @@ func (s *Service) StoreEvalKeys(
 // `LevelExpansion.Derive + llkn.Evaluator.FinalizeKey` in parallel.
 //
 // If `params.ExtraRotationIndices` is empty (synthetic-x² mode) the
-// function short-circuits to `(nil, 0, nil)`. If `gksMasterInfer` is nil
+// function short-circuits to `(nil, 0, nil)`. If `gksMaster` is nil
 // but `ExtraRotationIndices` is non-empty, we error — the caller must
 // supply a master bundle whenever the circuit needs rotations.
 func deriveGksInfer(
 	params protocol.Params,
 	pkTop *rlwe.PublicKey,
-	gksMasterInfer map[int]*hierkeys.MasterKey,
+	gksMaster map[int]*hierkeys.MasterKey,
 ) ([]*rlwe.GaloisKey, float64, error) {
 	targets := params.ExtraRotationIndices
 	if len(targets) == 0 {
@@ -229,8 +229,8 @@ func deriveGksInfer(
 	if pkTop == nil {
 		return nil, 0, fmt.Errorf("vservice: pkTop is nil but %d extra rotations need derivation", len(targets))
 	}
-	if len(gksMasterInfer) == 0 {
-		return nil, 0, fmt.Errorf("vservice: gksMasterInfer is empty but %d extra rotations need derivation", len(targets))
+	if len(gksMaster) == 0 {
+		return nil, 0, fmt.Errorf("vservice: gksMaster is empty but %d extra rotations need derivation", len(targets))
 	}
 
 	// Map every ExtraRotationIndices entry (`-k_orion`) to the hierkeys
@@ -249,7 +249,7 @@ func deriveGksInfer(
 	if err != nil {
 		return nil, 0, fmt.Errorf("vservice: hierkeys.PubToRot: %w", err)
 	}
-	exp := llknEval.NewLevelExpansion(0, shift0, gksMasterInfer, deriveTargets)
+	exp := llknEval.NewLevelExpansion(0, shift0, gksMaster, deriveTargets)
 
 	gks := make([]*rlwe.GaloisKey, len(deriveTargets))
 	derrs := make([]error, len(deriveTargets))

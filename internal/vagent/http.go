@@ -427,21 +427,21 @@ func (s *Server) handleGKSShares(w http.ResponseWriter, r *http.Request, sid pro
 		s.rejectAndEvict(w, http.StatusBadRequest, sid, fmt.Sprintf("unmarshal VClientGaloisShares: %s", err))
 		return
 	}
-	// GenAuthAndInferShares draws CRPs in canonical atom-set order; the
+	// GenMasterShares draws the master-atom CRPs in canonical order; the
 	// labels are not on the wire (both sides derive them from
-	// `params.AuthAtoms()` / `params.InferAtoms()`). The aggregator
-	// validates share counts against the stashed agent shares.
-	if _, _, _, _, err := s.agent.GenAuthAndInferShares(sid); err != nil {
+	// `params.MasterAtoms()`). The aggregator validates share counts
+	// against the stashed agent shares.
+	if _, _, err := s.agent.GenMasterShares(sid); err != nil {
 		httputil.WriteError(w, sidErrorStatus(err), err.Error())
 		return
 	}
-	rlk, pkTop, gksMasterInfer, err := s.agent.AggregateGaloisShares(sid, client)
+	rlk, pkTop, gksMaster, err := s.agent.AggregateGaloisShares(sid, client)
 	if err != nil {
 		// Count-mismatch / share-shape mismatch is F2 (malformed wire input).
 		s.rejectAndEvict(w, http.StatusBadRequest, sid, err.Error())
 		return
 	}
-	keys := protocol.InferEvalKeys{RLK: rlk, PKTop: pkTop, GKSMasterInfer: gksMasterInfer}
+	keys := protocol.InferEvalKeys{RLK: rlk, PKTop: pkTop, GKSMaster: gksMaster}
 	keysBytes, err := keys.MarshalBinary()
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("marshal InferEvalKeys: %s", err))

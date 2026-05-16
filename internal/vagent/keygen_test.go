@@ -50,12 +50,11 @@ func jointSk(t *testing.T, params protocol.Params, skCEval, skAEval *rlwe.Secret
 // runFullKeygen drives the full Stage-2 handshake against `a` using
 // `stub` as VClient's side. Returns the joint eval-level sk, the
 // finalised rlk, and the per-auth-atom Galois keys (parallel to
-// `params.AuthAtoms()`) so callers can wire them into an evaluator and
-// decrypt arbitrary outputs.
+// `params.AuthAtoms()`, derived locally by the Agent from gksMaster) so
+// callers can wire them into an evaluator and decrypt arbitrary outputs.
 //
 // CRS draw order followed exactly: pk_eval, pk_top, rlk (single CRP),
-// then auth atoms (eval level, ascending), then infer atoms (top level,
-// ascending). The stub draws in lockstep.
+// then master atoms (top level, ascending). The stub draws in lockstep.
 func runFullKeygen(t *testing.T, a *Agent, sid protocol.SessionID, stub *vclientStub) (
 	*rlwe.SecretKey,
 	*rlwe.RelinearizationKey,
@@ -104,16 +103,14 @@ func runFullKeygen(t *testing.T, a *Agent, sid protocol.SessionID, stub *vclient
 	require.NoError(t, a.AggregateRLKRound2(sid, clientRLK2))
 	_ = agentRLK2
 
-	// Stage 2d — dual atom-set Galois handshake.
-	_, _, agentAuthLabels, agentInferLabels, err := a.GenAuthAndInferShares(sid)
+	// Stage 2d — single master-atom-set Galois handshake.
+	_, agentMasterLabels, err := a.GenMasterShares(sid)
 	require.NoError(t, err)
-	require.Equal(t, params.AuthAtoms(), agentAuthLabels)
-	require.Equal(t, params.InferAtoms(), agentInferLabels)
+	require.Equal(t, params.MasterAtoms(), agentMasterLabels)
 
-	clientAuthShares, clientInferShares := generateClientGaloisShares(t, stub, params, agentAuthLabels, agentInferLabels)
+	clientMasterShares := generateClientGaloisShares(t, stub, params, agentMasterLabels)
 	clientShares := protocol.VClientGaloisShares{
-		AuthAtomShares:  clientAuthShares,
-		InferAtomShares: clientInferShares,
+		MasterShares: clientMasterShares,
 	}
 
 	rlk, _, _, err := a.AggregateGaloisShares(sid, clientShares)
@@ -121,46 +118,35 @@ func runFullKeygen(t *testing.T, a *Agent, sid protocol.SessionID, stub *vclient
 
 	sess := agentState(t, a, sid)
 	require.NotNil(t, sess.authchain)
-	require.Equal(t, len(agentAuthLabels), len(sess.gksAuth))
+	require.Equal(t, len(params.AuthAtoms()), len(sess.gksAuth))
 
 	return jointSk(t, params, stub.skCEval, sess.skEvalCached), rlk, sess.gksAuth
 }
 
-// generateClientGaloisShares draws the stub-side auth + infer CRPs and
-// shares in canonical order. The stub's CRS must be at the auth-atom
-// draw position when this is called (PK + RLK already consumed).
+// generateClientGaloisShares draws the stub-side master CRPs and shares
+// in canonical order. The stub's CRS must be at the master-atom draw
+// position when this is called (PK + RLK already consumed).
 func generateClientGaloisShares(
 	t *testing.T,
 	stub *vclientStub,
 	params protocol.Params,
-	authLabels []int,
-	inferLabels []int,
-) ([]multiparty.GaloisKeyGenShare, []multiparty.GaloisKeyGenShare) {
+	masterLabels []int,
+) []multiparty.GaloisKeyGenShare {
 	t.Helper()
-	authShares := make([]multiparty.GaloisKeyGenShare, len(authLabels))
-	if len(authLabels) > 0 {
-		gkgEval := multiparty.NewGaloisKeyGenProtocol(params.CKKS)
-		for i, atom := range authLabels {
-			crp := gkgEval.SampleCRP(stub.crs)
-			share := gkgEval.AllocateShare()
-			galEl := params.CKKS.GaloisElement(-atom)
-			require.NoError(t, gkgEval.GenShare(stub.skCEval, galEl, crp, &share))
-			authShares[i] = share
-		}
+	shares := make([]multiparty.GaloisKeyGenShare, len(masterLabels))
+	if len(masterLabels) == 0 {
+		return shares
 	}
-	inferShares := make([]multiparty.GaloisKeyGenShare, len(inferLabels))
-	if len(inferLabels) > 0 {
-		topParams := params.LLKN.Top()
-		gkgTop := multiparty.NewGaloisKeyGenProtocol(topParams)
-		for i, atom := range inferLabels {
-			crp := gkgTop.SampleCRP(stub.crs)
-			share := gkgTop.AllocateShare()
-			galEl := topParams.GaloisElement(+atom)
-			require.NoError(t, gkgTop.GenShare(stub.skCTop, galEl, crp, &share))
-			inferShares[i] = share
-		}
+	topParams := params.LLKN.Top()
+	gkgTop := multiparty.NewGaloisKeyGenProtocol(topParams)
+	for i, atom := range masterLabels {
+		crp := gkgTop.SampleCRP(stub.crs)
+		share := gkgTop.AllocateShare()
+		galEl := topParams.GaloisElement(+atom)
+		require.NoError(t, gkgTop.GenShare(stub.skCTop, galEl, crp, &share))
+		shares[i] = share
 	}
-	return authShares, inferShares
+	return shares
 }
 
 // agentState pokes inside the Agent's mutex for tests that need the
@@ -336,9 +322,9 @@ func TestAggregatedAuthAtomKeysEnableRotation(t *testing.T) {
 
 // TestAggregateGaloisShareCountMismatchErrors covers the share-count
 // validation path on the agent's AggregateGaloisShares. Atom labels are
-// not on the wire (both sides derive them from `params.AuthAtoms()` /
-// `params.InferAtoms()`), so the remaining real desync surface is a
-// share-count mismatch on either set.
+// not on the wire (both sides derive them from `params.MasterAtoms()`),
+// so the remaining real desync surface is a share-count mismatch on the
+// single master set.
 func TestAggregateGaloisShareCountMismatchErrors(t *testing.T) {
 	params := smallParams(t)
 	a, err := New(params)
@@ -348,31 +334,25 @@ func TestAggregateGaloisShareCountMismatchErrors(t *testing.T) {
 	stub := newVClientStub(t, params, sid)
 
 	runHandshakeUpToGalois(t, a, sid, stub)
-	_, _, agentAuthLabels, agentInferLabels, err := a.GenAuthAndInferShares(sid)
+	_, agentMasterLabels, err := a.GenMasterShares(sid)
 	require.NoError(t, err)
-	clientAuth, clientInfer := generateClientGaloisShares(t, stub, params, agentAuthLabels, agentInferLabels)
+	clientMaster := generateClientGaloisShares(t, stub, params, agentMasterLabels)
 
-	// Trim auth shares to short-count and expect a count-mismatch error.
-	if len(clientAuth) >= 1 {
-		short := clientAuth[:len(clientAuth)-1]
+	// Trim master shares to short-count and expect a count-mismatch error.
+	if len(clientMaster) >= 1 {
+		short := clientMaster[:len(clientMaster)-1]
 		_, _, _, err = a.AggregateGaloisShares(sid,
-			protocol.VClientGaloisShares{AuthAtomShares: short, InferAtomShares: clientInfer})
-		require.Error(t, err, "short auth share count must error")
-	}
-
-	// Trim infer shares similarly.
-	if len(clientInfer) >= 1 {
-		shortInfer := clientInfer[:len(clientInfer)-1]
-		_, _, _, err = a.AggregateGaloisShares(sid,
-			protocol.VClientGaloisShares{AuthAtomShares: clientAuth, InferAtomShares: shortInfer})
-		require.Error(t, err, "short infer share count must error")
+			protocol.VClientGaloisShares{MasterShares: short})
+		require.Error(t, err, "short master share count must error")
 	}
 }
 
-// TestAggregatedInferAtomsConvertToMasterKey checks the infer-atom side
-// of AggregateGaloisShares yields a non-empty map keyed by ascending
-// positive atoms, with each value a valid hierkeys.MasterKey.
-func TestAggregatedInferAtomsConvertToMasterKey(t *testing.T) {
+// TestAggregatedMasterAtomsConvertToMasterKey checks AggregateGaloisShares
+// yields a non-empty gksMaster map keyed by ascending positive atoms,
+// with each value a valid hierkeys.MasterKey. Also rebuilds the
+// authchain evaluator from the locally-derived gksAuth as a regression
+// against the design-A derivation path.
+func TestAggregatedMasterAtomsConvertToMasterKey(t *testing.T) {
 	params := smallParams(t)
 	a, err := New(params)
 	require.NoError(t, err)
@@ -381,20 +361,28 @@ func TestAggregatedInferAtomsConvertToMasterKey(t *testing.T) {
 	stub := newVClientStub(t, params, sid)
 
 	runHandshakeUpToGalois(t, a, sid, stub)
-	_, _, agentAuthLabels, agentInferLabels, err := a.GenAuthAndInferShares(sid)
+	_, agentMasterLabels, err := a.GenMasterShares(sid)
 	require.NoError(t, err)
-	clientAuth, clientInfer := generateClientGaloisShares(t, stub, params, agentAuthLabels, agentInferLabels)
+	clientMaster := generateClientGaloisShares(t, stub, params, agentMasterLabels)
 
-	_, pkTop, gksMasterInfer, err := a.AggregateGaloisShares(sid,
-		protocol.VClientGaloisShares{AuthAtomShares: clientAuth, InferAtomShares: clientInfer})
+	_, pkTop, gksMaster, err := a.AggregateGaloisShares(sid,
+		protocol.VClientGaloisShares{MasterShares: clientMaster})
 	require.NoError(t, err)
 	require.NotNil(t, pkTop, "pkTop must be returned")
-	require.Len(t, gksMasterInfer, len(agentInferLabels))
-	for _, atom := range agentInferLabels {
-		mk, ok := gksMasterInfer[atom]
-		require.True(t, ok, "atom %d missing from gksMasterInfer", atom)
+	require.Len(t, gksMaster, len(agentMasterLabels))
+	for _, atom := range agentMasterLabels {
+		mk, ok := gksMaster[atom]
+		require.True(t, ok, "atom %d missing from gksMaster", atom)
 		require.IsType(t, &hierkeys.MasterKey{}, mk)
 	}
+
+	// Design-A regression: AggregateGaloisShares must populate gksAuth
+	// (locally derived from gksMaster) and wire it into the session's
+	// authchain. Confirm the count matches AuthAtoms() and the
+	// authchain is non-nil.
+	sess := agentState(t, a, sid)
+	require.NotNil(t, sess.authchain, "authchain must be wired after AggregateGaloisShares")
+	require.Len(t, sess.gksAuth, len(params.AuthAtoms()), "gksAuth must cover every auth atom")
 }
 
 func TestKeygenMethodsRejectUnknownSid(t *testing.T) {
@@ -412,6 +400,6 @@ func TestKeygenMethodsRejectUnknownSid(t *testing.T) {
 	_, err = a.GenRLKShareRound2(sid)
 	require.Error(t, err)
 	require.Error(t, a.AggregateRLKRound2(sid, multiparty.RelinearizationKeyGenShare{}))
-	_, _, _, _, err = a.GenAuthAndInferShares(sid)
+	_, _, err = a.GenMasterShares(sid)
 	require.Error(t, err)
 }

@@ -2,8 +2,12 @@ package vagent
 
 import (
 	"fmt"
+	"runtime"
+	"sync"
+	"time"
 
 	hierkeys "github.com/butvinm/lattigo-hierkeys"
+	"github.com/butvinm/lattigo-hierkeys/llkn"
 	"github.com/butvinm/ppiav/internal/authchain"
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
@@ -181,109 +185,75 @@ func (a *Agent) AggregateRLKRound2(sid protocol.SessionID, clientShare multipart
 	return nil
 }
 
-// GenAuthAndInferShares produces the two parallel share lists that VAgent
+// GenMasterShares produces the single master-atom share list that VAgent
 // pairs against VClient's matching `VClientGaloisShares` payload:
 //
-//   - Auth atoms (eval level, NEGATIVE Galois elements). One share per
-//     atom in `a.params.AuthAtoms()` (e.g. `{1,2,4,8,16,32,64}` for λ=128).
-//     Secret-key arg is `skEval`. Each call uses
-//     `a.params.CKKS.GaloisElement(-atom)`. Aggregated into raw
-//     `*rlwe.GaloisKey`s used directly by `authchain` (no hierkeys
-//     conversion).
-//   - Infer atoms (top level, POSITIVE Galois elements). One share per
-//     atom in `a.params.InferAtoms()`. Secret-key arg is `skTop`. Each call
-//     uses `a.params.LLKN.Top().GaloisElement(+atom)`. Aggregated and
-//     converted via `hierkeys.GaloisKeyToMasterKey` into the master-key
-//     bundle shipped to VService.
+//   - One share per atom in `a.params.MasterAtoms()` (top level, POSITIVE
+//     Galois elements). Secret-key arg is `skTop`. Each call uses
+//     `a.params.LLKN.Top().GaloisElement(+atom)`. Aggregated and converted
+//     via `hierkeys.GaloisKeyToMasterKey` into the master-key bundle that
+//     powers BOTH the auth-atom derivation (negative direction, local to
+//     VAgent) and the inference rotation set (signed labels, local to
+//     VService).
 //
-// CRS draw order: auth-atom CRPs first (eval level, ascending), then
-// infer-atom CRPs (top level, ascending). VClient draws in lockstep.
+// CRS draw order: master-atom CRPs at top level, ascending. VClient draws
+// in lockstep.
 //
-// The returned label slices are parallel to the share slices. The
-// stashed `sess.authLabels` / `sess.inferLabels` are what
-// AggregateGaloisShares uses to cross-check VClient's parallel labels.
-func (a *Agent) GenAuthAndInferShares(sid protocol.SessionID) (
-	authShares []multiparty.GaloisKeyGenShare,
-	inferShares []multiparty.GaloisKeyGenShare,
-	authLabels []int,
-	inferLabels []int,
+// The returned label slice is parallel to the share slice. The stashed
+// `sess.masterLabels` is what AggregateGaloisShares uses to cross-check
+// VClient's parallel count.
+func (a *Agent) GenMasterShares(sid protocol.SessionID) (
+	shares []multiparty.GaloisKeyGenShare,
+	labels []int,
 	err error,
 ) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	sess, err := a.sessionLocked(sid)
 	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-	skEval, err := a.sessionSkEvalLocked(sess)
-	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, err
 	}
 
-	authLabels = a.params.AuthAtoms()
-	authShares = make([]multiparty.GaloisKeyGenShare, len(authLabels))
-	authCRPs := make([]multiparty.GaloisKeyGenCRP, len(authLabels))
-	if len(authLabels) > 0 {
-		gkgEval := multiparty.NewGaloisKeyGenProtocol(a.params.CKKS)
-		for i, atom := range authLabels {
-			crp := gkgEval.SampleCRP(sess.crs)
-			share := gkgEval.AllocateShare()
-			galEl := a.params.CKKS.GaloisElement(-atom)
-			if err := gkgEval.GenShare(skEval, galEl, crp, &share); err != nil {
-				return nil, nil, nil, nil, fmt.Errorf("vagent: GenShare for auth atom %d: %w", atom, err)
-			}
-			authShares[i] = share
-			authCRPs[i] = crp
-		}
-		sess.galProtoEval = gkgEval
-	}
-	sess.galCRPsAuth = authCRPs
-	sess.galSharesAuth = authShares
-	sess.authLabels = authLabels
-
-	inferLabels = a.params.InferAtoms()
-	inferShares = make([]multiparty.GaloisKeyGenShare, len(inferLabels))
-	inferCRPs := make([]multiparty.GaloisKeyGenCRP, len(inferLabels))
-	if len(inferLabels) > 0 {
+	labels = a.params.MasterAtoms()
+	shares = make([]multiparty.GaloisKeyGenShare, len(labels))
+	crps := make([]multiparty.GaloisKeyGenCRP, len(labels))
+	if len(labels) > 0 {
 		topParams := a.params.LLKN.Top()
 		gkgTop := multiparty.NewGaloisKeyGenProtocol(topParams)
-		for i, atom := range inferLabels {
+		for i, atom := range labels {
 			crp := gkgTop.SampleCRP(sess.crs)
 			share := gkgTop.AllocateShare()
 			galEl := topParams.GaloisElement(+atom)
 			if err := gkgTop.GenShare(sess.skTop, galEl, crp, &share); err != nil {
-				return nil, nil, nil, nil, fmt.Errorf("vagent: GenShare for infer atom %d: %w", atom, err)
+				return nil, nil, fmt.Errorf("vagent: GenShare for master atom %d: %w", atom, err)
 			}
-			inferShares[i] = share
-			inferCRPs[i] = crp
+			shares[i] = share
+			crps[i] = crp
 		}
 		sess.galProtoTop = gkgTop
 	}
-	sess.galCRPsInfer = inferCRPs
-	sess.galSharesInfer = inferShares
-	sess.inferLabels = inferLabels
+	sess.galCRPsMaster = crps
+	sess.galSharesMaster = shares
+	sess.masterLabels = labels
 
-	return authShares, inferShares, authLabels, inferLabels, nil
+	return shares, labels, nil
 }
 
 // AggregateGaloisShares finalises VAgent's Stage-2d handshake. For each
-// auth atom it combines the local + client share into a raw
-// `*rlwe.GaloisKey` (eval level, negative galEl) and collects them into
-// `gksAuth` — directly consumed by `authchain.New` to build the chain
-// evaluator. For each infer atom it combines + finalises a top-level
+// master atom it combines the local + client share into a top-level
 // `*rlwe.GaloisKey` and converts it via `hierkeys.GaloisKeyToMasterKey`
-// into a `*hierkeys.MasterKey`, keyed by atom int in `gksMasterInfer`.
+// into a `*hierkeys.MasterKey`, keyed by ascending positive atom in
+// `gksMaster`. The same bundle is then used to derive the negative
+// auth-atom keys locally (via `hierkeys.LevelExpansion`) so VAgent can
+// build its authenticator chain evaluator.
 //
-// Returns `(rlk, pkTop, gksMasterInfer, err)`. `gksAuth` is NOT returned —
-// it stays inside the VAgent session (consumed only by `BuildAuthenticatedCt`).
-// The orchestrator and HTTP layer carry only the inference-side payload
-// onward inside `InferEvalKeys{RLK, PKTop, GKSMasterInfer}`.
+// Returns `(rlk, pkTop, gksMaster, err)`. The orchestrator and HTTP layer
+// carry the full inference payload onward inside
+// `InferEvalKeys{RLK, PKTop, GKSMaster}`.
 //
 // Atom labels are NOT carried on the wire — both sides derive them from
-// `params.AuthAtoms()` / `params.InferAtoms()` (the canonical sets
-// determined by `Authenticator.Lambda` and the LLKN base). The shape
-// guard checks share counts against the agent-stashed labels; a desync
-// would surface as a count mismatch.
+// `params.MasterAtoms()`. The shape guard checks share counts against
+// the agent-stashed labels; a desync surfaces as a count mismatch.
 func (a *Agent) AggregateGaloisShares(
 	sid protocol.SessionID,
 	clientShares protocol.VClientGaloisShares,
@@ -294,15 +264,17 @@ func (a *Agent) AggregateGaloisShares(
 	error,
 ) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	sess, err := a.sessionLocked(sid)
 	if err != nil {
+		a.mu.Unlock()
 		return nil, nil, nil, err
 	}
 	if sess.rlkAgg == nil {
+		a.mu.Unlock()
 		return nil, nil, nil, fmt.Errorf("vagent: AggregateGaloisShares called before AggregateRLKRound2 for sid %q", sid)
 	}
 	if sess.pkTopAgg == nil {
+		a.mu.Unlock()
 		return nil, nil, nil, fmt.Errorf("vagent: AggregateGaloisShares called before AggregatePK for sid %q", sid)
 	}
 
@@ -310,65 +282,155 @@ func (a *Agent) AggregateGaloisShares(
 	// labels are not on the wire (derived from params on both sides), so
 	// only counts can drift — a count mismatch means the peer drew a
 	// different number of CRPs and we cannot safely aggregate.
-	if len(clientShares.AuthAtomShares) != len(sess.galSharesAuth) {
-		return nil, nil, nil, fmt.Errorf("vagent: client auth share count %d != agent count %d",
-			len(clientShares.AuthAtomShares), len(sess.galSharesAuth))
-	}
-	if len(clientShares.InferAtomShares) != len(sess.galSharesInfer) {
-		return nil, nil, nil, fmt.Errorf("vagent: client infer share count %d != agent count %d",
-			len(clientShares.InferAtomShares), len(sess.galSharesInfer))
+	if len(clientShares.MasterShares) != len(sess.galSharesMaster) {
+		a.mu.Unlock()
+		return nil, nil, nil, fmt.Errorf("vagent: client master share count %d != agent count %d",
+			len(clientShares.MasterShares), len(sess.galSharesMaster))
 	}
 
-	// Auth atoms — raw eval-level `*rlwe.GaloisKey`s.
-	gksAuth := make([]*rlwe.GaloisKey, len(sess.authLabels))
-	if len(sess.authLabels) > 0 {
-		gkgEval := sess.galProtoEval
-		for i, atom := range sess.authLabels {
-			agg := gkgEval.AllocateShare()
-			if err := gkgEval.AggregateShares(sess.galSharesAuth[i], clientShares.AuthAtomShares[i], &agg); err != nil {
-				return nil, nil, nil, fmt.Errorf("vagent: aggregate auth atom %d: %w", atom, err)
-			}
-			gk := rlwe.NewGaloisKey(a.params.CKKS)
-			if err := gkgEval.GenGaloisKey(agg, sess.galCRPsAuth[i], gk); err != nil {
-				return nil, nil, nil, fmt.Errorf("vagent: finalise auth atom %d: %w", atom, err)
-			}
-			gksAuth[i] = gk
-		}
-	}
-
-	// Infer atoms — top-level `*rlwe.GaloisKey` → `hierkeys.MasterKey`.
+	// Master atoms — top-level `*rlwe.GaloisKey` → `hierkeys.MasterKey`.
 	topParams := a.params.LLKN.Top()
-	gksMasterInfer := make(map[int]*hierkeys.MasterKey, len(sess.inferLabels))
-	if len(sess.inferLabels) > 0 {
+	gksMaster := make(map[int]*hierkeys.MasterKey, len(sess.masterLabels))
+	if len(sess.masterLabels) > 0 {
 		gkgTop := sess.galProtoTop
-		for i, atom := range sess.inferLabels {
+		for i, atom := range sess.masterLabels {
 			agg := gkgTop.AllocateShare()
-			if err := gkgTop.AggregateShares(sess.galSharesInfer[i], clientShares.InferAtomShares[i], &agg); err != nil {
-				return nil, nil, nil, fmt.Errorf("vagent: aggregate infer atom %d: %w", atom, err)
+			if err := gkgTop.AggregateShares(sess.galSharesMaster[i], clientShares.MasterShares[i], &agg); err != nil {
+				a.mu.Unlock()
+				return nil, nil, nil, fmt.Errorf("vagent: aggregate master atom %d: %w", atom, err)
 			}
 			gk := rlwe.NewGaloisKey(topParams)
-			if err := gkgTop.GenGaloisKey(agg, sess.galCRPsInfer[i], gk); err != nil {
-				return nil, nil, nil, fmt.Errorf("vagent: finalise infer atom %d: %w", atom, err)
+			if err := gkgTop.GenGaloisKey(agg, sess.galCRPsMaster[i], gk); err != nil {
+				a.mu.Unlock()
+				return nil, nil, nil, fmt.Errorf("vagent: finalise master atom %d: %w", atom, err)
 			}
 			mk, err := hierkeys.GaloisKeyToMasterKey(topParams, gk)
 			if err != nil {
-				return nil, nil, nil, fmt.Errorf("vagent: convert infer atom %d to MasterKey: %w", atom, err)
+				a.mu.Unlock()
+				return nil, nil, nil, fmt.Errorf("vagent: convert master atom %d to MasterKey: %w", atom, err)
 			}
-			gksMasterInfer[atom] = mk
+			gksMaster[atom] = mk
 		}
 	}
 
-	// Build the chain rotator. `gksAuth` already at eval level and at
-	// negative galEls — `authchain.New` wires them into a
-	// `rlwe.NewMemEvaluationKeySet` and exposes the chain-rotate surface
-	// Auth's step 4 consumes.
-	chainEval, err := authchain.New(a.params.CKKS, sess.rlkAgg, gksAuth, sess.authLabels)
+	rlk := sess.rlkAgg
+	pkTop := sess.pkTopAgg
+	params := a.params
+	a.mu.Unlock()
+
+	// Derive the auth-atom Galois keys locally from gksMaster. Mirrors
+	// vservice.deriveGksInfer: PubToRot seeds a level-0 shift-0 MasterKey
+	// from pkTop, LevelExpansion factors each target rotation through the
+	// master atom set, FinalizeKey collapses to the eval-level key.
+	authAtoms := params.AuthAtoms()
+	gksAuth, deriveSecs, err := deriveAuthGks(params, pkTop, gksMaster, authAtoms)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("vagent: derive auth Galois keys: %w", err)
+	}
+
+	// Build the chain rotator over the locally-derived gksAuth.
+	chainEval, err := authchain.New(params.CKKS, rlk, gksAuth, authAtoms)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("vagent: build authchain evaluator: %w", err)
 	}
-	sess.gksAuth = gksAuth
-	sess.gksMasterInfer = gksMasterInfer
-	sess.authchain = chainEval
 
-	return sess.rlkAgg, sess.pkTopAgg, gksMasterInfer, nil
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	// Re-check the session — it could have been evicted while we ran the
+	// derivation pass without the mutex.
+	sess, err = a.sessionLocked(sid)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	sess.gksAuth = gksAuth
+	sess.gksMaster = gksMaster
+	sess.authchain = chainEval
+	sess.deriveGksAuthSeconds = deriveSecs
+
+	return rlk, pkTop, gksMaster, nil
+}
+
+// deriveAuthGks materialises the per-auth-atom negative-direction Galois
+// keys from the wire-transported master bundle. Mirrors
+// vservice.deriveGksInfer: `hierkeys.PubToRot(pkTop)` seeds a level-0
+// shift-0 MasterKey, then a `llkn.Evaluator.NewLevelExpansion` derives
+// each `-atom` target concurrently across `GOMAXPROCS` workers. The
+// derivation is local to VAgent's process — it does not cross the wire.
+//
+// Returns the gksAuth slice (parallel to authAtoms in input order, NOT
+// the worker-completion order — see the index-keyed assignment below)
+// and the wall-clock derivation time in seconds.
+func deriveAuthGks(
+	params protocol.Params,
+	pkTop *rlwe.PublicKey,
+	gksMaster map[int]*hierkeys.MasterKey,
+	authAtoms []int,
+) ([]*rlwe.GaloisKey, float64, error) {
+	if len(authAtoms) == 0 {
+		return nil, 0, nil
+	}
+	if pkTop == nil {
+		return nil, 0, fmt.Errorf("pkTop is nil but %d auth atoms need derivation", len(authAtoms))
+	}
+	if len(gksMaster) == 0 {
+		return nil, 0, fmt.Errorf("gksMaster is empty but %d auth atoms need derivation", len(authAtoms))
+	}
+	// LevelExpansion.Derive accepts negative ints; lattigo-hierkeys
+	// decomposes via the group structure, not by absolute value.
+	authTargets := make([]int, len(authAtoms))
+	for i, a := range authAtoms {
+		authTargets[i] = -a
+	}
+
+	llknEval := llkn.NewEvaluator(params.LLKN)
+	topParams := params.LLKN.Top()
+	evalParams := params.LLKN.Eval()
+	shift0, err := hierkeys.PubToRot(evalParams, topParams, pkTop)
+	if err != nil {
+		return nil, 0, fmt.Errorf("hierkeys.PubToRot: %w", err)
+	}
+	exp := llknEval.NewLevelExpansion(0, shift0, gksMaster, authTargets)
+
+	gks := make([]*rlwe.GaloisKey, len(authTargets))
+	derrs := make([]error, len(authTargets))
+
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > len(authTargets) {
+		workers = len(authTargets)
+	}
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+
+	start := time.Now()
+	for i, r := range authTargets {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i, r int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			mk, err := exp.Derive(r)
+			if err != nil {
+				derrs[i] = fmt.Errorf("derive target %d: %w", r, err)
+				return
+			}
+			gk, err := llknEval.FinalizeKey(mk)
+			if err != nil {
+				derrs[i] = fmt.Errorf("finalize target %d: %w", r, err)
+				return
+			}
+			gks[i] = gk
+		}(i, r)
+	}
+	wg.Wait()
+	elapsed := time.Since(start).Seconds()
+
+	for i, err := range derrs {
+		if err != nil {
+			return nil, elapsed, fmt.Errorf("derive auth atom %d: %w", authAtoms[i], err)
+		}
+	}
+	return gks, elapsed, nil
 }

@@ -17,19 +17,19 @@ import (
 // from disk (or skips loading entirely when orionDir == "").
 //
 // The snapshot carries the small inbound payload (`Rlk`, `PKTop`,
-// `GksMasterInfer`) PLUS the materialised `GksInfer` slice when available
-// — `ExportState` populates it directly from the live session so the CLI
+// `GksMaster`) PLUS the materialised `GksInfer` slice when available —
+// `ExportState` populates it directly from the live session so the CLI
 // `keygen` subcommand can persist the derived rotation set to disk
 // (per-sample re-derivation is multi-minute at LogN=16). `NewWithState`
 // honours `GksInfer` when supplied (no re-derivation) and falls back to
-// running the hierkeys derivation against `PKTop + GksMasterInfer` when
-// nil — the HTTP path doesn't carry it on the wire.
+// running the hierkeys derivation against `PKTop + GksMaster` when nil —
+// the HTTP path doesn't carry it on the wire.
 type ExportedState struct {
-	SID            protocol.SessionID
-	Rlk            *rlwe.RelinearizationKey
-	PKTop          *rlwe.PublicKey
-	GksMasterInfer map[int]*hierkeys.MasterKey
-	GksInfer       []*rlwe.GaloisKey
+	SID       protocol.SessionID
+	Rlk       *rlwe.RelinearizationKey
+	PKTop     *rlwe.PublicKey
+	GksMaster map[int]*hierkeys.MasterKey
+	GksInfer  []*rlwe.GaloisKey
 }
 
 // ExportState snapshots the per-session state for `sid`. Returns an error
@@ -37,12 +37,12 @@ type ExportedState struct {
 // (StoreEvalKeys not called). The live session remains in the Service; the
 // caller is responsible for any subsequent eviction.
 //
-// `Rlk`, `PKTop`, and `GksMasterInfer` are stashed by StoreEvalKeys and
-// shared by reference. `GksInfer` is populated from the live session so
-// the CLI keygen subcommand can persist the derived rotation set to disk
+// `Rlk`, `PKTop`, and `GksMaster` are stashed by StoreEvalKeys and shared
+// by reference. `GksInfer` is populated from the live session so the CLI
+// keygen subcommand can persist the derived rotation set to disk
 // (per-sample re-derivation is multi-minute at LogN=16). NewWithState
 // honours a non-nil `GksInfer` when supplied; otherwise it re-runs the
-// hierarchical derivation against `PKTop + GksMasterInfer`.
+// hierarchical derivation against `PKTop + GksMaster`.
 func (s *Service) ExportState(sid protocol.SessionID) (*ExportedState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -54,11 +54,11 @@ func (s *Service) ExportState(sid protocol.SessionID) (*ExportedState, error) {
 		return nil, fmt.Errorf("%w (sid %q)", ErrNoEvaluator, sid)
 	}
 	return &ExportedState{
-		SID:            sid,
-		Rlk:            sess.rlk,
-		PKTop:          sess.pkTop,
-		GksMasterInfer: sess.gksMasterInfer,
-		GksInfer:       sess.gksInfer,
+		SID:       sid,
+		Rlk:       sess.rlk,
+		PKTop:     sess.pkTop,
+		GksMaster: sess.gksMaster,
+		GksInfer:  sess.gksInfer,
 	}, nil
 }
 
@@ -71,7 +71,7 @@ func (s *Service) ExportState(sid protocol.SessionID) (*ExportedState, error) {
 //
 // The session map is seeded directly: `state.SID → {evaluator}`. The
 // per-target Galois keys are re-derived from `state.PKTop +
-// state.GksMasterInfer` via the same hierarchical expansion
+// state.GksMaster` via the same hierarchical expansion
 // `StoreEvalKeys` runs. The random sid mint in OpenSession is bypassed
 // so the bench `infer` subcommand can drive Infer against the
 // keygen-emitted SID without re-running the multi-party handshake.
@@ -101,7 +101,7 @@ func NewWithState(params protocol.Params, orionDir string, state *ExportedState)
 	// Honour a pre-derived gks_infer when supplied — the bench `infer`
 	// CLI subcommand passes it in straight from disk (gks_infer.bin) so a
 	// per-sample re-derivation isn't paid on every Infer invocation. The
-	// HTTP path leaves it nil and re-derives from PKTop + GksMasterInfer.
+	// HTTP path leaves it nil and re-derives from PKTop + GksMaster.
 	//
 	// When supplied, validate the loaded set actually covers
 	// ExtraRotationIndices — a mismatched gks_infer.bin (wrong manifest,
@@ -119,7 +119,7 @@ func NewWithState(params protocol.Params, orionDir string, state *ExportedState)
 		gks = state.GksInfer
 	} else {
 		var err error
-		gks, deriveSecs, err = deriveGksInfer(mergedParams, state.PKTop, state.GksMasterInfer)
+		gks, deriveSecs, err = deriveGksInfer(mergedParams, state.PKTop, state.GksMaster)
 		if err != nil {
 			return nil, fmt.Errorf("vservice: NewWithState derive gks_infer: %w", err)
 		}
@@ -134,12 +134,12 @@ func NewWithState(params protocol.Params, orionDir string, state *ExportedState)
 	evk := rlwe.NewMemEvaluationKeySet(state.Rlk, gks...)
 	// Stash everything on the session so a subsequent ExportState
 	// round-trips the same compact payload back out (PKTop +
-	// GksMasterInfer, not the multi-GB derived slice).
+	// GksMaster, not the multi-GB derived slice).
 	sess := &sessionState{
 		rlk:                   state.Rlk,
 		gksInfer:              gks,
 		pkTop:                 state.PKTop,
-		gksMasterInfer:        state.GksMasterInfer,
+		gksMaster:             state.GksMaster,
 		deriveGksInferSeconds: deriveSecs,
 	}
 	if model != nil {

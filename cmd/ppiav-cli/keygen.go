@@ -23,17 +23,17 @@ import (
 // keygen.rlk-r2 / keygen.galois.
 //
 // The flow mirrors orchestrator.Setup but additionally captures
-// pkEval / pkTop / sk_c / sk_a / rlkAgg / gksAuth / gksMasterInfer plus the
-// agent's per-session authKey so the rest of the per-step CLIs can rebuild
+// pkEval / pkTop / sk_c / sk_a / rlkAgg / gksMaster plus the agent's
+// per-session authKey so the rest of the per-step CLIs can rebuild
 // VClient / VAgent / VService via their respective NewWithState constructors.
 //
-// `keygen.galois.{client_gen, agent_gen, agent_agg}` each cover BOTH atom
-// sets (auth + infer) in a single combined sample — the dual-atom-set
-// design keeps the two iterations inside one method call, and the bench
-// harness compares the combined cost cross-phase. The `service_store`
-// sample additionally records `derive_gks_infer_seconds` (the wall-clock
-// time spent inside StoreEvalKeys running hierkeys.LevelExpansion +
-// FinalizeKey on the InferAtoms → gks_infer derivation), surfaced via
+// `keygen.galois.{client_gen, agent_gen, agent_agg}` cover the single
+// master atom set handshake; agent_agg additionally runs the local
+// derivation of the negative auth-atom keys from the same master bundle
+// (the time is reported via `Agent.DeriveGksAuthSeconds`). The
+// `service_store` sample additionally records `derive_gks_infer_seconds`
+// (the wall-clock time spent inside StoreEvalKeys running
+// hierkeys.LevelExpansion + FinalizeKey on the derivation), surfaced via
 // `Service.DeriveGksInferSeconds(sid)`.
 func runKeygen(args []string) error {
 	fs := flag.NewFlagSet("keygen", flag.ContinueOnError)
@@ -231,45 +231,45 @@ func runKeygen(args []string) error {
 		}
 	}
 
-	// keygen.galois — dual-atom-set handshake. VClient and VAgent each emit
-	// auth+infer share lists in a single call; the aggregator finalises
-	// `gksAuth` (eval-level raw GaloisKeys, kept inside the VAgent session)
-	// and `gksMasterInfer` (top-level hierkeys.MasterKey bundle, forwarded
-	// to VService alongside pkTop). VService runs the hierkeys derivation
-	// inside StoreEvalKeys.
+	// keygen.galois — single master-atom-set handshake. VClient and VAgent
+	// each emit master share lists; the aggregator finalises `gksMaster`
+	// (top-level hierkeys.MasterKey bundle, forwarded to VService alongside
+	// pkTop) and additionally derives the negative auth-atom keys locally
+	// from gksMaster via hierkeys.LevelExpansion. VService runs the
+	// inference-side derivation inside StoreEvalKeys.
 	var (
-		rlk            *rlwe.RelinearizationKey
-		pkTop          *rlwe.PublicKey
-		gksMasterInfer map[int]*hierkeys.MasterKey
+		rlk       *rlwe.RelinearizationKey
+		pkTop     *rlwe.PublicKey
+		gksMaster map[int]*hierkeys.MasterKey
 	)
 	{
-		var (
-			clientAuthShares  []multiparty.GaloisKeyGenShare
-			clientInferShares []multiparty.GaloisKeyGenShare
-		)
+		var clientMasterShares []multiparty.GaloisKeyGenShare
 		if err := measureStep("keygen.galois.client_gen", func() error {
-			ca, ci, _, _, e := client.GenAuthAndInferShares()
+			cm, _, e := client.GenMasterShares()
 			if e != nil {
 				return e
 			}
-			clientAuthShares = ca
-			clientInferShares = ci
+			clientMasterShares = cm
 			return nil
 		}); err != nil {
 			writeRunOnExit()
 			return fmt.Errorf("keygen: galois.client_gen: %w", err)
 		}
 		if err := measureStep("keygen.galois.agent_gen", func() error {
-			_, _, _, _, e := agent.GenAuthAndInferShares(sid)
+			_, _, e := agent.GenMasterShares(sid)
 			return e
 		}); err != nil {
 			writeRunOnExit()
 			return fmt.Errorf("keygen: galois.agent_gen: %w", err)
 		}
+		// agent_agg covers VAgent's master aggregation AND the local
+		// LevelExpansion derivation of the auth-atom keys — the latter
+		// is the new cost surface design-A introduces. The per-step
+		// derivation time also lands in run.Metadata so the bench driver
+		// can attribute the agent-side derivation cost separately.
 		if err := measureStep("keygen.galois.agent_agg", func() error {
 			shares := protocol.VClientGaloisShares{
-				AuthAtomShares:  clientAuthShares,
-				InferAtomShares: clientInferShares,
+				MasterShares: clientMasterShares,
 			}
 			aggRlk, aggPkTop, aggMasters, e := agent.AggregateGaloisShares(sid, shares)
 			if e != nil {
@@ -277,19 +277,23 @@ func runKeygen(args []string) error {
 			}
 			rlk = aggRlk
 			pkTop = aggPkTop
-			gksMasterInfer = aggMasters
+			gksMaster = aggMasters
 			return nil
 		}); err != nil {
 			writeRunOnExit()
 			return fmt.Errorf("keygen: galois.agent_agg: %w", err)
 		}
+		if d, ok := agent.DeriveGksAuthSeconds(sid); ok {
+			run.Metadata["derive_gks_auth_seconds"] = d
+		}
 		// service_store covers VService running hierkeys.LevelExpansion +
-		// FinalizeKey on every InferAtom — the dominant per-session cost
-		// at LogN=16 (multi-minute sequential, tens of seconds concurrent).
-		// The wall-clock time also lands in run.Metadata so the bench
-		// driver can report sequential vs concurrent variants.
+		// FinalizeKey on every MasterAtom-derived target — the dominant
+		// per-session cost at LogN=16 (multi-minute sequential, tens of
+		// seconds concurrent). The wall-clock time also lands in
+		// run.Metadata so the bench driver can report sequential vs
+		// concurrent variants.
 		if err := measureStep("keygen.galois.service_store", func() error {
-			return svc.StoreEvalKeys(sid, rlk, pkTop, gksMasterInfer)
+			return svc.StoreEvalKeys(sid, rlk, pkTop, gksMaster)
 		}); err != nil {
 			writeRunOnExit()
 			return fmt.Errorf("keygen: galois.service_store: %w", err)
@@ -319,15 +323,12 @@ func runKeygen(args []string) error {
 		return fmt.Errorf("keygen: write artifacts: %w", err)
 	}
 
-	// Record on-disk sizes for the bench cross-phase wire-size comparison.
-	// gks_auth.bin + gks_master_infer.bin together carry the agent-side
-	// rotation-key payload; gks_infer.bin is a local cache of the derived
+	// Record on-disk size for the bench cross-phase wire-size comparison.
+	// gks_master.bin carries the agent-side rotation-key payload (single
+	// master atom set); gks_infer.bin is a local cache of the derived
 	// rotation set and not part of the wire payload.
-	if size, e := fileSize(*workdir, artifactGKSAuth); e == nil {
-		run.Metadata["gks_auth_bytes"] = size
-	}
-	if size, e := fileSize(*workdir, artifactGKSMasterInfer); e == nil {
-		run.Metadata["gks_master_infer_bytes"] = size
+	if size, e := fileSize(*workdir, artifactGKSMaster); e == nil {
+		run.Metadata["gks_master_bytes"] = size
 	}
 
 	if err := run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen")); err != nil {
@@ -337,15 +338,13 @@ func runKeygen(args []string) error {
 }
 
 // writeKeygenArtifacts persists every file the downstream subcommands
-// load: `pk_eval.bin` + `pk_top.bin` + `gks_auth.bin` +
-// `gks_master_infer.bin` + `gks_infer.bin`.
+// load: `pk_eval.bin` + `pk_top.bin` + `gks_master.bin` + `gks_infer.bin`.
 //
-// `gks_auth.bin` is the auth-side raw multi-party Galois keys (eval level,
-// negative galEls) — VAgent uses it directly to drive authchain.Evaluator.
-// `gks_master_infer.bin` is the wire artifact (cross-phase size comparison).
-// `gks_infer.bin` is VService's per-target Galois key set, derived once
-// at keygen and cached because per-sample re-derivation is multi-minute
-// at LogN=16.
+// `gks_master.bin` is the single master atom set (wire artifact); VAgent
+// re-derives auth-atom keys from it on `mac`, VService derives the infer
+// rotation set on `infer`. `gks_infer.bin` is VService's per-target
+// Galois key set, derived once at keygen and cached because per-sample
+// re-derivation is multi-minute at LogN=16.
 func writeKeygenArtifacts(
 	workdir string,
 	params protocol.Params,
@@ -366,7 +365,8 @@ func writeKeygenArtifacts(
 		return err
 	}
 	// pk_top — needed by VService to seed hierkeys.PubToRot during the
-	// gks_infer derivation. The Agent state's PkTop is the source of
+	// gks_infer derivation AND by VAgent's `mac` to seed PubToRot during
+	// the auth-atom derivation. The Agent state's PkTop is the source of
 	// truth (mirrors the wire path: VAgent ships PKTop to VService).
 	if err := writePublicKey(workdir, artifactPKTop, agentState.PkTop); err != nil {
 		return err
@@ -380,13 +380,8 @@ func writeKeygenArtifacts(
 	if err := writeRelinearizationKey(workdir, agentState.Rlk); err != nil {
 		return err
 	}
-	// gks_auth — VAgent's auth atoms. Persisted because the CLI's
-	// stage-process model has no in-memory channel between keygen and mac.
-	if err := writeGaloisKeys(workdir, artifactGKSAuth, agentState.GksAuth); err != nil {
-		return err
-	}
-	// gks_master_infer — VAgent's hierkeys MasterKey bundle (wire artifact).
-	if err := writeMasterKeys(workdir, artifactGKSMasterInfer, agentState.GksMasterInfer); err != nil {
+	// gks_master — single master atom set (wire artifact).
+	if err := writeMasterKeys(workdir, artifactGKSMaster, agentState.GksMaster); err != nil {
 		return err
 	}
 	// gks_infer — VService's derived per-target Galois keys (eval level).

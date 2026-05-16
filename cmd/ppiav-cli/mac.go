@@ -16,15 +16,16 @@ import (
 // bench.Run named "mac" is written to --out (default <workdir>/mac.json).
 //
 // Reads from disk: pk_eval.bin (drives the authenticator-side encryptor),
-// rlk.bin + gks_auth.bin (drive authchain.Evaluator), sk_a + mac_key
-// (per-session secrets). gks_auth.bin is the largest input by far
-// (~1.57 GB at LogN=16); the read time is recorded as
-// `read_gks_auth_seconds` in mac.json metadata for the bench harness.
+// pk_top.bin (seeds hierkeys.PubToRot for the auth-atom derivation),
+// rlk.bin + gks_master.bin (drive the LevelExpansion that produces the
+// auth-atom keys for authchain.Evaluator), sk_a + mac_key (per-session
+// secrets). gks_master.bin is the largest input by far at LogN=16; the
+// read time is recorded as `read_gks_master_seconds` in mac.json metadata.
 //
-// `authchain_construct_seconds` captures the in-memory authchain build
-// time (sub-millisecond — no derivation, just `rlwe.NewMemEvaluationKeySet`
-// over the loaded keys); the field exists for parity with the original
-// hier-eval-construct field in the plan draft.
+// `derive_gks_auth_seconds` captures the in-memory LevelExpansion +
+// FinalizeKey time over the negative auth atoms — at LogN=16 this is the
+// dominant cost on the mac path (no longer sub-millisecond like the
+// pre-design-A authchain construction).
 func runMAC(args []string) error {
 	fs := flag.NewFlagSet("mac", flag.ContinueOnError)
 	workdir := fs.String("workdir", "", "per-batch keygen artifact directory (required)")
@@ -64,17 +65,21 @@ func runMAC(args []string) error {
 	if err != nil {
 		return fmt.Errorf("mac: load pk_eval: %w", err)
 	}
+	pkTop, err := readPublicKey(*workdir, artifactPKTop)
+	if err != nil {
+		return fmt.Errorf("mac: load pk_top: %w", err)
+	}
 	rlk, err := readRelinearizationKey(*workdir)
 	if err != nil {
 		return fmt.Errorf("mac: load rlk: %w", err)
 	}
-	// gks_auth.bin is the dominant I/O — record the wall-clock load time.
+	// gks_master.bin is the dominant I/O — record the wall-clock load time.
 	readGksStart := time.Now()
-	gksAuth, err := readGaloisKeys(*workdir, artifactGKSAuth)
+	gksMaster, err := readMasterKeys(*workdir, artifactGKSMaster)
 	if err != nil {
-		return fmt.Errorf("mac: load gks_auth: %w", err)
+		return fmt.Errorf("mac: load gks_master: %w", err)
 	}
-	readGksAuthSecs := time.Since(readGksStart).Seconds()
+	readGksMasterSecs := time.Since(readGksStart).Seconds()
 	ct, err := readCiphertextPath(*inCt)
 	if err != nil {
 		return fmt.Errorf("mac: load in-ct: %w", err)
@@ -85,24 +90,26 @@ func runMAC(args []string) error {
 	run.Metadata["in_ct"] = *inCt
 	run.Metadata["out_ct"] = *outCt
 	run.Metadata["sid"] = string(sid)
-	run.Metadata["read_gks_auth_seconds"] = readGksAuthSecs
+	run.Metadata["read_gks_master_seconds"] = readGksMasterSecs
 
-	// authchain construction happens inside NewWithState — time it as a
-	// dedicated sample so the bench can report the hier-eval-construct
-	// surrogate. Expected to be sub-millisecond at any LogN.
-	constructStart := time.Now()
+	// NewWithState runs the hierkeys derivation over the negative auth
+	// atoms in-memory; record the elapsed time it surfaces via
+	// DeriveGksAuthSeconds. At LogN=16 this dominates the mac startup.
 	agent, err := vagent.NewWithState(params, &vagent.ExportedState{
-		SID:     sid,
-		SkTop:   skTop,
-		MacKey:  macKey,
-		PkAgg:   pkEval,
-		Rlk:     rlk,
-		GksAuth: gksAuth,
+		SID:       sid,
+		SkTop:     skTop,
+		MacKey:    macKey,
+		PkAgg:     pkEval,
+		PkTop:     pkTop,
+		Rlk:       rlk,
+		GksMaster: gksMaster,
 	})
 	if err != nil {
 		return fmt.Errorf("mac: build VAgent: %w", err)
 	}
-	run.Metadata["authchain_construct_seconds"] = time.Since(constructStart).Seconds()
+	if d, ok := agent.DeriveGksAuthSeconds(sid); ok {
+		run.Metadata["derive_gks_auth_seconds"] = d
+	}
 
 	var authCt *rlwe.Ciphertext
 	sample, err := bench.Measure("mac", func() error {
