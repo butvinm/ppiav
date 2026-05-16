@@ -378,8 +378,8 @@ The bench-redesign changes are local-testable on fixture data through Task 9. Th
 
 ### Task 11: [Final] Move plan to completed
 
-- [ ] update `CLAUDE.md` Status section if the bench description changed materially (new sections, new sub-steps, new accuracy comparison)
-- [ ] move this plan to `docs/plans/completed/`
+- [x] update `CLAUDE.md` Status section if the bench description changed materially (new sections, new sub-steps, new accuracy comparison)
+- [x] deferred — plan stays in docs/plans/ until operator runs Task 10 VPS eval and validates artifacts; move-to-completed will happen post-VPS-run.
 
 ## Post-Completion
 
