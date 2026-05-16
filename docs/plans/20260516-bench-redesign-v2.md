@@ -198,22 +198,22 @@ All three subcommands follow the same refactor pattern: take the single `bench.M
 
 **`infer.go` — 4 sub-step samples:**
 
-- [ ] MOVE the pre-Measure loads (`readRelinearizationKey`, `readGaloisKeys(artifactGKSInfer)`, and `vservice.NewWithState`) currently at lines 51-74 INTO a new `bench.Measure("infer.load_keys", ...)` closure — the run's setup work is currently bench-invisible. Expect this to dominate at LogN=16: Orion 2.1.5 eagerly pre-encodes LinearTransformations inside `LoadModel` (PR #28), pushing `load_s` from ~13s to ~265s per call.
-- [ ] MOVE `readCiphertextPath(*inCt)` (line 62-65) into a new `bench.Measure("infer.load_input_ct", ...)` closure
-- [ ] keep `svc.Infer(sid, ct)` inside `bench.Measure("infer.exec", ...)` (the Orion-evaluator call — was previously labeled `infer`). Expect ~5.6× speedup vs 2.1.4 per PR #28.
-- [ ] MOVE `writeCiphertextPath` (line 100-103) into a new `bench.Measure("infer.serialize_result", ...)` closure
-- [ ] append all four Samples to one Run named `"infer"`; preserve existing Run.Metadata fields
+- [x] MOVE the pre-Measure loads (`readRelinearizationKey`, `readGaloisKeys(artifactGKSInfer)`, and `vservice.NewWithState`) currently at lines 51-74 INTO a new `bench.Measure("infer.load_keys", ...)` closure — the run's setup work is currently bench-invisible. Expect this to dominate at LogN=16: Orion 2.1.5 eagerly pre-encodes LinearTransformations inside `LoadModel` (PR #28), pushing `load_s` from ~13s to ~265s per call.
+- [x] MOVE `readCiphertextPath(*inCt)` (line 62-65) into a new `bench.Measure("infer.load_input_ct", ...)` closure
+- [x] keep `svc.Infer(sid, ct)` inside `bench.Measure("infer.exec", ...)` (the Orion-evaluator call — was previously labeled `infer`). Expect ~5.6× speedup vs 2.1.4 per PR #28.
+- [x] MOVE `writeCiphertextPath` (line 100-103) into a new `bench.Measure("infer.serialize_result", ...)` closure
+- [x] append all four Samples to one Run named `"infer"`; preserve existing Run.Metadata fields
 
 **`mac.go` — 2 sub-step samples + hierkeys-derived size:**
 
-- [ ] MOVE the pre-Measure work (`readMasterKeys` at line 78 + `vagent.NewWithState` at lines 98-106, which is where hierkeys derivation runs) INTO a new `bench.MeasureWithSize("mac.derive_auth_keys", ...)` closure. Use `BinarySize()` on the derived `gks^{auth}` bundle by summing `BinarySize()` over each `*rlwe.GaloisKey` in the `[]*rlwe.GaloisKey` slice (see `/home/butvinm/Dev/ppiav/internal/vagent/agent.go:81` — `gksAuth` is a slice, not a single object)
-- [ ] check whether `vagent` exposes an accessor for `sessionState.gksAuth`. If not, add a minimal one in `internal/vagent/` returning the slice (read-only accessor; safe). Do NOT add a getter that triggers re-derivation. (`*rlwe.GaloisKey.BinarySize()` is confirmed available in lattigo `core/rlwe/keys.go:613`.)
-- [ ] keep `agent.BuildAuthenticatedCt` inside a new `bench.Measure("mac.compute_ct", ...)` closure
-- [ ] preserve the existing `derive_gks_auth_seconds` and `read_gks_master_seconds` Run.Metadata fields — they're now a useful cross-check against the new Sample wall_ms
+- [x] MOVE the pre-Measure work (`readMasterKeys` at line 78 + `vagent.NewWithState` at lines 98-106, which is where hierkeys derivation runs) INTO a new `bench.MeasureWithSize("mac.derive_auth_keys", ...)` closure. Use `BinarySize()` on the derived `gks^{auth}` bundle by summing `BinarySize()` over each `*rlwe.GaloisKey` in the `[]*rlwe.GaloisKey` slice (see `/home/butvinm/Dev/ppiav/internal/vagent/agent.go:81` — `gksAuth` is a slice, not a single object)
+- [x] check whether `vagent` exposes an accessor for `sessionState.gksAuth`. If not, add a minimal one in `internal/vagent/` returning the slice (read-only accessor; safe). Do NOT add a getter that triggers re-derivation. (`*rlwe.GaloisKey.BinarySize()` is confirmed available in lattigo `core/rlwe/keys.go:613`.)
+- [x] keep `agent.BuildAuthenticatedCt` inside a new `bench.Measure("mac.compute_ct", ...)` closure
+- [x] preserve the existing `derive_gks_auth_seconds` and `read_gks_master_seconds` Run.Metadata fields — they're now a useful cross-check against the new Sample wall_ms
 
 **`finalize.go` — 2 sub-step samples:**
 
-- [ ] replace the single `bench.Measure("finalize", ...)` with `finalize.final_decrypt` (wraps `FinalizeDecryption` — the verifiable decryption + Auth verification, both inside one lattigo+authchain call) and `finalize.verdict_compute` (wraps the post-call `m > 0 ? Accept : Reject` decision and `buildDecodedOutput`)
+- [x] replace the single `bench.Measure("finalize", ...)` with `finalize.final_decrypt` (wraps `FinalizeDecryption` — the verifiable decryption + Auth verification, both inside one lattigo+authchain call) and `finalize.verdict_compute` (wraps the post-call `m > 0 ? Accept : Reject` decision and `buildDecodedOutput`)
 
 **Out of scope (documented exceptions):**
 
@@ -222,8 +222,8 @@ All three subcommands follow the same refactor pattern: take the single `bench.M
 
 **Verify:**
 
-- [ ] run `go test ./cmd/ppiav-cli/...` — existing in-process pipeline test must still pass before next task (no new per-step-JSON assertion; sub-step Sample names are validated post-VPS-run in Task 10)
-- [ ] commit as one atomic commit covering all three subcommand files (the refactor is one conceptual change: "move bench boundaries to capture setup work")
+- [x] run `go test ./cmd/ppiav-cli/...` — existing in-process pipeline test must still pass before next task (no new per-step-JSON assertion; sub-step Sample names are validated post-VPS-run in Task 10)
+- [x] commit as one atomic commit covering all three subcommand files (the refactor is one conceptual change: "move bench boundaries to capture setup work")
 
 ### Task 3: Add `Sample.Bytes` to keygen share sub-steps
 

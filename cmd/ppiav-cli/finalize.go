@@ -101,11 +101,13 @@ func runFinalize(args []string) error {
 	run.Metadata["sid"] = string(sid)
 	run.Metadata["ref_logit"] = *refLogit
 
+	writeRunOnExit := func() { _ = run.WriteJSON(stepOutPath(*outPath, *workdir, "finalize")) }
+
 	var (
 		verdict protocol.Verdict
 		slots   []float64
 	)
-	sample, err := bench.Measure("finalize", func() error {
+	decryptSample, err := bench.Measure("finalize.final_decrypt", func() error {
 		v, s, finErr := agent.FinalizeDecryptionVerbose(sid, ct, share)
 		if finErr != nil {
 			return fmt.Errorf("VAgent.FinalizeDecryptionVerbose: %w", finErr)
@@ -114,19 +116,29 @@ func runFinalize(args []string) error {
 		slots = s
 		return nil
 	})
-	run.Append(sample)
+	run.Append(decryptSample)
 	if err != nil {
-		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "finalize"))
+		writeRunOnExit()
 		return fmt.Errorf("finalize: %w", err)
 	}
 
-	decoded, err := buildDecodedOutput(*refLogit, params.Authenticator.Lambda, macKey.S, slots, verdict)
+	var decoded decodedOutput
+	verdictSample, err := bench.Measure("finalize.verdict_compute", func() error {
+		d, e := buildDecodedOutput(*refLogit, params.Authenticator.Lambda, macKey.S, slots, verdict)
+		if e != nil {
+			return e
+		}
+		decoded = d
+		return nil
+	})
+	run.Append(verdictSample)
 	if err != nil {
-		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "finalize"))
+		writeRunOnExit()
 		return fmt.Errorf("finalize: %w", err)
 	}
+
 	if err := writeDecodedJSON(*outDecoded, decoded); err != nil {
-		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "finalize"))
+		writeRunOnExit()
 		return fmt.Errorf("finalize: write decoded.json: %w", err)
 	}
 

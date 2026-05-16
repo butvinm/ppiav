@@ -73,13 +73,6 @@ func runMAC(args []string) error {
 	if err != nil {
 		return fmt.Errorf("mac: load rlk: %w", err)
 	}
-	// gks_master.bin is the dominant I/O — record the wall-clock load time.
-	readGksStart := time.Now()
-	gksMaster, err := readMasterKeys(*workdir, artifactGKSMaster)
-	if err != nil {
-		return fmt.Errorf("mac: load gks_master: %w", err)
-	}
-	readGksMasterSecs := time.Since(readGksStart).Seconds()
 	ct, err := readCiphertextPath(*inCt)
 	if err != nil {
 		return fmt.Errorf("mac: load in-ct: %w", err)
@@ -90,29 +83,62 @@ func runMAC(args []string) error {
 	run.Metadata["in_ct"] = *inCt
 	run.Metadata["out_ct"] = *outCt
 	run.Metadata["sid"] = string(sid)
-	run.Metadata["read_gks_master_seconds"] = readGksMasterSecs
+	writeRunOnExit := func() { _ = run.WriteJSON(stepOutPath(*outPath, *workdir, "mac")) }
 
-	// NewWithState runs the hierkeys derivation over the negative auth
-	// atoms in-memory; record the elapsed time it surfaces via
-	// DeriveGksAuthSeconds. At LogN=16 this dominates the mac startup.
-	agent, err := vagent.NewWithState(params, &vagent.ExportedState{
-		SID:       sid,
-		SkTop:     skTop,
-		MacKey:    macKey,
-		PkAgg:     pkEval,
-		PkTop:     pkTop,
-		Rlk:       rlk,
-		GksMaster: gksMaster,
+	// mac.derive_auth_keys captures both the gks_master read I/O (the
+	// dominant input by far at LogN=16) and NewWithState's hierkeys
+	// LevelExpansion + FinalizeKey pass over the negative auth atoms.
+	// Bytes carries the derived gks_auth bundle size — summed
+	// BinarySize() across each *rlwe.GaloisKey in the slice.
+	var (
+		agent             *vagent.Agent
+		readGksMasterSecs float64
+	)
+	deriveSample, err := bench.MeasureWithSize("mac.derive_auth_keys", func() (uint64, error) {
+		readGksStart := time.Now()
+		gksMaster, e := readMasterKeys(*workdir, artifactGKSMaster)
+		if e != nil {
+			return 0, fmt.Errorf("load gks_master: %w", e)
+		}
+		readGksMasterSecs = time.Since(readGksStart).Seconds()
+		a, e := vagent.NewWithState(params, &vagent.ExportedState{
+			SID:       sid,
+			SkTop:     skTop,
+			MacKey:    macKey,
+			PkAgg:     pkEval,
+			PkTop:     pkTop,
+			Rlk:       rlk,
+			GksMaster: gksMaster,
+		})
+		if e != nil {
+			return 0, fmt.Errorf("build VAgent: %w", e)
+		}
+		agent = a
+		gksAuth, ok := agent.GksAuth(sid)
+		if !ok {
+			return 0, nil
+		}
+		var total uint64
+		for _, gk := range gksAuth {
+			if gk == nil {
+				continue
+			}
+			total += uint64(gk.BinarySize())
+		}
+		return total, nil
 	})
+	run.Append(deriveSample)
+	run.Metadata["read_gks_master_seconds"] = readGksMasterSecs
 	if err != nil {
-		return fmt.Errorf("mac: build VAgent: %w", err)
+		writeRunOnExit()
+		return fmt.Errorf("mac: derive_auth_keys: %w", err)
 	}
 	if d, ok := agent.DeriveGksAuthSeconds(sid); ok {
 		run.Metadata["derive_gks_auth_seconds"] = d
 	}
 
 	var authCt *rlwe.Ciphertext
-	sample, err := bench.Measure("mac", func() error {
+	computeSample, err := bench.Measure("mac.compute_ct", func() error {
 		c, macErr := agent.BuildAuthenticatedCt(sid, ct)
 		if macErr != nil {
 			return fmt.Errorf("VAgent.BuildAuthenticatedCt: %w", macErr)
@@ -120,14 +146,14 @@ func runMAC(args []string) error {
 		authCt = c
 		return nil
 	})
-	run.Append(sample)
+	run.Append(computeSample)
 	if err != nil {
-		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "mac"))
+		writeRunOnExit()
 		return fmt.Errorf("mac: %w", err)
 	}
 
 	if err := writeCiphertextPath(*outCt, authCt); err != nil {
-		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "mac"))
+		writeRunOnExit()
 		return fmt.Errorf("mac: write ciphertext: %w", err)
 	}
 

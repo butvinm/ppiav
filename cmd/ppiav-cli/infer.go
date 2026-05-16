@@ -48,30 +48,6 @@ func runInfer(args []string) error {
 	if err != nil {
 		return fmt.Errorf("infer: load sid: %w", err)
 	}
-	rlk, err := readRelinearizationKey(*workdir)
-	if err != nil {
-		return fmt.Errorf("infer: load rlk: %w", err)
-	}
-	// VService consumes the pre-derived expand-fully Galois key set.
-	// Per-sample re-derivation is multi-minute at LogN=16, so keygen caches
-	// the derivation result in gks_infer.bin and infer loads it directly.
-	gks, err := readGaloisKeys(*workdir, artifactGKSInfer)
-	if err != nil {
-		return fmt.Errorf("infer: load gks_infer: %w", err)
-	}
-	ct, err := readCiphertextPath(*inCt)
-	if err != nil {
-		return fmt.Errorf("infer: load in-ct: %w", err)
-	}
-
-	svc, err := vservice.NewWithState(params, *orionDir, &vservice.ExportedState{
-		SID:      sid,
-		Rlk:      rlk,
-		GksInfer: gks,
-	})
-	if err != nil {
-		return fmt.Errorf("infer: build VService: %w", err)
-	}
 
 	run := bench.NewRun("infer", benchPhase)
 	run.Metadata["workdir"] = *workdir
@@ -81,9 +57,55 @@ func runInfer(args []string) error {
 	run.Metadata["in_ct"] = *inCt
 	run.Metadata["out_ct"] = *outCt
 	run.Metadata["sid"] = string(sid)
+	writeRunOnExit := func() { _ = run.WriteJSON(stepOutPath(*outPath, *workdir, "infer")) }
+
+	var svc *vservice.Service
+	loadKeysSample, err := bench.Measure("infer.load_keys", func() error {
+		rlk, e := readRelinearizationKey(*workdir)
+		if e != nil {
+			return fmt.Errorf("load rlk: %w", e)
+		}
+		// VService consumes the pre-derived expand-fully Galois key set.
+		// Per-sample re-derivation is multi-minute at LogN=16, so keygen
+		// caches it in gks_infer.bin and infer loads it directly.
+		gks, e := readGaloisKeys(*workdir, artifactGKSInfer)
+		if e != nil {
+			return fmt.Errorf("load gks_infer: %w", e)
+		}
+		s, e := vservice.NewWithState(params, *orionDir, &vservice.ExportedState{
+			SID:      sid,
+			Rlk:      rlk,
+			GksInfer: gks,
+		})
+		if e != nil {
+			return fmt.Errorf("build VService: %w", e)
+		}
+		svc = s
+		return nil
+	})
+	run.Append(loadKeysSample)
+	if err != nil {
+		writeRunOnExit()
+		return fmt.Errorf("infer: load_keys: %w", err)
+	}
+
+	var ct *rlwe.Ciphertext
+	loadInputSample, err := bench.Measure("infer.load_input_ct", func() error {
+		c, e := readCiphertextPath(*inCt)
+		if e != nil {
+			return fmt.Errorf("load in-ct: %w", e)
+		}
+		ct = c
+		return nil
+	})
+	run.Append(loadInputSample)
+	if err != nil {
+		writeRunOnExit()
+		return fmt.Errorf("infer: load_input_ct: %w", err)
+	}
 
 	var outCipher *rlwe.Ciphertext
-	sample, err := bench.Measure("infer", func() error {
+	execSample, err := bench.Measure("infer.exec", func() error {
 		c, infErr := svc.Infer(sid, ct)
 		if infErr != nil {
 			return fmt.Errorf("VService.Infer: %w", infErr)
@@ -91,14 +113,18 @@ func runInfer(args []string) error {
 		outCipher = c
 		return nil
 	})
-	run.Append(sample)
+	run.Append(execSample)
 	if err != nil {
-		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "infer"))
+		writeRunOnExit()
 		return fmt.Errorf("infer: %w", err)
 	}
 
-	if err := writeCiphertextPath(*outCt, outCipher); err != nil {
-		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "infer"))
+	serializeSample, err := bench.Measure("infer.serialize_result", func() error {
+		return writeCiphertextPath(*outCt, outCipher)
+	})
+	run.Append(serializeSample)
+	if err != nil {
+		writeRunOnExit()
 		return fmt.Errorf("infer: write ciphertext: %w", err)
 	}
 

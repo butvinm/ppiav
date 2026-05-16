@@ -292,6 +292,21 @@ func (a *Agent) DeriveGksAuthSeconds(sid protocol.SessionID) (float64, bool) {
 	return sess.deriveGksAuthSeconds, true
 }
 
+// GksAuth returns the per-auth-atom Galois key slice derived for `sid`.
+// Read-only — the slice and its keys are shared with the live session
+// state. Returns `nil, false` for an unknown sid. Surfaced for the bench
+// harness so the CLI `mac` subcommand can size the derived bundle via
+// each key's BinarySize() without re-deriving.
+func (a *Agent) GksAuth(sid protocol.SessionID) ([]*rlwe.GaloisKey, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	sess, ok := a.sessions[sid]
+	if !ok {
+		return nil, false
+	}
+	return sess.gksAuth, true
+}
+
 func (a *Agent) sessionLocked(sid protocol.SessionID) (*sessionState, error) {
 	sess, ok := a.sessions[sid]
 	if !ok {
