@@ -3,6 +3,7 @@ package vservice
 import (
 	"fmt"
 
+	hierkeys "github.com/butvinm/lattigo-hierkeys"
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
@@ -15,13 +16,18 @@ import (
 // it. The Orion model itself is NOT serialized: NewWithState reloads it
 // from disk (or skips loading entirely when orionDir == "").
 //
-// Rlk + Glk are the aggregated evaluation keys produced by the multi-party
-// keygen handshake. NewWithState rebuilds the evaluator from them, bypassing
-// the StoreEvalKeys path that requires a prior OpenSession.
+// The snapshot carries only the small inbound payload — `Rlk`, `PKTop`,
+// and `GksMasterInfer` — not the materialised `gks_infer` slice. The
+// derived per-target Galois keys can run into many GB at LogN=16, so we
+// rebuild them in the receiving process by re-running the same
+// `hierkeys.LevelExpansion + FinalizeKey` derivation `StoreEvalKeys`
+// uses. The snapshot itself stays compact enough to round-trip through
+// the bench artifact files.
 type ExportedState struct {
-	SID protocol.SessionID
-	Rlk *rlwe.RelinearizationKey
-	Glk []*rlwe.GaloisKey
+	SID            protocol.SessionID
+	Rlk            *rlwe.RelinearizationKey
+	PKTop          *rlwe.PublicKey
+	GksMasterInfer map[int]*hierkeys.MasterKey
 }
 
 // ExportState snapshots the per-session state for `sid`. Returns an error
@@ -29,9 +35,10 @@ type ExportedState struct {
 // (StoreEvalKeys not called). The live session remains in the Service; the
 // caller is responsible for any subsequent eviction.
 //
-// Rlk and Glk are populated from the values passed to StoreEvalKeys; the
-// slice is shared by reference (GaloisKeys are large; tests and the HTTP
-// path do not mutate per-element entries).
+// `Rlk`, `PKTop`, and `GksMasterInfer` are stashed by StoreEvalKeys and
+// shared by reference. NewWithState re-runs the hierarchical derivation
+// to materialise per-target Galois keys — the snapshot itself does not
+// carry them.
 func (s *Service) ExportState(sid protocol.SessionID) (*ExportedState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -42,7 +49,12 @@ func (s *Service) ExportState(sid protocol.SessionID) (*ExportedState, error) {
 	if sess.eval == nil && sess.orionEval == nil {
 		return nil, fmt.Errorf("%w (sid %q)", ErrNoEvaluator, sid)
 	}
-	return &ExportedState{SID: sid, Rlk: sess.rlk, Glk: sess.glk}, nil
+	return &ExportedState{
+		SID:            sid,
+		Rlk:            sess.rlk,
+		PKTop:          sess.pkTop,
+		GksMasterInfer: sess.gksMasterInfer,
+	}, nil
 }
 
 // NewWithState constructs a fresh Service seeded from `state`. When
@@ -52,10 +64,12 @@ func (s *Service) ExportState(sid protocol.SessionID) (*ExportedState, error) {
 // fields are ignored — mirroring NewWithOrion). When `orionDir` is empty
 // the Service runs in synthetic-x² mode and `params` is used as-is.
 //
-// The session map is seeded directly: `state.SID → {evaluator}` with the
-// evaluator built from `state.Rlk + state.Glk`. The random sid mint in
-// OpenSession is bypassed so the bench `infer` subcommand can drive Infer
-// against the keygen-emitted SID without re-running the handshake.
+// The session map is seeded directly: `state.SID → {evaluator}`. The
+// per-target Galois keys are re-derived from `state.PKTop +
+// state.GksMasterInfer` via the same hierarchical expansion
+// `StoreEvalKeys` runs. The random sid mint in OpenSession is bypassed
+// so the bench `infer` subcommand can drive Infer against the
+// keygen-emitted SID without re-running the multi-party handshake.
 func NewWithState(params protocol.Params, orionDir string, state *ExportedState) (*Service, error) {
 	if state == nil {
 		return nil, fmt.Errorf("vservice: NewWithState state is nil")
@@ -86,17 +100,28 @@ func NewWithState(params protocol.Params, orionDir string, state *ExportedState)
 		return nil, fmt.Errorf("vservice: NewWithState params.CKKS is zero-valued (LogN <= 0)")
 	}
 
+	gks, deriveSecs, err := deriveGksInfer(mergedParams, state.PKTop, state.GksMasterInfer)
+	if err != nil {
+		return nil, fmt.Errorf("vservice: NewWithState derive gks_infer: %w", err)
+	}
+
 	s := &Service{
 		params:     mergedParams,
 		orionModel: model,
 		sessions:   map[protocol.SessionID]*sessionState{},
 	}
 
-	evk := rlwe.NewMemEvaluationKeySet(state.Rlk, state.Glk...)
-	// Stash rlk/glk on the session so a subsequent ExportState round-trips
-	// the same keys back out — without this the rebuilt Service can build
-	// the evaluator but ExportState would return nil keys.
-	sess := &sessionState{rlk: state.Rlk, glk: state.Glk}
+	evk := rlwe.NewMemEvaluationKeySet(state.Rlk, gks...)
+	// Stash everything on the session so a subsequent ExportState
+	// round-trips the same compact payload back out (PKTop +
+	// GksMasterInfer, not the multi-GB derived slice).
+	sess := &sessionState{
+		rlk:                   state.Rlk,
+		glk:                   gks,
+		pkTop:                 state.PKTop,
+		gksMasterInfer:        state.GksMasterInfer,
+		deriveGksInferSeconds: deriveSecs,
+	}
 	if model != nil {
 		oe, err := orioneval.NewEvaluatorFromKeySet(mergedParams.CKKS, evk, nil)
 		if err != nil {

@@ -102,12 +102,17 @@ func TestHTTPStoreEvalKeysHappyPath(t *testing.T) {
 	require.NoError(t, json.Unmarshal(openW.Body.Bytes(), &sess))
 
 	// Build a minimal but valid eval-keys payload. The x² circuit uses no
-	// rotations, so a non-empty rlk + empty GKS slice is the cheapest
-	// fixture.
+	// rotations, so a non-empty rlk + non-nil pkTop + empty master bundle
+	// is the cheapest fixture. pkTop must non-nil to satisfy
+	// `InferEvalKeys.MarshalBinary` (the wire format requires it); the
+	// top-level multiparty handshake is exercised in `wire_test.go`.
 	kgen := rlwe.NewKeyGenerator(params.CKKS)
 	sk := kgen.GenSecretKeyNew()
 	rlk := kgen.GenRelinearizationKeyNew(sk)
-	payload, err := protocol.InferEvalKeys{RLK: rlk, GKS: nil}.MarshalBinary()
+	topKgen := rlwe.NewKeyGenerator(params.LLKN.Top())
+	skTop := topKgen.GenSecretKeyNew()
+	pkTop := topKgen.GenPublicKeyNew(skTop)
+	payload, err := protocol.InferEvalKeys{RLK: rlk, PKTop: pkTop}.MarshalBinary()
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodPost, "/sessions/"+string(sess.SessionID)+"/eval-keys", bytes.NewReader(payload))
@@ -125,7 +130,10 @@ func TestHTTPStoreEvalKeysUnknownSid(t *testing.T) {
 	kgen := rlwe.NewKeyGenerator(params.CKKS)
 	sk := kgen.GenSecretKeyNew()
 	rlk := kgen.GenRelinearizationKeyNew(sk)
-	payload, err := protocol.InferEvalKeys{RLK: rlk}.MarshalBinary()
+	topKgen := rlwe.NewKeyGenerator(params.LLKN.Top())
+	skTop := topKgen.GenSecretKeyNew()
+	pkTop := topKgen.GenPublicKeyNew(skTop)
+	payload, err := protocol.InferEvalKeys{RLK: rlk, PKTop: pkTop}.MarshalBinary()
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodPost, "/sessions/does-not-exist/eval-keys", bytes.NewReader(payload))
@@ -186,7 +194,7 @@ func TestHTTPImageHappyPath(t *testing.T) {
 	kgen := rlwe.NewKeyGenerator(params.CKKS)
 	sk, pk := kgen.GenKeyPairNew()
 	rlk := kgen.GenRelinearizationKeyNew(sk)
-	require.NoError(t, svc.StoreEvalKeys(sid, rlk, nil))
+	require.NoError(t, svc.StoreEvalKeys(sid, rlk, nil, nil))
 
 	encoder := ckks.NewEncoder(params.CKKS)
 	encryptor := rlwe.NewEncryptor(params.CKKS, pk)

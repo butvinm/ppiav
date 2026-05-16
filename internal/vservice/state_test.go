@@ -30,7 +30,7 @@ func TestExportStateRoundTripInfer(t *testing.T) {
 	kgen := rlwe.NewKeyGenerator(params.CKKS)
 	sk, pk := kgen.GenKeyPairNew()
 	rlk := kgen.GenRelinearizationKeyNew(sk)
-	require.NoError(t, a.StoreEvalKeys(sid, rlk, nil))
+	require.NoError(t, a.StoreEvalKeys(sid, rlk, nil, nil))
 
 	// Export and rebuild on a second Service. ExportState now populates
 	// Rlk + Glk from the StoreEvalKeys-captured values, so the test does

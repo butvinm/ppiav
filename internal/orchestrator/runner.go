@@ -9,6 +9,7 @@ package orchestrator
 import (
 	"fmt"
 
+	hierkeys "github.com/butvinm/lattigo-hierkeys"
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/butvinm/ppiav/internal/rservice"
 	"github.com/butvinm/ppiav/internal/vagent"
@@ -21,7 +22,7 @@ import (
 // `vservice.Service` satisfies it; tests inject mocks via NewRunnerWithInferrer.
 type Inferrer interface {
 	OpenSession() (protocol.SessionID, error)
-	StoreEvalKeys(sid protocol.SessionID, rlk *rlwe.RelinearizationKey, gks []*rlwe.GaloisKey) error
+	StoreEvalKeys(sid protocol.SessionID, rlk *rlwe.RelinearizationKey, pkTop *rlwe.PublicKey, gksMasterInfer map[int]*hierkeys.MasterKey) error
 	Infer(sid protocol.SessionID, in *rlwe.Ciphertext) (*rlwe.Ciphertext, error)
 	Params() protocol.Params
 }
@@ -232,17 +233,16 @@ func (r *Runner) Setup() error {
 		AuthAtomShares:  clientAuthShares,
 		InferAtomShares: clientInferShares,
 	}
-	rlk, _, _, err := r.vagent.AggregateGaloisShares(r.sid, clientShares, clientAuthLabels, clientInferLabels)
+	rlk, pkTop, gksMasterInfer, err := r.vagent.AggregateGaloisShares(r.sid, clientShares, clientAuthLabels, clientInferLabels)
 	if err != nil {
 		return fmt.Errorf("orchestrator: VAgent.AggregateGaloisShares: %w", err)
 	}
 
-	// TODO(task 7): wire `pkTop` + `gksMasterInfer` through VService's
-	// `hierkeys.LevelExpansion` derivation. Until Task 7 lands the
-	// orchestrator hands an empty Galois-key slice — Phase-1-3
-	// vservice.StoreEvalKeys still has the same signature and the
-	// inference path is non-functional under Task 6.
-	if err := r.vsvc.StoreEvalKeys(r.sid, rlk, nil); err != nil {
+	// VService runs `hierkeys.LevelExpansion + FinalizeKey` against
+	// `(pkTop, gksMasterInfer)` to derive the full per-target Galois-key
+	// set locally; the orchestrator only forwards the compact inbound
+	// payload. `gksAuth` stays inside the VAgent session.
+	if err := r.vsvc.StoreEvalKeys(r.sid, rlk, pkTop, gksMasterInfer); err != nil {
 		return fmt.Errorf("orchestrator: VService.StoreEvalKeys: %w", err)
 	}
 

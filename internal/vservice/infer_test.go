@@ -4,6 +4,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/butvinm/lattigo-hierkeys/llkn"
 	"github.com/butvinm/ppiav/internal/authenticator"
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/stretchr/testify/assert"
@@ -16,6 +17,11 @@ import (
 // smallParams builds a LogN=14 Params bundle for the in-process x² test.
 // We deliberately skip protocol.Defaults() (LogN=16) so the unit suite
 // stays fast; the multi-party handshake is exercised in Task 8.
+//
+// The LLKN hierarchy is built with a single 40-bit master P-prime so the
+// dual-atom-set keygen surface compiles; the x² path itself uses no
+// rotations and the derivation in `StoreEvalKeys` short-circuits when
+// `ExtraRotationIndices` is empty.
 func smallParams(t *testing.T) protocol.Params {
 	t.Helper()
 	lit := ckks.ParametersLiteral{
@@ -27,8 +33,12 @@ func smallParams(t *testing.T) protocol.Params {
 	}
 	ckksParams, err := ckks.NewParametersFromLiteral(lit)
 	require.NoError(t, err)
+	llknParams, err := llkn.NewParameters(ckksParams.Parameters, [][]int{{40}})
+	require.NoError(t, err)
 	return protocol.Params{
 		CKKS:          ckksParams,
+		LLKN:          llknParams,
+		LLKNBase:      protocol.DefaultLLKNBase,
 		Authenticator: authenticator.DefaultConfig(),
 		FloodSigma:    math.Exp2(16),
 	}
@@ -42,12 +52,13 @@ func TestInferSquaresInputAndDropsOneLevel(t *testing.T) {
 	require.NoError(t, err)
 
 	// Single-party keys are enough for the x² circuit — the multi-party
-	// handshake is the orchestrator's job (Task 8). x² uses no rotations,
-	// so we pass an empty Galois slice.
+	// handshake is the orchestrator's job. x² uses no rotations, so we
+	// pass nil pkTop / nil gksMasterInfer; deriveGksInfer short-circuits
+	// when ExtraRotationIndices is empty.
 	kgen := rlwe.NewKeyGenerator(params.CKKS)
 	sk, pk := kgen.GenKeyPairNew()
 	rlk := kgen.GenRelinearizationKeyNew(sk)
-	require.NoError(t, svc.StoreEvalKeys(sid, rlk, nil))
+	require.NoError(t, svc.StoreEvalKeys(sid, rlk, nil, nil))
 
 	encoder := ckks.NewEncoder(params.CKKS)
 	encryptor := rlwe.NewEncryptor(params.CKKS, pk)

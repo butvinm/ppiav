@@ -4,6 +4,7 @@ import (
 	"math"
 	"testing"
 
+	hierkeys "github.com/butvinm/lattigo-hierkeys"
 	"github.com/butvinm/lattigo-hierkeys/llkn"
 	"github.com/butvinm/ppiav/internal/authenticator"
 	"github.com/butvinm/ppiav/internal/protocol"
@@ -104,8 +105,8 @@ func (n *negatingInferrer) OpenSession() (protocol.SessionID, error) {
 	return n.inner.OpenSession()
 }
 
-func (n *negatingInferrer) StoreEvalKeys(sid protocol.SessionID, rlk *rlwe.RelinearizationKey, gks []*rlwe.GaloisKey) error {
-	return n.inner.StoreEvalKeys(sid, rlk, gks)
+func (n *negatingInferrer) StoreEvalKeys(sid protocol.SessionID, rlk *rlwe.RelinearizationKey, pkTop *rlwe.PublicKey, gksMasterInfer map[int]*hierkeys.MasterKey) error {
+	return n.inner.StoreEvalKeys(sid, rlk, pkTop, gksMasterInfer)
 }
 
 func (n *negatingInferrer) Params() protocol.Params { return n.params }

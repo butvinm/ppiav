@@ -105,11 +105,7 @@ func (s *Server) handleEvalKeys(w http.ResponseWriter, r *http.Request, sid prot
 		httputil.WriteError(w, http.StatusBadRequest, fmt.Sprintf("unmarshal InferEvalKeys: %s", err))
 		return
 	}
-	// TODO(task 7): wire `keys.PKTop` + `keys.GKSMasterInfer` through
-	// `hierkeys.LevelExpansion` to derive the full `gks_infer` set
-	// VService stores. Until Task 7 lands, pass an empty Galois-key
-	// slice — vservice tests fail by design under the Task 6 boundary.
-	if err := s.svc.StoreEvalKeys(sid, keys.RLK, nil); err != nil {
+	if err := s.svc.StoreEvalKeys(sid, keys.RLK, keys.PKTop, keys.GKSMasterInfer); err != nil {
 		// Unknown sid is the only common error path here.
 		if errors.Is(err, ErrUnknownSession) {
 			httputil.WriteError(w, http.StatusNotFound, err.Error())
