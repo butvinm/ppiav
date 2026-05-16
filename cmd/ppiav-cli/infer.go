@@ -52,12 +52,12 @@ func runInfer(args []string) error {
 	if err != nil {
 		return fmt.Errorf("infer: load rlk: %w", err)
 	}
-	// VService consumes the full GLK set. After lattigo-hierkeys integration
-	// glk_master will swap in, but until then glk_full.bin is the canonical
-	// evaluator key set.
-	gks, err := readGaloisKeys(*workdir, artifactGLKFull)
+	// VService consumes the pre-derived expand-fully Galois key set.
+	// Per-sample re-derivation is multi-minute at LogN=16, so keygen caches
+	// the derivation result in gks_infer.bin and infer loads it directly.
+	gks, err := readGaloisKeys(*workdir, artifactGKSInfer)
 	if err != nil {
-		return fmt.Errorf("infer: load glk_full: %w", err)
+		return fmt.Errorf("infer: load gks_infer: %w", err)
 	}
 	ct, err := readCiphertextPath(*inCt)
 	if err != nil {
@@ -65,9 +65,9 @@ func runInfer(args []string) error {
 	}
 
 	svc, err := vservice.NewWithState(params, *orionDir, &vservice.ExportedState{
-		SID: sid,
-		Rlk: rlk,
-		Glk: gks,
+		SID:      sid,
+		Rlk:      rlk,
+		GksInfer: gks,
 	})
 	if err != nil {
 		return fmt.Errorf("infer: build VService: %w", err)

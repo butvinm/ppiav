@@ -16,18 +16,20 @@ import (
 // it. The Orion model itself is NOT serialized: NewWithState reloads it
 // from disk (or skips loading entirely when orionDir == "").
 //
-// The snapshot carries only the small inbound payload — `Rlk`, `PKTop`,
-// and `GksMasterInfer` — not the materialised `gks_infer` slice. The
-// derived per-target Galois keys can run into many GB at LogN=16, so we
-// rebuild them in the receiving process by re-running the same
-// `hierkeys.LevelExpansion + FinalizeKey` derivation `StoreEvalKeys`
-// uses. The snapshot itself stays compact enough to round-trip through
-// the bench artifact files.
+// The snapshot carries the small inbound payload (`Rlk`, `PKTop`,
+// `GksMasterInfer`) PLUS the materialised `GksInfer` slice when available
+// — `ExportState` populates it directly from the live session so the CLI
+// `keygen` subcommand can persist the derived rotation set to disk
+// (per-sample re-derivation is multi-minute at LogN=16). `NewWithState`
+// honours `GksInfer` when supplied (no re-derivation) and falls back to
+// running the hierkeys derivation against `PKTop + GksMasterInfer` when
+// nil — the HTTP path doesn't carry it on the wire.
 type ExportedState struct {
 	SID            protocol.SessionID
 	Rlk            *rlwe.RelinearizationKey
 	PKTop          *rlwe.PublicKey
 	GksMasterInfer map[int]*hierkeys.MasterKey
+	GksInfer       []*rlwe.GaloisKey
 }
 
 // ExportState snapshots the per-session state for `sid`. Returns an error
@@ -54,6 +56,7 @@ func (s *Service) ExportState(sid protocol.SessionID) (*ExportedState, error) {
 		Rlk:            sess.rlk,
 		PKTop:          sess.pkTop,
 		GksMasterInfer: sess.gksMasterInfer,
+		GksInfer:       sess.glk,
 	}, nil
 }
 
@@ -100,9 +103,22 @@ func NewWithState(params protocol.Params, orionDir string, state *ExportedState)
 		return nil, fmt.Errorf("vservice: NewWithState params.CKKS is zero-valued (LogN <= 0)")
 	}
 
-	gks, deriveSecs, err := deriveGksInfer(mergedParams, state.PKTop, state.GksMasterInfer)
-	if err != nil {
-		return nil, fmt.Errorf("vservice: NewWithState derive gks_infer: %w", err)
+	// Honour a pre-derived gks_infer when supplied — the bench `infer`
+	// CLI subcommand passes it in straight from disk (gks_infer.bin) so a
+	// per-sample re-derivation isn't paid on every Infer invocation. The
+	// HTTP path leaves it nil and re-derives from PKTop + GksMasterInfer.
+	var (
+		gks        []*rlwe.GaloisKey
+		deriveSecs float64
+	)
+	if state.GksInfer != nil {
+		gks = state.GksInfer
+	} else {
+		var err error
+		gks, deriveSecs, err = deriveGksInfer(mergedParams, state.PKTop, state.GksMasterInfer)
+		if err != nil {
+			return nil, fmt.Errorf("vservice: NewWithState derive gks_infer: %w", err)
+		}
 	}
 
 	s := &Service{

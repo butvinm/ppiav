@@ -117,6 +117,16 @@ func buildLLKNParams(p ckks.Parameters) (llkn.Parameters, error) {
 	return out, nil
 }
 
+// BuildLLKNParams is the exported view of buildLLKNParams. The CLI's
+// `loadParams` calls it to re-derive the LLKN hierarchy on top of a CKKS
+// parameter set rehydrated from disk (Defaults() stamps an LLKN built
+// against the default CKKS, but the persisted CKKS may have been overridden
+// by an Orion manifest — re-stamping ensures the hierarchy matches the
+// rehydrated CKKS).
+func BuildLLKNParams(p ckks.Parameters) (llkn.Parameters, error) {
+	return buildLLKNParams(p)
+}
+
 // AuthAtoms returns the ascending base-2 atom set used by VAgent's
 // authenticator chain-rotation. For `Authenticator.Lambda = 128` the set
 // is `{1, 2, 4, 8, 16, 32, 64}` — i.e. powers of two strictly less than

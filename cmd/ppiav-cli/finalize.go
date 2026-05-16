@@ -64,7 +64,7 @@ func runFinalize(args []string) error {
 	if err != nil {
 		return fmt.Errorf("finalize: load sid: %w", err)
 	}
-	skShare, err := readSecretKey(*workdir, artifactSKAgent)
+	skTop, err := readSecretKey(*workdir, artifactSKAgent)
 	if err != nil {
 		return fmt.Errorf("finalize: load sk_a: %w", err)
 	}
@@ -81,13 +81,13 @@ func runFinalize(args []string) error {
 		return fmt.Errorf("finalize: load in-share: %w", err)
 	}
 
-	// FinalizeDecryption needs only sk_a + mac_key; PkAgg/Rlk/Gks are
+	// FinalizeDecryption needs only sk_a + mac_key; PkAgg/Rlk/GksAuth are
 	// unused on the decrypt path. Leave them nil to keep the loaded
 	// surface minimal.
 	agent, err := vagent.NewWithState(params, &vagent.ExportedState{
-		SID:     sid,
-		SkShare: skShare,
-		MacKey:  macKey,
+		SID:    sid,
+		SkTop:  skTop,
+		MacKey: macKey,
 	})
 	if err != nil {
 		return fmt.Errorf("finalize: build VAgent: %w", err)

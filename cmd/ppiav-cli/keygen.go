@@ -3,7 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
+	"path/filepath"
 
+	hierkeys "github.com/butvinm/lattigo-hierkeys"
 	"github.com/butvinm/ppiav/internal/bench"
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/butvinm/ppiav/internal/vagent"
@@ -20,9 +23,18 @@ import (
 // keygen.rlk-r2 / keygen.galois.
 //
 // The flow mirrors orchestrator.Setup but additionally captures
-// pk_agg / sk_c / sk_a / rlk_agg / gks plus the agent's per-session
-// authKey so the rest of the per-step CLIs can rebuild VClient / VAgent /
-// VService via their respective NewWithState constructors.
+// pkEval / pkTop / sk_c / sk_a / rlkAgg / gksAuth / gksMasterInfer plus the
+// agent's per-session authKey so the rest of the per-step CLIs can rebuild
+// VClient / VAgent / VService via their respective NewWithState constructors.
+//
+// `keygen.galois.{client_gen, agent_gen, agent_agg}` each cover BOTH atom
+// sets (auth + infer) in a single combined sample — the dual-atom-set
+// design keeps the two iterations inside one method call, and the bench
+// harness compares the combined cost cross-phase. The `service_store`
+// sample additionally records `derive_gks_infer_seconds` (the wall-clock
+// time spent inside StoreEvalKeys running hierkeys.LevelExpansion +
+// FinalizeKey on the InferAtoms → gks_infer derivation), surfaced via
+// `Service.DeriveGksInferSeconds(sid)`.
 func runKeygen(args []string) error {
 	fs := flag.NewFlagSet("keygen", flag.ContinueOnError)
 	workdir := fs.String("workdir", "", "per-batch directory to hold keygen artifacts (required)")
@@ -75,10 +87,6 @@ func runKeygen(args []string) error {
 		}
 	}
 
-	// keygen.open: VService mints sid, VAgent registers, VClient is built
-	// against sid. Wrap the whole three-step open as one timed block — the
-	// underlying calls are sub-millisecond and splitting them would just
-	// add JSON noise.
 	var (
 		sid    protocol.SessionID
 		client *vclient.Client
@@ -90,6 +98,7 @@ func runKeygen(args []string) error {
 		run.Append(sample)
 		return mErr
 	}
+	writeRunOnExit := func() { _ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen")) }
 
 	// keygen.open — per-party session-state writes (sub-millisecond each).
 	if err := measureStep("keygen.open.service", func() error {
@@ -100,13 +109,13 @@ func runKeygen(args []string) error {
 		sid = s
 		return nil
 	}); err != nil {
-		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+		writeRunOnExit()
 		return fmt.Errorf("keygen: open.service: %w", err)
 	}
 	if err := measureStep("keygen.open.agent", func() error {
 		return agent.OpenSession(sid)
 	}); err != nil {
-		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+		writeRunOnExit()
 		return fmt.Errorf("keygen: open.agent: %w", err)
 	}
 	if err := measureStep("keygen.open.client", func() error {
@@ -117,20 +126,25 @@ func runKeygen(args []string) error {
 		client = c
 		return nil
 	}); err != nil {
-		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+		writeRunOnExit()
 		return fmt.Errorf("keygen: open.client: %w", err)
 	}
 
-	// keygen.pk — Generate-on-client, generate-on-agent, aggregate-on-agent,
-	// aggregate-on-client. Mirrors protocol.puml § "Генерация открытого ключа".
+	// keygen.pk — dual-level (eval + top) handshake. Each share is a
+	// protocol.VClientPKShare / VAgentPKShare carrying both
+	// `ShareEval` and `ShareTop`. The aggregator wires both into the
+	// collective pkEval and pkTop.
 	{
-		var clientShare, agentShare any
+		var (
+			clientShare protocol.VClientPKShare
+			agentShare  protocol.VAgentPKShare
+		)
 		if err := measureStep("keygen.pk.client_gen", func() error {
 			cs, e := client.GenPKShare()
 			clientShare = cs
 			return e
 		}); err != nil {
-			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			writeRunOnExit()
 			return fmt.Errorf("keygen: pk.client_gen: %w", err)
 		}
 		if err := measureStep("keygen.pk.agent_gen", func() error {
@@ -138,32 +152,35 @@ func runKeygen(args []string) error {
 			agentShare = as
 			return e
 		}); err != nil {
-			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			writeRunOnExit()
 			return fmt.Errorf("keygen: pk.agent_gen: %w", err)
 		}
 		if err := measureStep("keygen.pk.agent_agg", func() error {
-			return agent.AggregatePK(sid, clientShare.(multiparty.PublicKeyGenShare))
+			return agent.AggregatePK(sid, clientShare)
 		}); err != nil {
-			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			writeRunOnExit()
 			return fmt.Errorf("keygen: pk.agent_agg: %w", err)
 		}
 		if err := measureStep("keygen.pk.client_agg", func() error {
-			return client.AggregatePK(agentShare.(multiparty.PublicKeyGenShare))
+			return client.AggregatePK(agentShare)
 		}); err != nil {
-			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			writeRunOnExit()
 			return fmt.Errorf("keygen: pk.client_agg: %w", err)
 		}
 	}
 
 	// keygen.rlk-r1 — same shape as pk: client_gen → agent_gen → agent_agg → client_agg.
 	{
-		var clientR1, agentR1 any
+		var (
+			clientR1 any
+			agentR1  any
+		)
 		if err := measureStep("keygen.rlk-r1.client_gen", func() error {
 			cs, e := client.GenRLKShareRound1()
 			clientR1 = cs
 			return e
 		}); err != nil {
-			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			writeRunOnExit()
 			return fmt.Errorf("keygen: rlk-r1.client_gen: %w", err)
 		}
 		if err := measureStep("keygen.rlk-r1.agent_gen", func() error {
@@ -171,19 +188,19 @@ func runKeygen(args []string) error {
 			agentR1 = as
 			return e
 		}); err != nil {
-			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			writeRunOnExit()
 			return fmt.Errorf("keygen: rlk-r1.agent_gen: %w", err)
 		}
 		if err := measureStep("keygen.rlk-r1.agent_agg", func() error {
 			return agent.AggregateRLKRound1(sid, clientR1.(multiparty.RelinearizationKeyGenShare))
 		}); err != nil {
-			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			writeRunOnExit()
 			return fmt.Errorf("keygen: rlk-r1.agent_agg: %w", err)
 		}
 		if err := measureStep("keygen.rlk-r1.client_agg", func() error {
 			return client.AggregateRLKRound1(agentR1.(multiparty.RelinearizationKeyGenShare))
 		}); err != nil {
-			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			writeRunOnExit()
 			return fmt.Errorf("keygen: rlk-r1.client_agg: %w", err)
 		}
 	}
@@ -196,72 +213,95 @@ func runKeygen(args []string) error {
 			clientR2 = cs
 			return e
 		}); err != nil {
-			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			writeRunOnExit()
 			return fmt.Errorf("keygen: rlk-r2.client_gen: %w", err)
 		}
 		if err := measureStep("keygen.rlk-r2.agent_gen", func() error {
 			_, e := agent.GenRLKShareRound2(sid)
 			return e
 		}); err != nil {
-			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			writeRunOnExit()
 			return fmt.Errorf("keygen: rlk-r2.agent_gen: %w", err)
 		}
 		if err := measureStep("keygen.rlk-r2.agent_agg", func() error {
 			return agent.AggregateRLKRound2(sid, clientR2.(multiparty.RelinearizationKeyGenShare))
 		}); err != nil {
-			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			writeRunOnExit()
 			return fmt.Errorf("keygen: rlk-r2.agent_agg: %w", err)
 		}
 	}
 
-	// keygen.galois — VClient emits per-rotation shares, VAgent aggregates,
-	// VService stores the finalized evaluator keys.
+	// keygen.galois — dual-atom-set handshake. VClient and VAgent each emit
+	// auth+infer share lists in a single call; the aggregator finalises
+	// `gksAuth` (eval-level raw GaloisKeys, kept inside the VAgent session)
+	// and `gksMasterInfer` (top-level hierkeys.MasterKey bundle, forwarded
+	// to VService alongside pkTop). VService runs the hierkeys derivation
+	// inside StoreEvalKeys.
 	var (
-		rlk *rlwe.RelinearizationKey
-		gks []*rlwe.GaloisKey
+		rlk            *rlwe.RelinearizationKey
+		pkTop          *rlwe.PublicKey
+		gksMasterInfer map[int]*hierkeys.MasterKey
 	)
 	{
 		var (
-			clientGalShares any
-			clientLabels    any
+			clientAuthShares  any
+			clientInferShares any
+			clientAuthLabels  []int
+			clientInferLabels []int
 		)
 		if err := measureStep("keygen.galois.client_gen", func() error {
-			cs, cl, e := client.GenGaloisShares()
-			clientGalShares = cs
-			clientLabels = cl
-			return e
+			ca, ci, al, il, e := client.GenAuthAndInferShares()
+			if e != nil {
+				return e
+			}
+			clientAuthShares = ca
+			clientInferShares = ci
+			clientAuthLabels = al
+			clientInferLabels = il
+			return nil
 		}); err != nil {
-			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			writeRunOnExit()
 			return fmt.Errorf("keygen: galois.client_gen: %w", err)
 		}
 		if err := measureStep("keygen.galois.agent_gen", func() error {
-			_, _, e := agent.GenGaloisShares(sid)
+			_, _, _, _, e := agent.GenAuthAndInferShares(sid)
 			return e
 		}); err != nil {
-			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			writeRunOnExit()
 			return fmt.Errorf("keygen: galois.agent_gen: %w", err)
 		}
 		if err := measureStep("keygen.galois.agent_agg", func() error {
-			aggRlk, aggGks, e := agent.AggregateGaloisShares(
-				sid,
-				clientGalShares.([]multiparty.GaloisKeyGenShare),
-				clientLabels.([]int),
+			shares := protocol.VClientGaloisShares{
+				AuthAtomShares:  clientAuthShares.([]multiparty.GaloisKeyGenShare),
+				InferAtomShares: clientInferShares.([]multiparty.GaloisKeyGenShare),
+			}
+			aggRlk, aggPkTop, aggMasters, e := agent.AggregateGaloisShares(
+				sid, shares, clientAuthLabels, clientInferLabels,
 			)
 			if e != nil {
 				return e
 			}
 			rlk = aggRlk
-			gks = aggGks
+			pkTop = aggPkTop
+			gksMasterInfer = aggMasters
 			return nil
 		}); err != nil {
-			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			writeRunOnExit()
 			return fmt.Errorf("keygen: galois.agent_agg: %w", err)
 		}
+		// service_store covers VService running hierkeys.LevelExpansion +
+		// FinalizeKey on every InferAtom — the dominant per-session cost
+		// at LogN=16 (multi-minute sequential, tens of seconds concurrent).
+		// The wall-clock time also lands in run.Metadata so the bench
+		// driver can report sequential vs concurrent variants.
 		if err := measureStep("keygen.galois.service_store", func() error {
-			return svc.StoreEvalKeys(sid, rlk, gks)
+			return svc.StoreEvalKeys(sid, rlk, pkTop, gksMasterInfer)
 		}); err != nil {
-			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			writeRunOnExit()
 			return fmt.Errorf("keygen: galois.service_store: %w", err)
+		}
+		if d, ok := svc.DeriveGksInferSeconds(sid); ok {
+			run.Metadata["derive_gks_infer_seconds"] = d
 		}
 	}
 
@@ -276,9 +316,24 @@ func runKeygen(args []string) error {
 	if err != nil {
 		return fmt.Errorf("keygen: VAgent.ExportState: %w", err)
 	}
+	svcState, err := svc.ExportState(sid)
+	if err != nil {
+		return fmt.Errorf("keygen: VService.ExportState: %w", err)
+	}
 
-	if err := writeKeygenArtifacts(*workdir, params, sid, clientState, agentState, rlk, gks); err != nil {
+	if err := writeKeygenArtifacts(*workdir, params, sid, clientState, agentState, svcState); err != nil {
 		return fmt.Errorf("keygen: write artifacts: %w", err)
+	}
+
+	// Record on-disk sizes for the bench cross-phase wire-size comparison.
+	// gks_auth.bin + gks_master_infer.bin together replace Phase 1-3's
+	// single glk_full.bin / glk_master.bin pair; gks_infer.bin is a local
+	// cache of the derived rotation set and not part of the wire payload.
+	if size, e := fileSize(*workdir, artifactGKSAuth); e == nil {
+		run.Metadata["gks_auth_bytes"] = size
+	}
+	if size, e := fileSize(*workdir, artifactGKSMasterInfer); e == nil {
+		run.Metadata["gks_master_infer_bytes"] = size
 	}
 
 	if err := run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen")); err != nil {
@@ -287,23 +342,24 @@ func runKeygen(args []string) error {
 	return nil
 }
 
-// (buildKeygenParams + outPathOrDefault inlined: keygen now uses
-// protocol.Defaults() directly and stepOutPath in main.go.)
-
 // writeKeygenArtifacts persists every file the downstream subcommands
-// load. Aggregated GLK is emitted twice (glk_master.bin + glk_full.bin)
-// per docs/plans: identical bytes today, divergent after lattigo-hierkeys
-// integration. The aggregator gets per-artifact byte sizes via
-// os.Stat on these filenames — there is no need to record them in the
-// bench JSON.
+// load. The Phase 4 split is `pk_eval.bin` + `pk_top.bin` +
+// `gks_auth.bin` + `gks_master_infer.bin` + `gks_infer.bin`, replacing
+// Phase 1-3's `pk.bin` + duplicated `glk_master.bin` / `glk_full.bin`.
+//
+// `gks_auth.bin` is the auth-side raw multi-party Galois keys (eval level,
+// negative galEls) — VAgent uses it directly to drive authchain.Evaluator.
+// `gks_master_infer.bin` is the wire artifact (cross-phase size comparison).
+// `gks_infer.bin` is VService's per-target Galois key set, derived once
+// at keygen and cached because per-sample re-derivation is multi-minute
+// at LogN=16.
 func writeKeygenArtifacts(
 	workdir string,
 	params protocol.Params,
 	sid protocol.SessionID,
 	clientState *vclient.ExportedState,
 	agentState *vagent.ExportedState,
-	rlk *rlwe.RelinearizationKey,
-	gks []*rlwe.GaloisKey,
+	svcState *vservice.ExportedState,
 ) error {
 	if err := writeSID(workdir, sid); err != nil {
 		return err
@@ -311,26 +367,51 @@ func writeKeygenArtifacts(
 	if err := writeParams(workdir, params); err != nil {
 		return err
 	}
-	if err := writePublicKey(workdir, clientState.PkAgg); err != nil {
+	// pk_eval — used by VClient.EncryptImage and by VAgent's Auth (encrypt
+	// of the random v vector). Client state carries this as `PkAgg`.
+	if err := writePublicKey(workdir, artifactPKEval, clientState.PkAgg); err != nil {
 		return err
 	}
-	if err := writeSecretKey(workdir, artifactSKClient, clientState.SkShare); err != nil {
+	// pk_top — needed by VService to seed hierkeys.PubToRot during the
+	// gks_infer derivation. The Agent state's PkTop is the source of
+	// truth (mirrors the wire path: VAgent ships PKTop to VService).
+	if err := writePublicKey(workdir, artifactPKTop, agentState.PkTop); err != nil {
 		return err
 	}
-	if err := writeSecretKey(workdir, artifactSKAgent, agentState.SkShare); err != nil {
+	if err := writeSecretKey(workdir, artifactSKClient, clientState.SkTop); err != nil {
 		return err
 	}
-	if err := writeRelinearizationKey(workdir, rlk); err != nil {
+	if err := writeSecretKey(workdir, artifactSKAgent, agentState.SkTop); err != nil {
 		return err
 	}
-	if err := writeGaloisKeys(workdir, artifactGLKMaster, gks); err != nil {
+	if err := writeRelinearizationKey(workdir, agentState.Rlk); err != nil {
 		return err
 	}
-	if err := writeGaloisKeys(workdir, artifactGLKFull, gks); err != nil {
+	// gks_auth — VAgent's auth atoms. Persisted because the CLI's
+	// stage-process model has no in-memory channel between keygen and mac.
+	if err := writeGaloisKeys(workdir, artifactGKSAuth, agentState.GksAuth); err != nil {
+		return err
+	}
+	// gks_master_infer — VAgent's hierkeys MasterKey bundle (wire artifact).
+	if err := writeMasterKeys(workdir, artifactGKSMasterInfer, agentState.GksMasterInfer); err != nil {
+		return err
+	}
+	// gks_infer — VService's derived per-target Galois keys (eval level).
+	if err := writeGaloisKeys(workdir, artifactGKSInfer, svcState.GksInfer); err != nil {
 		return err
 	}
 	if err := writeMacKey(workdir, agentState.MacKey); err != nil {
 		return err
 	}
 	return nil
+}
+
+// fileSize returns the byte size of <workdir>/<name>; not found → error.
+// Used to record per-artifact sizes in the keygen.json metadata.
+func fileSize(workdir, name string) (int64, error) {
+	info, err := os.Stat(filepath.Join(workdir, name))
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
 }

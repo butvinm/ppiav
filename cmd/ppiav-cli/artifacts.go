@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 
+	hierkeys "github.com/butvinm/lattigo-hierkeys"
 	"github.com/butvinm/ppiav/internal/authenticator"
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
@@ -17,22 +20,36 @@ import (
 
 // Canonical artifact filenames written into a workdir. The bench Python
 // aggregator pulls byte sizes from os.Stat against these names — single
-// source of truth lives here. glk_master.bin and glk_full.bin currently
-// hold identical bytes; lattigo-hierkeys integration will diverge them.
+// source of truth lives here.
+//
+// Phase 4 (lattigo-hierkeys) splits the keygen output into three Galois-key
+// artifacts:
+//
+//   - gks_auth.bin         — 7 raw *rlwe.GaloisKey at eval level, negative
+//     galEls. Consumed by `mac` to drive authchain.Evaluator.
+//   - gks_master_infer.bin — VAgent's 8 *hierkeys.MasterKey wire artifact
+//     (cross-phase wire-size comparison reads this).
+//   - gks_infer.bin        — VService's expand-fully derived set, eval level.
+//     Cached at keygen because per-sample derivation is multi-minute at LogN=16.
+//
+// pk.bin from Phase 1-3 is split into pk_eval.bin (encryption + Auth's
+// encrypt-v step) and pk_top.bin (seeds hierkeys.PubToRot inside infer).
 const (
-	artifactSID         = "sid.txt"
-	artifactParams      = "params.json"
-	artifactPK          = "pk.bin"
-	artifactSKClient    = "sk_c.bin"
-	artifactSKAgent     = "sk_a.bin"
-	artifactRLK         = "rlk.bin"
-	artifactGLKMaster   = "glk_master.bin"
-	artifactGLKFull     = "glk_full.bin"
-	artifactMacKey      = "mac_key.bin"
-	artifactInputCt     = "input_ct.bin"
-	artifactResultCt    = "result_ct.bin"
-	artifactAuthCt      = "auth_ct.bin"
-	artifactClientShare = "client_share.bin"
+	artifactSID            = "sid.txt"
+	artifactParams         = "params.json"
+	artifactPKEval         = "pk_eval.bin"
+	artifactPKTop          = "pk_top.bin"
+	artifactSKClient       = "sk_c.bin"
+	artifactSKAgent        = "sk_a.bin"
+	artifactRLK            = "rlk.bin"
+	artifactGKSAuth        = "gks_auth.bin"
+	artifactGKSMasterInfer = "gks_master_infer.bin"
+	artifactGKSInfer       = "gks_infer.bin"
+	artifactMacKey         = "mac_key.bin"
+	artifactInputCt        = "input_ct.bin"
+	artifactResultCt       = "result_ct.bin"
+	artifactAuthCt         = "auth_ct.bin"
+	artifactClientShare    = "client_share.bin"
 )
 
 // writeBytes atomically writes data to <workdir>/<name>. Thin wrapper over
@@ -136,27 +153,29 @@ func readSecretKey(workdir, name string) (*rlwe.SecretKey, error) {
 	return sk, nil
 }
 
-// writePublicKey serialises a PublicKey via its MarshalBinary.
-func writePublicKey(workdir string, pk *rlwe.PublicKey) error {
+// writePublicKey serialises a PublicKey via its MarshalBinary. `name` is
+// either artifactPKEval or artifactPKTop — the two collective PKs persisted
+// at keygen for the dual-level Phase 4 handshake.
+func writePublicKey(workdir, name string, pk *rlwe.PublicKey) error {
 	if pk == nil {
-		return fmt.Errorf("artifacts: writePublicKey: pk is nil")
+		return fmt.Errorf("artifacts: writePublicKey %s: pk is nil", name)
 	}
 	data, err := pk.MarshalBinary()
 	if err != nil {
-		return fmt.Errorf("artifacts: marshal pk: %w", err)
+		return fmt.Errorf("artifacts: marshal pk %s: %w", name, err)
 	}
-	return writeBytes(workdir, artifactPK, data)
+	return writeBytes(workdir, name, data)
 }
 
 // readPublicKey inverts writePublicKey.
-func readPublicKey(workdir string) (*rlwe.PublicKey, error) {
-	data, err := readBytes(workdir, artifactPK)
+func readPublicKey(workdir, name string) (*rlwe.PublicKey, error) {
+	data, err := readBytes(workdir, name)
 	if err != nil {
 		return nil, err
 	}
 	pk := &rlwe.PublicKey{}
 	if err := pk.UnmarshalBinary(data); err != nil {
-		return nil, fmt.Errorf("artifacts: unmarshal pk: %w", err)
+		return nil, fmt.Errorf("artifacts: unmarshal pk %s: %w", name, err)
 	}
 	return pk, nil
 }
@@ -192,11 +211,12 @@ func readRelinearizationKey(workdir string) (*rlwe.RelinearizationKey, error) {
 // `name`. The container is keyed by Galois element so two round-trips of
 // the same payload are byte-identical (sort by element on emit). RLK
 // is intentionally stuffed with a zero-valued placeholder so the container
-// stays well-formed without bloating the GLK files with relin material.
+// stays well-formed without bloating the GKS files with relin material.
 //
-// glk_master.bin and glk_full.bin both currently receive the same payload;
-// lattigo-hierkeys integration will produce a smaller master that
-// reconstructs the full set on the VService side.
+// Used for both `gks_auth.bin` (eval-level negative-galEl auth atoms,
+// consumed by `mac`) and `gks_infer.bin` (VService's eval-level derived
+// rotation set, consumed by `infer`). The two files differ only in their
+// galEl sign convention and atom set; the on-disk shape is identical.
 func writeGaloisKeys(workdir, name string, gks []*rlwe.GaloisKey) error {
 	galois := structs.Map[uint64, rlwe.GaloisKey]{}
 	for _, gk := range gks {
@@ -239,6 +259,82 @@ func readGaloisKeys(workdir, name string) ([]*rlwe.GaloisKey, error) {
 	out := make([]*rlwe.GaloisKey, 0, len(elements))
 	for _, el := range elements {
 		out = append(out, evk.GaloisKeys[el])
+	}
+	return out, nil
+}
+
+// writeMasterKeys serialises a map[int]*hierkeys.MasterKey to a single
+// blob. Atoms are emitted in strictly-ascending order so two round-trips
+// of the same payload are byte-identical.
+//
+// Layout: u32(count) || repeated { i32(atom) || u32(mkLen) || mkBytes }.
+// The atom int is the positive top-level Galois atom (e.g. {1,4,16,...}
+// at LogN=16, base=4); the MasterKey bytes come from
+// hierkeys.MasterKey.MarshalBinary.
+func writeMasterKeys(workdir, name string, mks map[int]*hierkeys.MasterKey) error {
+	atoms := make([]int, 0, len(mks))
+	for a := range mks {
+		atoms = append(atoms, a)
+	}
+	sort.Ints(atoms)
+	buf := &bytes.Buffer{}
+	if err := binary.Write(buf, binary.BigEndian, uint32(len(atoms))); err != nil {
+		return fmt.Errorf("artifacts: write master-keys count for %s: %w", name, err)
+	}
+	for _, a := range atoms {
+		mk := mks[a]
+		if mk == nil {
+			return fmt.Errorf("artifacts: writeMasterKeys %s: nil MasterKey for atom %d", name, a)
+		}
+		mkBytes, err := mk.MarshalBinary()
+		if err != nil {
+			return fmt.Errorf("artifacts: marshal MasterKey atom %d in %s: %w", a, name, err)
+		}
+		if err := binary.Write(buf, binary.BigEndian, int32(a)); err != nil {
+			return fmt.Errorf("artifacts: write atom %d in %s: %w", a, name, err)
+		}
+		if err := binary.Write(buf, binary.BigEndian, uint32(len(mkBytes))); err != nil {
+			return fmt.Errorf("artifacts: write MasterKey length atom %d in %s: %w", a, name, err)
+		}
+		if _, err := buf.Write(mkBytes); err != nil {
+			return fmt.Errorf("artifacts: write MasterKey body atom %d in %s: %w", a, name, err)
+		}
+	}
+	return writeBytes(workdir, name, buf.Bytes())
+}
+
+// readMasterKeys inverts writeMasterKeys.
+func readMasterKeys(workdir, name string) (map[int]*hierkeys.MasterKey, error) {
+	data, err := readBytes(workdir, name)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) < 4 {
+		return nil, fmt.Errorf("artifacts: readMasterKeys %s: short count header", name)
+	}
+	count := binary.BigEndian.Uint32(data[0:4])
+	off := 4
+	out := make(map[int]*hierkeys.MasterKey, count)
+	for i := uint32(0); i < count; i++ {
+		if off+8 > len(data) {
+			return nil, fmt.Errorf("artifacts: readMasterKeys %s: short entry header at %d", name, i)
+		}
+		atom := int(int32(binary.BigEndian.Uint32(data[off : off+4])))
+		off += 4
+		mkLen := int(binary.BigEndian.Uint32(data[off : off+4]))
+		off += 4
+		if off+mkLen > len(data) {
+			return nil, fmt.Errorf("artifacts: readMasterKeys %s: short MasterKey body at entry %d (need %d, have %d)", name, i, mkLen, len(data)-off)
+		}
+		mk := &hierkeys.MasterKey{}
+		if err := mk.UnmarshalBinary(data[off : off+mkLen]); err != nil {
+			return nil, fmt.Errorf("artifacts: unmarshal MasterKey at entry %d (atom %d) in %s: %w", i, atom, name, err)
+		}
+		off += mkLen
+		out[atom] = mk
+	}
+	if off != len(data) {
+		return nil, fmt.Errorf("artifacts: readMasterKeys %s: trailing bytes (%d unread)", name, len(data)-off)
 	}
 	return out, nil
 }
@@ -347,12 +443,12 @@ func writeBytesPath(path string, data []byte) error {
 
 // loadParams reconstructs a full protocol.Params from the workdir's
 // params.json + protocol.Defaults() for non-CKKS fields (Authenticator,
-// FloodSigma). InputLevel comes from the persisted envelope so EncryptImage
-// honours Orion manifests where InputLevel < MaxLevel.
-// ExtraRotationIndices is left empty because the rotation set is encoded in
-// the persisted glk_full.bin via Galois elements and no caller of loadParams
-// runs the keygen handshake. Orion callers that need the full rotation
-// label set additionally pass --orion <dir>.
+// FloodSigma, LLKN). InputLevel comes from the persisted envelope so
+// EncryptImage honours Orion manifests where InputLevel < MaxLevel.
+// ExtraRotationIndices is left empty because the rotation set is encoded
+// in the persisted gks_infer.bin via Galois elements and no caller of
+// loadParams runs the keygen handshake. Orion callers that need the full
+// rotation label set additionally pass --orion <dir>.
 func loadParams(workdir string) (protocol.Params, error) {
 	ckksParams, inputLevel, err := readParamsFile(workdir)
 	if err != nil {
@@ -364,5 +460,13 @@ func loadParams(workdir string) (protocol.Params, error) {
 	}
 	defaults.CKKS = ckksParams
 	defaults.InputLevel = inputLevel
+	// Rebuild LLKN against the persisted CKKS — Defaults() stamps an LLKN
+	// hierarchy on top of the default CKKS, but the persisted CKKS may
+	// differ (Orion manifest override). The hierarchy must match.
+	llknParams, err := protocol.BuildLLKNParams(ckksParams)
+	if err != nil {
+		return protocol.Params{}, fmt.Errorf("artifacts: rebuild LLKN: %w", err)
+	}
+	defaults.LLKN = llknParams
 	return defaults, nil
 }

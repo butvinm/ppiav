@@ -44,7 +44,7 @@ func runPartialDecrypt(args []string) error {
 	if err != nil {
 		return fmt.Errorf("partial-decrypt: load sid: %w", err)
 	}
-	skShare, err := readSecretKey(*workdir, artifactSKClient)
+	skTop, err := readSecretKey(*workdir, artifactSKClient)
 	if err != nil {
 		return fmt.Errorf("partial-decrypt: load sk_c: %w", err)
 	}
@@ -54,8 +54,8 @@ func runPartialDecrypt(args []string) error {
 	}
 
 	client, err := vclient.NewWithState(params, &vclient.ExportedState{
-		SID:     sid,
-		SkShare: skShare,
+		SID:   sid,
+		SkTop: skTop,
 		// PkAgg intentionally omitted — partial decryption uses sk_c only.
 	})
 	if err != nil {

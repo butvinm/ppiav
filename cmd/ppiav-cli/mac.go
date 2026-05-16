@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"time"
 
 	"github.com/butvinm/ppiav/internal/bench"
 	"github.com/butvinm/ppiav/internal/vagent"
@@ -14,10 +15,16 @@ import (
 // authenticated ciphertext is written to --out-ct; a single-sample
 // bench.Run named "mac" is written to --out (default <workdir>/mac.json).
 //
-// The VAgent state surface for Auth is wide: sk_a drives the per-session
-// secret, mac_key carries (S, SeedF), and the encryptor + evaluator need
-// pk_agg + rlk + glk_full respectively. All of these are persisted by
-// keygen and reloaded here via NewWithState.
+// Phase 4 reads from disk: pk_eval.bin (drives the authenticator-side
+// encryptor), rlk.bin + gks_auth.bin (drive authchain.Evaluator), sk_a +
+// mac_key (per-session secrets). gks_auth.bin is the largest input by far
+// (~1.57 GB at LogN=16); the read time is recorded as
+// `read_gks_auth_seconds` in mac.json metadata for the bench harness.
+//
+// `authchain_construct_seconds` captures the in-memory authchain build
+// time (sub-millisecond — no derivation, just `rlwe.NewMemEvaluationKeySet`
+// over the loaded keys); the field exists for parity with the original
+// hier-eval-construct field in the plan draft.
 func runMAC(args []string) error {
 	fs := flag.NewFlagSet("mac", flag.ContinueOnError)
 	workdir := fs.String("workdir", "", "per-batch keygen artifact directory (required)")
@@ -45,7 +52,7 @@ func runMAC(args []string) error {
 	if err != nil {
 		return fmt.Errorf("mac: load sid: %w", err)
 	}
-	skShare, err := readSecretKey(*workdir, artifactSKAgent)
+	skTop, err := readSecretKey(*workdir, artifactSKAgent)
 	if err != nil {
 		return fmt.Errorf("mac: load sk_a: %w", err)
 	}
@@ -53,33 +60,24 @@ func runMAC(args []string) error {
 	if err != nil {
 		return fmt.Errorf("mac: load mac key: %w", err)
 	}
-	pkAgg, err := readPublicKey(*workdir)
+	pkEval, err := readPublicKey(*workdir, artifactPKEval)
 	if err != nil {
-		return fmt.Errorf("mac: load pk_agg: %w", err)
+		return fmt.Errorf("mac: load pk_eval: %w", err)
 	}
 	rlk, err := readRelinearizationKey(*workdir)
 	if err != nil {
 		return fmt.Errorf("mac: load rlk: %w", err)
 	}
-	gks, err := readGaloisKeys(*workdir, artifactGLKFull)
+	// gks_auth.bin is the dominant I/O — record the wall-clock load time.
+	readGksStart := time.Now()
+	gksAuth, err := readGaloisKeys(*workdir, artifactGKSAuth)
 	if err != nil {
-		return fmt.Errorf("mac: load glk_full: %w", err)
+		return fmt.Errorf("mac: load gks_auth: %w", err)
 	}
+	readGksAuthSecs := time.Since(readGksStart).Seconds()
 	ct, err := readCiphertextPath(*inCt)
 	if err != nil {
 		return fmt.Errorf("mac: load in-ct: %w", err)
-	}
-
-	agent, err := vagent.NewWithState(params, &vagent.ExportedState{
-		SID:     sid,
-		SkShare: skShare,
-		MacKey:  macKey,
-		PkAgg:   pkAgg,
-		Rlk:     rlk,
-		Gks:     gks,
-	})
-	if err != nil {
-		return fmt.Errorf("mac: build VAgent: %w", err)
 	}
 
 	run := bench.NewRun("mac", benchPhase)
@@ -87,6 +85,24 @@ func runMAC(args []string) error {
 	run.Metadata["in_ct"] = *inCt
 	run.Metadata["out_ct"] = *outCt
 	run.Metadata["sid"] = string(sid)
+	run.Metadata["read_gks_auth_seconds"] = readGksAuthSecs
+
+	// authchain construction happens inside NewWithState — time it as a
+	// dedicated sample so the bench can report the hier-eval-construct
+	// surrogate. Expected to be sub-millisecond at any LogN.
+	constructStart := time.Now()
+	agent, err := vagent.NewWithState(params, &vagent.ExportedState{
+		SID:     sid,
+		SkTop:   skTop,
+		MacKey:  macKey,
+		PkAgg:   pkEval,
+		Rlk:     rlk,
+		GksAuth: gksAuth,
+	})
+	if err != nil {
+		return fmt.Errorf("mac: build VAgent: %w", err)
+	}
+	run.Metadata["authchain_construct_seconds"] = time.Since(constructStart).Seconds()
 
 	var authCt *rlwe.Ciphertext
 	sample, err := bench.Measure("mac", func() error {
@@ -113,4 +129,3 @@ func runMAC(args []string) error {
 	}
 	return nil
 }
-
