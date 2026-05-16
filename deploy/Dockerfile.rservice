@@ -1,0 +1,27 @@
+# RService — resource gating server + RClient SPA host.
+# Embeds web/rclient (HTML + TS dist) via //go:embed, so the TS bundle must
+# exist before `go build`. RService does NOT need the WASM blob.
+
+FROM golang:1.26-alpine AS builder
+RUN apk add --no-cache nodejs npm
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY internal/ ./internal/
+COPY cmd/ppiav-rservice/ ./cmd/ppiav-rservice/
+COPY web/rclient/ ./web/rclient/
+
+# Build the RClient TS bundle. We invoke npm directly (rather than `make spas`)
+# to avoid pulling in the VClient/WASM toolchain that RService doesn't need.
+RUN cd web/rclient && npm install && npm run build
+
+RUN CGO_ENABLED=0 go build -o /out/rservice ./cmd/ppiav-rservice
+
+FROM alpine:latest
+RUN apk add --no-cache ca-certificates
+COPY --from=builder /out/rservice /usr/local/bin/rservice
+EXPOSE 8082
+ENTRYPOINT ["/usr/local/bin/rservice"]
+CMD ["--addr", ":8082"]

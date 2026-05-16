@@ -42,12 +42,12 @@ type orionManifest struct {
 }
 
 // LoadOrionParams reads an Orion compiled-circuit manifest from disk and
-// builds the Phase-2 `Params`. It pulls CKKS parameters (LogN/LogQ/LogP/
+// builds an Orion-mode `Params`. It pulls CKKS parameters (LogN/LogQ/LogP/
 // scale/ring type), the per-circuit `InputLevel`, and the rotation index
 // set required to evaluate the circuit. The authenticator config and
-// flooding sigma come from the same defaults the Phase-1 `Defaults()` uses
-// — Phase 2 only changes the source of the CKKS knobs and unions the
-// Orion rotation indices into `RotationIndices()`.
+// flooding sigma come from the same defaults `Defaults()` uses — the Orion
+// path only changes the source of the CKKS knobs and unions the Orion
+// rotation indices into `RotationIndices()`.
 //
 // File format: see `orionManifest`. The fixture under
 // `internal/protocol/testdata/orion_manifest.json` documents the exact
@@ -96,9 +96,9 @@ func LoadOrionParams(manifestPath string) (Params, error) {
 	if m.InputLevel < 1 || m.InputLevel > ckksParams.MaxLevel() {
 		// InputLevel == 0 would leave the inference circuit with no levels
 		// remaining for multiplication — silently fatal at Forward time.
-		// Phase-1 callers (`Defaults()`) get the "use MaxLevel" behaviour
-		// via the zero-default on the Params struct; an Orion manifest must
-		// commit to a real level.
+		// `Defaults()` callers get the "use MaxLevel" behaviour via the
+		// zero-default on the Params struct; an Orion manifest must commit
+		// to a real level.
 		return Params{}, fmt.Errorf(
 			"protocol: Orion manifest %q has InputLevel=%d outside [1, %d]",
 			manifestPath, m.InputLevel, ckksParams.MaxLevel(),
@@ -127,8 +127,8 @@ func LoadOrionParams(manifestPath string) (Params, error) {
 
 // parseOrionRingType maps Orion's `ring_type` strings to Lattigo's ring
 // constants. Orion accepts {"standard", "conjugate_invariant"} (see
-// `CKKSParams.__post_init__`); both Phase-2 C3AE profiles
-// (`logn15`/`logn16`) use "standard".
+// `CKKSParams.__post_init__`); the C3AE profile (`logn16`) uses
+// "standard".
 func parseOrionRingType(s string) (ring.Type, error) {
 	switch s {
 	case "standard":

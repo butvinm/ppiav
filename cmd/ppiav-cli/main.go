@@ -1,26 +1,28 @@
-// Command ppiav-cli is the Phase-1 driver for the in-process protocol. It
-// exposes the full §3 end-to-end flow (`e2e`) and per-step subcommands that
-// isolate individual operations for benchmarking. Each invocation writes a
-// `bench.Run` JSON to disk under `results/phase1/<step>.json` by default.
+// Command ppiav-cli is the per-step driver for the §3 protocol. Each
+// subcommand runs a single cryptographic operation, loading its inputs from
+// disk and writing its outputs (artifact + timing JSON) back to disk. The
+// Python eval driver in bench/ chains these subprocesses across a batch of
+// images to produce the aggregated benchmark and accuracy numbers.
 //
 // Dispatch uses stdlib `flag` — no cobra — to keep dependencies tight.
 // Subcommands:
 //
-//	e2e             — full §3 protocol per iteration (Open+Setup+Infer+Verify)
-//	keygen          — Stage 2 only (fresh sid per iteration)
-//	encrypt-image   — VClient.EncryptImage hot loop after one Open+Setup
-//	infer           — VService.Infer hot loop on a fixed inputCt
-//	mac             — VAgent.BuildAuthenticatedCt hot loop on a fixed resultCt
-//	decrypt-result  — VClient.PartialDecrypt + key-switch + decode hot loop
-//	verify-mac      — authenticator.Ver hot loop on a fixed plaintext
+//	keygen           — bilateral collaborative keygen; writes keys + sid + params
+//	encrypt          — VClient.EncryptImage; reads --image, writes input_ct
+//	infer            — VService.Infer; reads input_ct, writes result_ct
+//	mac              — VAgent.BuildAuthenticatedCt; reads result_ct, writes auth_ct
+//	partial-decrypt  — VClient.PartialDecrypt; reads auth_ct, writes client_share
+//	finalize         — VAgent.FinalizeDecryptionVerbose; reads auth_ct + share, writes decoded.json
 //
-// See docs/DESIGN.md §`Protocol` for the stage definitions and
-// docs/plans/20260514-phase-1-2-multiparty-ckks-and-c3ae.md §Task 9 for
-// the bench-shape requirements.
+// All subcommands share a `--workdir <dir>` flag pointing at the per-batch
+// directory containing the keygen artifacts. Each subcommand also takes an
+// explicit `--out <path>` for its timing JSON (default `<workdir>/<step>.json`).
 package main
 
 import (
 	"encoding/binary"
+	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -29,32 +31,32 @@ import (
 	"github.com/butvinm/ppiav/internal/vclient"
 )
 
+// benchPhase tags every bench.Run JSON emitted by the per-step subcommands.
+// The bench loader/aggregator key off it for table grouping; the synthetic
+// `x²` (--orion="") path uses the same tag (it just swaps the inference
+// circuit).
+const benchPhase = "phase2"
+
 // usage prints the top-level help and exits with status 2 (flag convention).
 func usage() {
-	fmt.Fprintf(os.Stderr, `ppiav-cli — Phase-1 protocol driver.
+	fmt.Fprintf(os.Stderr, `ppiav-cli — per-step §3 protocol driver.
 
 Usage:
   ppiav-cli <subcommand> [flags]
 
 Subcommands:
-  e2e             run the full §3 protocol per iteration
-  keygen          run Stage 2 (collaborative keygen) only, fresh sid per iter
-  encrypt-image   benchmark VClient.EncryptImage on a fixed setup
-  infer           benchmark VService.Infer on a fixed inputCt
-  mac             benchmark VAgent.BuildAuthenticatedCt on a fixed resultCt
-  decrypt-result  benchmark VClient.PartialDecrypt + final key-switch
-  verify-mac      benchmark authenticator.Ver on a fixed plaintext
+  keygen           bilateral collaborative keygen; writes keys + sid + params
+  encrypt          VClient.EncryptImage on a fresh image
+  infer            VService.Infer on a saved input ciphertext
+  mac              VAgent.BuildAuthenticatedCt on a saved result ciphertext
+  partial-decrypt  VClient.PartialDecrypt on a saved auth ciphertext
+  finalize         VAgent.FinalizeDecryptionVerbose on a saved auth ct + share
 
-Common flags:
-  --n int          measured iteration count (default 1)
-  --out string     output JSON path (default results/phaseN/<step>.json)
-  --image string   path to a 12288-float64 .bin file
-                   (required for: e2e, encrypt-image)
-  --orion string   directory containing a compiled Orion model.orion
-                   (Phase 2; when set, output defaults shift to results/phase2/)
+Shared flags:
+  --workdir string  per-batch directory holding keygen artifacts (required)
+  --out string      timing JSON output path (default <workdir>/<step>.json)
 
-Examples:
-  ppiav-cli e2e --orion ./models/out/logn15 --image ./models/out/inputs/sample_0.bin --n 5
+Per-subcommand flags: see "ppiav-cli <subcommand> -h".
 `)
 }
 
@@ -74,44 +76,49 @@ func main() {
 
 	var err error
 	switch sub {
-	case "e2e":
-		err = runE2E(args)
 	case "keygen":
 		err = runKeygen(args)
-	case "encrypt-image":
-		err = runEncryptImage(args)
+	case "encrypt":
+		err = runEncrypt(args)
 	case "infer":
 		err = runInfer(args)
 	case "mac":
 		err = runMAC(args)
-	case "decrypt-result":
-		err = runDecryptResult(args)
-	case "verify-mac":
-		err = runVerifyMAC(args)
+	case "partial-decrypt":
+		err = runPartialDecrypt(args)
+	case "finalize":
+		err = runFinalize(args)
 	default:
 		fmt.Fprintf(os.Stderr, "ppiav-cli: unknown subcommand %q\n\n", sub)
 		usage()
 		os.Exit(2)
 	}
 	if err != nil {
+		// `-h` / `--help` on a subcommand surfaces as flag.ErrHelp from
+		// flag.NewFlagSet's Parse; treat it as success so `ppiav-cli foo -h`
+		// exits 0 like every well-behaved CLI.
+		if errors.Is(err, flag.ErrHelp) {
+			return
+		}
 		fmt.Fprintf(os.Stderr, "ppiav-cli: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-// defaultOutPath builds `results/phase1/<step>.json` when --out is empty.
-func defaultOutPath(step string) string {
-	return filepath.Join("results", "phase1", step+".json")
+// defaultOutPath builds `<workdir>/<step>.json` when --out is empty.
+func defaultOutPath(workdir, step string) string {
+	return filepath.Join(workdir, step+".json")
 }
 
-// defaultOutPathFor builds `results/phase{1,2}/<step>.json` depending on
-// whether `--orion` was supplied. Centralising the phase tag keeps the
-// per-step subcommands in lockstep with `e2e`.
-func defaultOutPathFor(step, orionDir string) string {
-	if orionDir != "" {
-		return filepath.Join("results", "phase2", step+".json")
+// stepOutPath returns the explicit --out path when non-empty, else the
+// canonical `<workdir>/<step>.json` location used by the bench Python
+// driver. Shared by every subcommand to keep the default-path convention
+// in one place.
+func stepOutPath(outPath, workdir, step string) string {
+	if outPath != "" {
+		return outPath
 	}
-	return filepath.Join("results", "phase1", step+".json")
+	return defaultOutPath(workdir, step)
 }
 
 // loadImage reads a 12288-little-endian-float64 .bin file and returns the
@@ -145,3 +152,4 @@ func loadImage(path string) ([]float64, error) {
 	}
 	return out, nil
 }
+

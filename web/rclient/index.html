@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Protected · ppiav</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="card">
+      <h1>Protected <span class="accent">resource</span></h1>
+      <p class="subtitle">Access gated by Resource Service.</p>
+      <div id="status" class="status">Loading...</div>
+      <form method="post" action="/reset" class="reset-form">
+        <button type="submit" class="reset-btn">reset session</button>
+      </form>
+    </main>
+    <!--
+      RService injects `<script>window.verdict = {"sid":"...", "verdict":"..."};</script>`
+      before </body> when serving this page. main.ts reads window.verdict and
+      renders it into #status.
+    -->
+    <script type="module" src="./dist/main.js"></script>
+  </body>
+</html>

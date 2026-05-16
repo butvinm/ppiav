@@ -1,0 +1,74 @@
+# Phase 3 local development stack.
+# Build context is the repo root so each Dockerfile sees go.mod, internal/, cmd/, web/.
+# Run `make wasm spas` on the host first is NOT required — each Dockerfile builds
+# its own web assets in-stage.
+#
+# Two URL flavors per peer:
+#   --*-url            = server-to-server URL via Docker's internal DNS
+#   --*-public-url     = browser-visible URL via the host port mapping
+# RService 302s the browser to vagent-public-url; VAgent's Stage-4b reply
+# carries rservice-public-url. The "public" URLs must be reachable from
+# the host browser (localhost:<port>) — the docker-DNS names are not.
+#
+# --orion and the compiled model directory are not mounted here. To run
+# end-to-end with the compiled FHE model, override BOTH vservice and
+# vagent commands with `--orion /opt/orion` (so VAgent and VService agree
+# on the CKKS profile) and mount your local `models/out/logn16/` into
+# both containers at /opt/orion (see the commented examples below). The
+# default Phase-1 synthetic x² circuit completes the protocol without
+# the model.
+
+services:
+  vservice:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.vservice
+    image: ppiav-vservice:latest
+    ports:
+      - "8080:8080"
+    command: ["--addr", ":8080"]
+    # To run with the compiled Orion model, swap to:
+    #   command: ["--addr", ":8080", "--orion", "/opt/orion"]
+    # and add a volume mount:
+    #   volumes:
+    #     - ../models/out/logn16:/opt/orion:ro
+
+  vagent:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.vagent
+    image: ppiav-vagent:latest
+    ports:
+      - "8081:8081"
+    command:
+      - "--addr"
+      - ":8081"
+      - "--vservice-url"
+      - "http://vservice:8080"
+      - "--rservice-url"
+      - "http://rservice:8082"
+      - "--rservice-public-url"
+      - "http://localhost:8082"
+    # To run with the compiled Orion model, append `--orion /opt/orion`
+    # to the command above and add the same volume mount as vservice:
+    #   volumes:
+    #     - ../models/out/logn16:/opt/orion:ro
+    depends_on:
+      - vservice
+
+  rservice:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.rservice
+    image: ppiav-rservice:latest
+    ports:
+      - "8082:8082"
+    command:
+      - "--addr"
+      - ":8082"
+      - "--vagent-url"
+      - "http://vagent:8081"
+      - "--vagent-public-url"
+      - "http://localhost:8081"
+    depends_on:
+      - vagent

@@ -491,8 +491,11 @@ type VClientGaloisKeyShare struct { Shares []multiparty.GaloisKeyGenShare } // V
 // after aggregation:
 type InferEvalKeys struct { // VAgent → VService
     RLK *rlwe.RelinearizationKey
-    GKS *rlwe.GaloisKeySet // Phase 1–3: full assembled set
-    // Phase 4: replaced by GKSMaster (lattigo-hierkeys; exact type pinned with that API)
+    // Phase 1–3: full assembled per-rotation set. Lattigo v6.2.0 does not
+    // expose a `GaloisKeySet` type; we ship the slice directly, which is
+    // what `rlwe.NewMemEvaluationKeySet` consumes on the VService side.
+    // Phase 4 replaces this with `GKSMaster` (lattigo-hierkeys).
+    GKS []*rlwe.GaloisKey
 }
 
 // Stage 3: image
@@ -698,7 +701,7 @@ Reject inputs whose length isn't exactly `12288` rather than zero-padding — a 
 
 #### `internal/vservice`
 
-FHE inference engine. **Issues session IDs.** Holds per-session evaluator state. Receives the aggregated `rlk` and aggregated Galois keys from VAgent. Phase 1–3 takes the full assembled `*rlwe.GaloisKeySet` directly; Phase 4 takes `gks_master` and hierarchically derives the per-rotation `gks` via lattigo-hierkeys.
+FHE inference engine. **Issues session IDs.** Holds per-session evaluator state. Receives the aggregated `rlk` and aggregated Galois keys from VAgent. Phase 1–3 takes the full assembled per-rotation `[]*rlwe.GaloisKey` directly (Lattigo v6.2.0 has no `GaloisKeySet` type — the slice is what `rlwe.NewMemEvaluationKeySet` consumes); Phase 4 takes `gks_master` and hierarchically derives the per-rotation keys via lattigo-hierkeys.
 
 ```go
 package vservice
@@ -724,7 +727,7 @@ func (s *Service) Params() protocol.Params
 func (s *Service) StoreEvalKeys(
     sid protocol.SessionID,
     rlk *rlwe.RelinearizationKey,
-    gks *rlwe.GaloisKeySet,
+    gks []*rlwe.GaloisKey,
 ) error
 
 func (s *Service) Infer(sid protocol.SessionID, inputCt *rlwe.Ciphertext) (*rlwe.Ciphertext, error)
@@ -752,7 +755,7 @@ type sessionState struct {
     skShare   *rlwe.SecretKey            // sk_a
     pkAgg     *rlwe.PublicKey
     rlkAgg    *rlwe.RelinearizationKey
-    gksAgg    *rlwe.GaloisKeySet         // Phase 4: replaced by lattigohierkeys.MasterKey
+    gksAgg    []*rlwe.GaloisKey          // Phase 4: replaced by lattigohierkeys.MasterKey
 
     encryptor *rlwe.Encryptor            // built from pkAgg
     eval      *ckks.Evaluator            // built from rlkAgg
@@ -791,12 +794,17 @@ func (a *Agent) AggregateRLKRound2(
 // one share per rotation; Phase 4 collapses to a single gks_master share
 // and the return shape switches to lattigohierkeys.MasterKey.
 // AggregateGaloisShares finalises rlk + gks and primes the session
-// evaluator, so its return covers both keys that VService needs.
-func (a *Agent) GenGaloisShares(sid protocol.SessionID) ([]multiparty.GaloisKeyGenShare, error)
+// evaluator, so its return covers both keys that VService needs. Labels
+// (parallel to shares) carry the rotation index for each share; both
+// parties derive them deterministically from params, but they're returned
+// alongside the shares so the orchestrator/HTTP layer can pair them up
+// without re-deriving.
+func (a *Agent) GenGaloisShares(sid protocol.SessionID) ([]multiparty.GaloisKeyGenShare, []int, error)
 func (a *Agent) AggregateGaloisShares(
     sid protocol.SessionID,
     clientShares []multiparty.GaloisKeyGenShare,
-) (rlk *rlwe.RelinearizationKey, gks *rlwe.GaloisKeySet, err error)
+    clientLabels []int,
+) (rlk *rlwe.RelinearizationKey, gks []*rlwe.GaloisKey, err error)
 
 // Stage 4a — build authenticated ciphertext
 func (a *Agent) BuildAuthenticatedCt(

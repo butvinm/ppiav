@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Provisioning script for ppiav FHE benchmark VPS (ppiav-fhe-logn15).
-# Run as ubuntu user on a fresh Ubuntu 22.04 VPS from immers.cloud (cpu.16.128.240).
+# Provisioning script for ppiav FHE benchmark VPS.
+# Run as ubuntu user on a fresh Ubuntu 22.04 VPS from immers.cloud (cpu.16.128.240 for logn16).
 set -euxo pipefail
 
 # Wait for cloud-init to finish before touching apt
@@ -40,8 +40,8 @@ if [ ! -d ~/ppiav ]; then
     git clone https://github.com/butvinm/ppiav.git ~/ppiav
 fi
 cd ~/ppiav
-git fetch origin phase-1-2
-git checkout phase-1-2 || true
+git fetch origin phase-3-http-services-and-browser-spas
+git checkout phase-3-http-services-and-browser-spas
 
 # Install Python dependencies via uv
 cd ~/ppiav/models

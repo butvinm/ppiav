@@ -6,6 +6,7 @@ import (
 
 	"github.com/butvinm/ppiav/internal/authenticator"
 	"github.com/butvinm/ppiav/internal/protocol"
+	"github.com/butvinm/ppiav/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
@@ -66,6 +67,7 @@ func TestEncryptImageRequiresAggregatePK(t *testing.T) {
 }
 
 func TestEncryptImageRoundTripsUnderJointSk(t *testing.T) {
+	testutil.RequireHeavy(t, "LogN=15 image round-trip")
 	params := imageParams(t)
 	c, err := New(params, protocol.SessionID("img-sid-3"))
 	require.NoError(t, err)
@@ -78,7 +80,7 @@ func TestEncryptImageRoundTripsUnderJointSk(t *testing.T) {
 	}
 	ct, err := c.EncryptImage(input)
 	require.NoError(t, err)
-	// Phase-1 contract: encrypt at MaxLevel.
+	// Synthetic-x² contract: encrypt at MaxLevel.
 	assert.Equal(t, params.CKKS.MaxLevel(), ct.Level())
 
 	dec := rlwe.NewDecryptor(params.CKKS, joint)

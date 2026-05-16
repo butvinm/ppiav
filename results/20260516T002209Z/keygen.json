@@ -1,0 +1,85 @@
+{
+  "name": "keygen",
+  "phase": "phase2",
+  "started": "2026-05-16T00:22:09.725010973Z",
+  "go_version": "go1.26.1",
+  "goos": "linux",
+  "goarch": "amd64",
+  "num_cpu": 16,
+  "metadata": {
+    "orion_dir": "/home/ubuntu/ppiav/models/out/logn16",
+    "workdir": "/home/ubuntu/ppiav/results/phase2/eval-20260516T002209Z/keys"
+  },
+  "samples": [
+    {
+      "name": "keygen.open",
+      "iter": 0,
+      "wall": 41165907,
+      "heap_alloc": 1874910368,
+      "heap_inuse": 1875517440,
+      "sys": 2093820664,
+      "alloc_delta": 27064496,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "pre_vm_hwm": 2093502464,
+      "vm_hwm": 2093502464,
+      "bytes": 0
+    },
+    {
+      "name": "keygen.pk",
+      "iter": 0,
+      "wall": 152279332,
+      "heap_alloc": 1986038864,
+      "heap_inuse": 1986732032,
+      "sys": 2094091000,
+      "alloc_delta": 115644320,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "pre_vm_hwm": 2093690880,
+      "vm_hwm": 2093690880,
+      "bytes": 0
+    },
+    {
+      "name": "keygen.rlk-r1",
+      "iter": 0,
+      "wall": 715594848,
+      "heap_alloc": 2511241264,
+      "heap_inuse": 2512035840,
+      "sys": 2543377256,
+      "alloc_delta": 548493728,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "pre_vm_hwm": 2093690880,
+      "vm_hwm": 2380615680,
+      "bytes": 0
+    },
+    {
+      "name": "keygen.rlk-r2",
+      "iter": 0,
+      "wall": 280726110,
+      "heap_alloc": 2793293272,
+      "heap_inuse": 2794078208,
+      "sys": 2824682408,
+      "alloc_delta": 461426264,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "pre_vm_hwm": 2380615680,
+      "vm_hwm": 2703994880,
+      "bytes": 0
+    },
+    {
+      "name": "keygen.galois",
+      "iter": 0,
+      "wall": 171539873076,
+      "heap_alloc": 69155485952,
+      "heap_inuse": 69156364288,
+      "sys": 69271453560,
+      "alloc_delta": 91863256536,
+      "num_gc": 7,
+      "pause_ns": 2168577,
+      "pre_vm_hwm": 2703994880,
+      "vm_hwm": 69277585408,
+      "bytes": 0
+    }
+  ]
+}

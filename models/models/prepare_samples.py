@@ -6,7 +6,7 @@ as ``models/train.py`` (and the original ``examples/c3ae-demo/train.py``) so
 the test indices match exactly across runs and across cleartext eval and the
 FHE bench.
 
-Usage (from ``examples/c3ae-demo/``):
+Usage (from ``models/``):
 
     # Single sample by test-set index
     python -m models.prepare_samples --idx 0
@@ -14,23 +14,41 @@ Usage (from ``examples/c3ae-demo/``):
     # First 3 boundary-band samples (16 <= age <= 20) in test-iteration order
     python -m models.prepare_samples --boundary-band
 
-Outputs:
+    # Stratified batch of 10 samples (5 minors / 5 adults) with cleartext
+    # FHE-quad reference logits for the eval pipeline
+    python -m models.prepare_samples --batch 10 --stratified --with-ref-logit \
+        --out-manifest out/eval_inputs.json
+
+Outputs (single / boundary-band):
     out/inputs/sample_<idx>.bin   raw little-endian float64, 12288 values
                                   (3 * 64 * 64), normalized to [-1, 1]
     out/inputs/ground_truth.csv   header: idx,age,is_adult
+
+Outputs (batch):
+    out/inputs/sample_<idx>.bin   one per selected test-set position
+    out/inputs/ground_truth.csv   merged as in single-sample mode
+    <out-manifest>                JSON manifest consumed by bench.eval
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import datetime as dt
+import json
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
+import torch
 from torch.utils.data import Subset
 
+from models.c3ae_fhe import C3AE as C3AE_FHE
 from models.utkface import build_test_split
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 BOUNDARY_BAND_TARGET = 3
 
@@ -43,10 +61,10 @@ def select_indices(test_set: Subset, args: argparse.Namespace) -> list[int]:
     iteration order.
 
     Behavior on insufficient samples in ``--boundary-band``:
-      - 0 samples found  → raise (the original strict failure mode)
-      - 1 or 2 samples   → emit a clear ``[warn]`` to stderr and return the
+      - 0 samples found  -> raise (the original strict failure mode)
+      - 1 or 2 samples   -> emit a clear ``[warn]`` to stderr and return the
         partial list. Downstream tooling expects exactly ``BOUNDARY_BAND_TARGET``
-        samples, so a partial result is operator-visible — but we don't refuse
+        samples, so a partial result is operator-visible -- but we don't refuse
         outright because tiny synthetic datasets (e.g. CI fixtures) may
         legitimately have fewer than 3 samples in the band.
     """
@@ -72,10 +90,41 @@ def select_indices(test_set: Subset, args: argparse.Namespace) -> list[int]:
             f"[warn] --boundary-band requested {BOUNDARY_BAND_TARGET} samples but only "
             f"{len(picked)} found in [16, 20] (test set size {len(test_set)}); "
             f"writing the partial result. Downstream may expect "
-            f"exactly {BOUNDARY_BAND_TARGET} samples — verify before running the FHE pipeline.",
+            f"exactly {BOUNDARY_BAND_TARGET} samples -- verify before running the FHE pipeline.",
             file=sys.stderr,
         )
     return picked
+
+
+def select_stratified_indices(test_set: Subset, batch: int) -> list[int]:
+    """Pick ``batch`` test-set positions with a 50/50 minor/adult split.
+
+    Walks the test set in iteration order, collects the first ``batch // 2``
+    positions with ``is_adult == 0`` and the first ``batch // 2`` with
+    ``is_adult == 1``, then returns the concatenated list in ascending
+    iteration order. Raises if either class is exhausted before the half-quota
+    is hit -- downstream eval assumes an exact 50/50 split.
+    """
+    if batch < 2 or batch % 2 != 0:
+        raise ValueError(f"--batch must be an even integer >= 2 (got {batch})")
+    per_class = batch // 2
+    minors: list[int] = []
+    adults: list[int] = []
+    for i in range(len(test_set)):
+        _, target, _ = test_set[i]
+        is_adult = int(float(target.item()) >= 0.5)
+        if is_adult == 0 and len(minors) < per_class:
+            minors.append(i)
+        elif is_adult == 1 and len(adults) < per_class:
+            adults.append(i)
+        if len(minors) >= per_class and len(adults) >= per_class:
+            break
+    if len(minors) < per_class or len(adults) < per_class:
+        raise RuntimeError(
+            f"--stratified --batch {batch}: test set exhausted before quota met "
+            f"(minors={len(minors)}/{per_class}, adults={len(adults)}/{per_class})"
+        )
+    return sorted(minors + adults)
 
 
 def dump_sample(test_set: Subset, idx: int, out_dir: Path) -> tuple[int, int]:
@@ -139,6 +188,77 @@ def write_ground_truth(rows: list[tuple[int, int, int]], out_dir: Path) -> Path:
     return csv_path
 
 
+def compute_ref_logits(
+    test_set: Subset,
+    indices: Sequence[int],
+    weights_path: Path,
+) -> list[float]:
+    """Run the cleartext FHE-quad C3AE model over ``indices`` and return logits.
+
+    The model is the same Quad-activation network compiled by Orion; running
+    it in PyTorch produces the cleartext reference logit that the FHE pipeline
+    output is compared against (noise = fhe_logit - ref_logit).
+    """
+    if not weights_path.exists():
+        raise FileNotFoundError(f"--with-ref-logit needs weights at {weights_path}")
+    device = torch.device("cpu")
+    model = C3AE_FHE(img_size=64, first_stride=2).to(device)
+    state = torch.load(weights_path, map_location=device, weights_only=True)
+    model.load_state_dict(state)
+    model.eval()
+
+    logits: list[float] = []
+    with torch.no_grad():
+        for idx in indices:
+            img, _, _ = test_set[idx]
+            img_b = img.unsqueeze(0).to(device)
+            out = model(img_b)
+            logits.append(float(out.reshape(-1)[0].item()))
+    return logits
+
+
+def write_manifest(
+    manifest_path: Path,
+    *,
+    config: str,
+    weights_path: Path,
+    out_dir: Path,
+    indices: Sequence[int],
+    ages: Sequence[int],
+    labels: Sequence[int],
+    ref_logits: Sequence[float] | None,
+) -> None:
+    """Write ``eval_inputs.json`` consumed by ``bench.eval``."""
+    manifest_dir = manifest_path.resolve().parent
+    out_dir_abs = out_dir.resolve()
+    try:
+        rel_dir = out_dir_abs.relative_to(manifest_dir)
+    except ValueError:
+        rel_dir = out_dir_abs
+    images: list[dict[str, object]] = []
+    for i, idx in enumerate(indices):
+        entry: dict[str, object] = {
+            "idx": int(idx),
+            "path": str(rel_dir / f"sample_{idx}.bin"),
+            "age": int(ages[i]),
+            "label": int(labels[i]),
+        }
+        if ref_logits is not None:
+            entry["ref_logit"] = float(ref_logits[i])
+        images.append(entry)
+
+    manifest = {
+        "config": config,
+        "weights": str(weights_path),
+        "generated_at": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
+        "images": images,
+    }
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    with manifest_path.open("w") as f:
+        json.dump(manifest, f, indent=2)
+        f.write("\n")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -152,6 +272,40 @@ def main() -> None:
         "--boundary-band",
         action="store_true",
         help="Dump the first 3 test samples with 16 <= age <= 20.",
+    )
+    mode.add_argument(
+        "--batch",
+        type=int,
+        default=None,
+        help="Dump a batch of N samples (use with --stratified for 50/50 split).",
+    )
+    parser.add_argument(
+        "--stratified",
+        action="store_true",
+        help="In --batch mode, pick N/2 minors (label=0) and N/2 adults (label=1).",
+    )
+    parser.add_argument(
+        "--with-ref-logit",
+        action="store_true",
+        help="In --batch mode, compute the cleartext FHE-quad logit per sample.",
+    )
+    parser.add_argument(
+        "--out-manifest",
+        type=Path,
+        default=None,
+        help="In --batch mode, write the eval-input manifest JSON to this path.",
+    )
+    parser.add_argument(
+        "--weights",
+        type=Path,
+        default=Path("out/weights_fhe.pth"),
+        help="Path to FHE-quad weights for --with-ref-logit (default out/weights_fhe.pth).",
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="logn16",
+        help="Config tag recorded in the manifest (default logn16).",
     )
     parser.add_argument(
         "--data-dir",
@@ -167,8 +321,23 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.batch is not None:
+        if not args.stratified:
+            raise SystemExit("--batch currently requires --stratified")
+        if args.out_manifest is None:
+            raise SystemExit("--batch requires --out-manifest <path>")
+    else:
+        if args.stratified or args.with_ref_logit or args.out_manifest is not None:
+            raise SystemExit(
+                "--stratified / --with-ref-logit / --out-manifest are only valid with --batch"
+            )
+
     test_set = build_test_split(args.data_dir)
-    indices = select_indices(test_set, args)
+
+    if args.batch is not None:
+        indices = select_stratified_indices(test_set, args.batch)
+    else:
+        indices = select_indices(test_set, args)
 
     rows: list[tuple[int, int, int]] = []
     for idx in indices:
@@ -178,6 +347,25 @@ def main() -> None:
 
     csv_path = write_ground_truth(rows, args.out_dir)
     print(f"  wrote {csv_path}  ({len(rows)} new/updated row(s))")
+
+    if args.batch is not None:
+        assert args.out_manifest is not None  # narrowed by the check above
+        ages = [r[1] for r in rows]
+        labels = [r[2] for r in rows]
+        ref_logits: list[float] | None = None
+        if args.with_ref_logit:
+            ref_logits = compute_ref_logits(test_set, indices, args.weights)
+        write_manifest(
+            args.out_manifest,
+            config=args.config,
+            weights_path=args.weights,
+            out_dir=args.out_dir,
+            indices=indices,
+            ages=ages,
+            labels=labels,
+            ref_logits=ref_logits,
+        )
+        print(f"  wrote {args.out_manifest}  ({len(indices)} image entries)")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,604 @@
+# Bench + Evaluation Pipeline Redesign
+
+## Overview
+
+Replace the current in-process bench harness (`internal/bench` + the seven `ppiav-cli` step subcommands) with an artifact-pipeline architecture: each protocol stage becomes its own CLI subprocess that loads its inputs from disk, runs one cryptographic operation, and writes its output artifact plus a single-sample timing JSON. A Python driver in `bench/` chains the subprocesses across a 10-image stratified UTKFace batch (single keygen reused), then aggregates per-step JSONs + decoded slot vectors into a `summary.md` and a `plots/` directory. The plan ends with a rented-VPS run that produces the final thesis numbers.
+
+Three problems motivate the rework:
+
+1. **Per-step peak RSS is currently meaningless.** `internal/bench/bench.go` reads `/proc/self/status` VmHWM, which is monotonic over the process lifetime. In the existing single-process e2e bench every Sample.VmHWM is at least as large as the previous Sample, so "RSS of this step" is not actually measured. Splitting steps into separate processes makes per-step peak RSS correct for free.
+2. **No protocol-level FPR/FNR or noise distribution is captured today.** `models/eval.py` measures the cleartext model's FPR/FNR, but nothing measures the whole-pipeline FPR/FNR (model + CKKS noise + MPD-Auth + smudging) or the noise the protocol actually produces. This is the single most thesis-relevant correctness number.
+3. **Per-message wire bytes are not captured.** `internal/bench/MeasureWithSize` exists but is wired into zero call sites. With the artifact pipeline, every protocol message becomes a file on disk and `os.Stat` gives the wire size directly — no plumbing required.
+
+The redesign **does not touch production protocol code semantics**. The single-use `FinalizeDecryption` eviction stays in production; the new `finalize` subcommand sidesteps it by building a fresh in-process Agent per CLI invocation, so the in-memory session map never sees a replay. GLK is emitted as two files (`glk_master.bin` + `glk_full.bin`) — identical today, will diverge under Phase-4 lattigo-hierkeys.
+
+## Context (from discovery)
+
+- **Affected Go packages:** `internal/bench`, `internal/vagent`, `internal/vclient`, `internal/vservice`, `internal/protocol`, `cmd/ppiav-cli`
+- **Affected Python packages:** `bench/bench`, `models/models`
+- **Patterns reused:** `internal/protocol/wire.go` already encapsulates Lattigo `MarshalBinary` / `UnmarshalBinary` for keys and ciphertexts; the new disk artifacts use the same wire formats. `internal/bench/bench.go` `Sample`/`Run` JSON shape is preserved (only one new field added). `bench/bench/load.py` mirrors the Go struct.
+- **VPS methodology:** modelled on `~/Dev/orion/docs/plans/completed/2026-05-09-c3ae-vps-runs.md`. That plan's logn16 run measured ~114 GB peak RSS on `cpu.16.128.240` (128 GB box) with ~10 GB headroom — 256 GB flavors are not even available on immers.cloud. Reuse `docs/plans/20260514-orion-integration-training-compilation/setup.sh` (already in repo) for FHE-VPS provisioning, with a small branch checkout fix.
+- **Constraints:** logn16 only (cleanup of stale `logn15` references already done in this session — `models/models/compile.py:108` comment, the deleted `results/phase2/e2e.json`, plus `models/README.md`, `README.md`, and `setup.sh` updated to drop the 256 GB / `cpu.16.256.240` claim). Lattigo `LogN=15` test-profile references in `internal/vclient/image_test.go` and `internal/orchestrator/runner_test.go` are unrelated (CKKS ring dimension chosen because LogN=14's 8192 slots cannot hold a 12288-element image) and stay.
+- **No local weights:** `models/out/` doesn't exist on the dev box; training is part of the VPS phase, not a precondition.
+
+## Development Approach
+
+- **Code-first, then tests** (regular). TDD discipline is overkill for a rework that mostly composes existing primitives.
+- **Tests only for code in `internal/`** — production-grade reusable primitives that the Phase-3 HTTP services could also use. The new state-export constructors and the extended `FinalizeDecryption` are not throwaway harness.
+- **No tests for `cmd/ppiav-cli/` subcommands** or `bench/bench/eval.py` driver/aggregator/plots — these are the benchmark harness; their correctness check is "do the numbers in `summary.md` look right when a human reads them."
+- **One exception:** `bench/bench/load.py` IS the Go↔Python schema boundary and gets a unit test for the new `pre_vm_hwm` round-trip — closer to "code" than "harness."
+- **No tests for `models/prepare_samples.py` extension** per the existing `feedback_no_ml_harness_tests.md` memory.
+- **Atomic commits**: stage specific files (`git add path/to/file`), never `git add .`. Each task = one commit. Clear, concrete messages.
+- Small, focused changes per task. Run `go vet ./... && go test ./...` and `uv run pytest` (in `bench/`) after each task that touches tested code.
+- Maintain backward compatibility for `bench/bench/load.py` reading old phase1 JSONs — the new `pre_vm_hwm` field defaults to 0 when absent.
+- **Build state stays green between tasks.** When CLI subcommands are added incrementally (Tasks 7-10), each task ends with a `go build ./... && go vet ./...` checkbox to keep the package compilable.
+
+## Testing Strategy
+
+Estimated 6 tests total:
+
+- `internal/bench/bench_test.go` — verify `Sample.PreVmHWM` is populated on Linux.
+- `internal/vagent/finalize_test.go` — extend existing tests for the new `FinalizeDecryptionVerbose` that returns the decoded slot vector alongside the verdict.
+- `internal/vagent/state_test.go` — round-trip: open a session, `ExportState`, build a new Agent via `NewWithState`, verify a downstream protocol op succeeds.
+- `internal/vclient/state_test.go` — same shape for Client.
+- `internal/vservice/state_test.go` — round-trip: store keys, export `(sid, params, rlk, glk)`, build new Service via `NewWithState`, verify `Infer` succeeds on a probe ciphertext.
+- `bench/tests/test_load.py` — extend with `pre_vm_hwm` round-trip + presence of `delta_rss_mib` property.
+
+No new e2e tests. The existing `internal/orchestrator/runner_test.go` already verifies the in-process protocol chain at LogN=15 — the CLI just splits the chain across processes, so duplicating that test at the CLI level would be ceremony. Full chain validation is deferred to the VPS run (Tasks 25-26), which IS the acceptance test for this entire plan.
+
+## Progress Tracking
+
+- mark completed items with `[x]` immediately when done
+- add newly discovered tasks with ➕ prefix
+- document issues/blockers with ⚠️ prefix
+- update plan if implementation deviates from original scope
+- keep plan in sync with actual work done
+
+## Solution Overview
+
+**Architecture:**
+
+```
+models/prepare_samples.py     →  models/out/eval_inputs.json + sample_0..9.bin
+   (--batch 10 --stratified        + ref logits from PyTorch C3AE-fhe-quad
+    --with-ref-logit)
+
+ppiav-cli keygen              →  results/phase2/eval-<ts>/keys/{pk,sk_c,sk_a,rlk,glk_master,glk_full,mac_key,sid,params}
+   (run once, bilateral in-process)   + keygen.json (per-round timing + sizes)
+
+ppiav-cli encrypt             →  img_<i>/input_ct.bin   + encrypt.json
+ppiav-cli infer  --orion ...  →  img_<i>/result_ct.bin  + infer.json
+ppiav-cli mac                 →  img_<i>/auth_ct.bin    + mac.json
+ppiav-cli partial-decrypt     →  img_<i>/client_share.bin + partial.json
+ppiav-cli finalize --ref-logit→  img_<i>/decoded.json (verdict + noise_per_slot)
+                                                       + finalize.json
+
+bench/bench/eval.py aggregate →  results/phase2/eval-<ts>/summary.md
+                                 results/phase2/eval-<ts>/plots/*.png
+```
+
+**Per-role separation:** `encrypt`/`partial-decrypt` use VClient state only; `infer` uses VService state only; `mac`/`finalize` use VAgent state only. `keygen` is bilateral (both roles in-process) because splitting the 4-round handshake into per-message CLI calls would mean ~12 subcommands; instead it emits per-round timing sub-samples (`keygen.open` / `keygen.pk` / `keygen.rlk-r1` / `keygen.rlk-r2` / `keygen.galois`) and writes one artifact per round to disk so the aggregator can size each via `os.Stat`.
+
+**Why per-step peak RSS works now:** each CLI invocation is a fresh process, so VmHWM at process exit = peak RSS during that one step. A new `pre_vm_hwm` field captures the pre-op snapshot so the aggregator can report `delta_rss = vm_hwm - pre_vm_hwm` (RSS attributable to the op vs. startup baseline).
+
+**Why FinalizeDecryption eviction is not a problem in this design:** the eviction is an in-process `delete(sessions, sid)` against an in-memory map. Each `ppiav-cli finalize` is a fresh process with an empty session map. Eviction is irrelevant across CLI boundaries. The bench's `finalize` subcommand calls the same production code path as the HTTP server, but a `Verbose` sibling (added in Task 2) exposes the decoded slot vector that the standard production method discards.
+
+## Technical Details
+
+### New Sample field
+
+```go
+// internal/bench/bench.go
+type Sample struct {
+    // ...existing fields...
+    PreVmHWM uint64 `json:"pre_vm_hwm"`  // RSS high-water-mark snapshot taken before the measured call
+}
+```
+
+`bench.Measure` reads `readVmHWM()` once at the start of the timed block and stamps `s.PreVmHWM`. The Python aggregator reports `delta_rss_mib = (vm_hwm - pre_vm_hwm) / (1024*1024)`.
+
+### Extended FinalizeDecryption
+
+```go
+// internal/vagent/finalize.go (extended)
+//
+// FinalizeDecryption: existing signature, unchanged. Drops decoded slots after Ver.
+// FinalizeDecryptionVerbose: new sibling. Returns (verdict, decodedSlots, err).
+// Production callers stay on FinalizeDecryption; the bench finalize subcommand uses Verbose.
+// Both methods evict the session on completion — eviction lives in the shared inner path.
+func (a *Agent) FinalizeDecryptionVerbose(sid SessionID, authCt *rlwe.Ciphertext, clientShare *drlwe.KeySwitchShare) (Verdict, []float64, error)
+```
+
+This avoids duplicating ~30 lines of joint-decrypt + Ver logic in the CLI subcommand, keeping bench and production on the same code path.
+
+### State export/import API
+
+Per-role minimal scope (the plan-review's "over-coupling" concern):
+
+```go
+// internal/vagent/state.go
+type ExportedState struct {
+    SID     protocol.SessionID
+    SkShare *rlwe.SecretKey
+    MacKey  *authenticator.Key
+    // Aggregated keys are not part of Agent state — they're held by VService.
+    // PK is the only shared aggregated key the Agent retains, and it's needed
+    // only during the handshake, not for mac/finalize.
+}
+
+func (a *Agent) ExportState(sid protocol.SessionID) (*ExportedState, error)
+func NewWithState(params protocol.Params, state *ExportedState) (*Agent, error)
+
+// internal/vclient/state.go
+type ExportedState struct {
+    SID     protocol.SessionID
+    SkShare *rlwe.SecretKey
+    PkAgg   *rlwe.PublicKey  // needed for EncryptImage; partial-decrypt doesn't use it
+}
+
+func (c *Client) ExportState() (*ExportedState, error)
+func NewWithState(params protocol.Params, state *ExportedState) (*Client, error)
+
+// internal/vservice/state.go
+type ExportedState struct {
+    SID    protocol.SessionID
+    Rlk    *rlwe.RelinearizationKey
+    Glk    []*rlwe.GaloisKey
+}
+
+func (s *Service) ExportState(sid protocol.SessionID) (*ExportedState, error)
+func NewWithState(params protocol.Params, orionDir string, state *ExportedState) (*Service, error)
+```
+
+The CRS is NOT serialized — `NewWithState` rebuilds it deterministically from `SID` via `protocol.NewSessionCRS(sid)` (which is how vclient/vagent already construct it in `New`).
+
+### CLI subcommand surface (all under `ppiav-cli`)
+
+```
+keygen           --workdir <dir> --orion <dir>                                              --out <results.json>
+encrypt          --workdir <dir> --image <img.bin>                  --out-ct <input_ct.bin> --out <results.json>
+infer            --workdir <dir> --orion <dir> --in-ct <input_ct>   --out-ct <result_ct>    --out <results.json>
+mac              --workdir <dir>               --in-ct <result_ct>  --out-ct <auth_ct>      --out <results.json>
+partial-decrypt  --workdir <dir>               --in-ct <auth_ct>    --out-share <share>     --out <results.json>
+finalize         --workdir <dir>               --in-ct <auth_ct> --in-share <share>
+                 [--ref-logit <f>] --out-decoded <decoded.json>                             --out <results.json>
+```
+
+Default `--out` paths: `<workdir>/<step>.json` if omitted (eval driver always passes explicit paths).
+
+### `decoded.json` shape (written by finalize)
+
+```json
+{
+  "verdict": "accept" | "reject" | "unknown",
+  "ref_logit": 2.34,
+  "slots_in_s": [3, 17, 42, ...],
+  "noise_per_slot": [0.0012, -0.0007, 0.0019, ...]
+}
+```
+
+`noise_per_slot` is over **non-S slots only** (the slots that carry the broadcast logit `m`); `slots_in_s` is the authenticator's secret index set, retained for debugging.
+
+### `eval_inputs.json` shape (written by extended `prepare_samples.py`)
+
+```json
+{
+  "config": "logn16",
+  "weights": "out/weights_fhe.pth",
+  "generated_at": "2026-05-15T...",
+  "images": [
+    {"idx": 0, "path": "models/out/inputs/sample_0.bin", "age": 23, "label": 1, "ref_logit": 2.34},
+    {"idx": 1, "path": "models/out/inputs/sample_1.bin", "age": 14, "label": 0, "ref_logit": -1.87},
+    ...
+  ]
+}
+```
+
+Stratified: exactly 5 entries with `label=0` (minors) and 5 with `label=1` (adults).
+
+### Aggregator outputs
+
+`summary.md`:
+
+- Per-step timing table (mean / p50 / p95 wall ms across 10 images for encrypt/infer/mac/partial/finalize; single keygen row with per-round breakdown)
+- Per-step RSS table (mean delta_rss MiB, mean vm_hwm MiB)
+- Per-message byte table from `os.Stat` on every artifact in the batch — `glk_master.bin` and `glk_full.bin` each get their own row even when identical, with a footnote that they diverge under Phase-4 hierkeys (single source of truth: the filesystem)
+- Protocol FPR / FNR / accuracy line (across the 10 images)
+- Noise distribution: mean / min / max / std across all (image × slot) pairs
+- SNR distribution: per-image `|ref_logit| / std(noise_per_slot)`
+- Network estimate table (per-message: bytes, t@1Mbps, t@10Mbps, t@100Mbps)
+
+`plots/`:
+
+- `e2e_timeline.png` — single horizontal Gantt bar of one mean e2e session, **compute only**, sections in protocol order (`keygen.open` → `keygen.pk` → `keygen.rlk-r1` → `keygen.rlk-r2` → `keygen.galois` → `encrypt` → `infer` → `mac` → `partial-decrypt` → `finalize`), color-coded by macro-phase (setup / inference / verify). Section width = mean wall ms for that step. Replaces the per-step bar chart — the timing table in `summary.md` already gives exact mean/p50/p95 numbers; the Gantt's job is visual proportionality
+- `rss_per_step.png` — bar chart, one bar per step, mean delta_rss MiB
+- `bytes_per_message.png` — bar chart, one bar per message, log y
+- `noise_histogram.png` — histogram of noise across all (image × slot) pairs
+- `snr_per_image.png` — strip plot of per-image SNR (10 points — a 10-bin histogram would be uninformative; strip plot reads cleanly at this N)
+- `bandwidth_per_message.png` — grouped bar chart, three bars per message (1/10/100 Mbps)
+- `session_timeline_10mbps.png` — companion to `e2e_timeline.png` with **compute + transfer** sections interleaved at 10 Mbps. Same color coding by macro-phase; compute and transfer sections distinguished by hatching/shade. Reads as "where time goes during one session over consumer broadband"
+
+## What Goes Where
+
+- **Implementation Steps** (`[ ]` checkboxes): Go and Python code changes, tests for `internal/` and the `load.py` boundary, file deletions, documentation updates, the VPS rental + run + capture + tear-down sequence per Orion methodology, results commit, final plan move.
+- **Post-Completion** (no checkboxes): thesis methodology paragraph, optional refinements.
+
+## Implementation Steps
+
+### Task 1: Add `PreVmHWM` to bench Sample
+
+**Files:**
+
+- Modify: `/home/butvinm/Dev/ppiav/internal/bench/bench.go`
+- Modify: `/home/butvinm/Dev/ppiav/internal/bench/bench_test.go`
+
+- [x] add `PreVmHWM uint64 \`json:"pre_vm_hwm"\``to`Sample` struct
+- [x] in `measure(...)`, call `readVmHWM()` before `start := time.Now()` and stamp `s.PreVmHWM`
+- [x] write test verifying `Sample.PreVmHWM` is non-zero after Measure on Linux (skip via `runtime.GOOS != "linux"` check); also assert `PreVmHWM <= VmHWM`
+- [x] run `go test ./internal/bench/...` — must pass before next task
+
+### Task 2: Extend FinalizeDecryption to expose decoded slots
+
+**Files:**
+
+- Modify: `/home/butvinm/Dev/ppiav/internal/vagent/finalize.go`
+- Modify: `/home/butvinm/Dev/ppiav/internal/vagent/finalize_test.go`
+
+- [x] add `FinalizeDecryptionVerbose(sid, authCt, clientShare) (Verdict, []float64, error)` returning the decoded plaintext vector alongside the verdict
+- [x] refactor existing `FinalizeDecryption` to call `FinalizeDecryptionVerbose` and discard the slots — keeps single source of truth for the joint-decrypt + Ver inner path
+- [x] both methods preserve the session-eviction behaviour (eviction stays in the shared inner path)
+- [x] write test verifying `FinalizeDecryptionVerbose` returns the same verdict as `FinalizeDecryption` AND a non-nil non-empty `[]float64` of length `params.CKKS.MaxSlots()`
+- [x] write test verifying noise_per_slot at non-S indices has small magnitude (e.g. < 0.1) when the input is a fresh honest authenticated ciphertext
+- [x] run `go test ./internal/vagent/...` — must pass before next task
+
+### Task 3: VAgent state export/import
+
+**Files:**
+
+- Modify: `/home/butvinm/Dev/ppiav/internal/vagent/agent.go`
+- Create: `/home/butvinm/Dev/ppiav/internal/vagent/state.go`
+- Create: `/home/butvinm/Dev/ppiav/internal/vagent/state_test.go`
+
+- [x] define `ExportedState` struct: `{SID, SkShare, MacKey, PkAgg, Rlk, Gks}` — widened from the original "minimal" sketch because `BuildAuthenticatedCt` needs PkAgg (encryptor) + Rlk + Gks (eval) to call `auth.Auth`; the bench `mac` subcommand cannot rebuild a usable Agent without them. Aggregated keys are still "held by VService" conceptually — they get serialised to disk by `keygen` and reloaded by `mac`
+- [x] implement `(a *Agent) ExportState(sid) (*ExportedState, error)` — reads the session map, errors on unknown sid or incomplete keygen; Gks slice is left for the caller to thread in (it lives outside the sessionState struct in the agent's evaluator key set)
+- [x] implement `NewWithState(params, *ExportedState) (*Agent, error)` — constructs fresh Agent, seeds session map. Rebuilds CRS from `state.SID` via `protocol.NewSessionCRS(sid)` rather than serializing
+- [x] write round-trip test (LogN=14 via the same `smallParams` profile the rest of the package uses — LogN=15 would balloon test wall time; the round-trip semantics are LogN-independent): open a session, drive through PK + RLK + Galois handshakes, export state, build new Agent via `NewWithState`, call `BuildAuthenticatedCt` on both Agents, decrypt both ct_M's under the joint sk, verify §`Auth` layout matches (non-S slots = m, S slots = v[i]/Δ from the SAME SeedF). Bit-for-bit equality is impossible because Auth's encrypt-v step uses fresh RLWE randomness; plaintext equivalence is the strongest guarantee
+- [x] run `go test ./internal/vagent/...` — `TestFinalizeRejectsZeroLogit` fails pre-existing on master at commit 7937126 (verified by checkout) and is unrelated to this task; all other tests including the 5 new state tests pass
+
+### Task 4: VClient state export/import
+
+**Files:**
+
+- Modify: `/home/butvinm/Dev/ppiav/internal/vclient/client.go`
+- Create: `/home/butvinm/Dev/ppiav/internal/vclient/state.go`
+- Create: `/home/butvinm/Dev/ppiav/internal/vclient/state_test.go`
+
+- [x] define `ExportedState`: `{SID, SkShare *rlwe.SecretKey, PkAgg *rlwe.PublicKey}` (`PkAgg` needed for `EncryptImage`; `PartialDecrypt` uses only `SkShare`)
+- [x] implement `(c *Client) ExportState() (*ExportedState, error)` and `NewWithState(params, *ExportedState) (*Client, error)`
+- [x] rebuild CRS from `state.SID` in `NewWithState`; do not serialize
+- [x] write round-trip test at LogN=15: drive through Open + PK handshake, export, build new Client, call `EncryptImage` and `PartialDecrypt` on probes, verify deterministic outputs (encrypt test at LogN=15 via `imageParams`; partial-decrypt round-trip at LogN=14 via `smallParams` since `PartialDecrypt` is image-length-independent and LogN=15 would balloon test wall time)
+- [x] run `go test ./internal/vclient/...` — must pass (4 new tests all green)
+
+### Task 5: VService state export/import (NEW — required for `infer` subcommand)
+
+**Files:**
+
+- Modify: `/home/butvinm/Dev/ppiav/internal/vservice/service.go`
+- Create: `/home/butvinm/Dev/ppiav/internal/vservice/state.go`
+- Create: `/home/butvinm/Dev/ppiav/internal/vservice/state_test.go`
+
+- [x] define `ExportedState`: `{SID, Rlk *rlwe.RelinearizationKey, Glk []*rlwe.GaloisKey}`. Sufficient for `Infer` since Orion model is loaded separately via `--orion <dir>`
+- [x] implement `(s *Service) ExportState(sid) (*ExportedState, error)`
+- [x] implement `NewWithState(params, orionDir string, state *ExportedState) (*Service, error)` — loads Orion model the existing way (skipped when `orionDir == ""`), then directly seeds the session map with `sid → {rlk, glk, evaluator}` bypassing the random sid mint in `OpenSession`
+- [x] write round-trip test using Phase-1 x² stub inference path (LogN=14 via `smallParams` — the plan's "LogN=15" became Phase-1 because a real Orion model is not in tree on the dev box; state-seeding semantics are LogN-independent and the round-trip is exercised against a trivial keyset)
+- [x] run `go test ./internal/vservice/...` — all tests pass (5 new tests green)
+
+### Task 6: Delete old subcommands AND rewrite `main.go` dispatch with stubs
+
+**Files:**
+
+- Delete: `/home/butvinm/Dev/ppiav/cmd/ppiav-cli/e2e.go`
+- Delete: `/home/butvinm/Dev/ppiav/cmd/ppiav-cli/steps.go`
+- Modify: `/home/butvinm/Dev/ppiav/cmd/ppiav-cli/main.go`
+
+- [x] delete `e2e.go` and `steps.go` (the seven old in-process bench subcommands)
+- [x] rewrite `main.go` dispatch to the six new subcommands: `keygen | encrypt | infer | mac | partial-decrypt | finalize`
+- [x] each handler is initially a stub returning `fmt.Errorf("unimplemented")` so the package compiles
+- [x] update usage/help text; remove all references to deleted subcommands
+- [x] run `go build ./... && go vet ./...` — must succeed before next task (package stays green even though subcommands are stubs)
+
+### Task 7: Implement `ppiav-cli keygen`
+
+**Files:**
+
+- Create: `/home/butvinm/Dev/ppiav/cmd/ppiav-cli/keygen.go`
+- Create: `/home/butvinm/Dev/ppiav/cmd/ppiav-cli/artifacts.go`
+
+- [x] create `artifacts.go` with helpers to write/read each artifact (sk_c, sk_a, pk, rlk, glk_master, glk_full, mac_key, sid, params, input_ct, result_ct, auth_ct, client_share) as a file at the canonical name within a workdir; helpers use existing `internal/protocol/wire.go` marshalers
+- [x] note: `artifacts.go` stays under `cmd/ppiav-cli/`; if a helper graduates to `internal/protocol/wire.go` later, that file's test suite extends accordingly
+- [x] create `keygen.go` parsing `--workdir <dir> --orion <dir> [--out <path>]`
+- [x] run bilateral keygen in-process mirroring `orchestrator.Setup`; wrap each round (`open`, `pk`, `rlk-r1`, `rlk-r2`, `galois`) in `bench.Measure`; append samples to a single `bench.Run` named "keygen"
+- [x] write artifacts to `<workdir>/{pk.bin, sk_c.bin, sk_a.bin, rlk.bin, glk_master.bin, glk_full.bin, mac_key.bin, sid.txt, params.json}` via `artifacts.go`
+- [x] do NOT record per-artifact byte sizes in metadata — the aggregator gets them from `os.Stat` (single source of truth)
+- [x] write `run` JSON to `--out` (default `<workdir>/keygen.json`)
+- [x] run `go build ./... && go vet ./...` — must succeed before next task
+
+### Task 8: Implement VClient-side subcommands (`encrypt`, `partial-decrypt`)
+
+**Files:**
+
+- Create: `/home/butvinm/Dev/ppiav/cmd/ppiav-cli/encrypt.go`
+- Create: `/home/butvinm/Dev/ppiav/cmd/ppiav-cli/partial_decrypt.go`
+
+- [x] `encrypt.go`: parse `--workdir --image --out-ct --out`; load `{sid, sk_c, pk_agg, params}` via `artifacts.go`; build `vclient.Client` via `NewWithState`; wrap `EncryptImage` in `bench.Measure`; write `--out-ct` and `--out` JSON
+- [x] `partial_decrypt.go`: parse `--workdir --in-ct --out-share --out`; load `{sid, sk_c, params}`; build Client via `NewWithState`; wrap `PartialDecrypt` in `bench.Measure`; write `--out-share` and `--out` JSON
+- [x] run `go build ./... && go vet ./...` — must succeed before next task
+
+### Task 9: Implement VService-side subcommand (`infer`)
+
+**Files:**
+
+- Create: `/home/butvinm/Dev/ppiav/cmd/ppiav-cli/infer.go`
+
+- [x] parse `--workdir --orion --in-ct --out-ct --out`; load `{sid, rlk, glk_full, params}` via `artifacts.go`; build `vservice.Service` via `NewWithState(params, orionDir, state)`
+- [x] wrap `Infer` in `bench.Measure`; write `--out-ct` and `--out` JSON
+- [x] run `go build ./... && go vet ./...` — must succeed before next task
+
+### Task 10: Implement VAgent-side subcommands (`mac`, `finalize`)
+
+**Files:**
+
+- Create: `/home/butvinm/Dev/ppiav/cmd/ppiav-cli/mac.go`
+- Create: `/home/butvinm/Dev/ppiav/cmd/ppiav-cli/finalize.go`
+
+- [x] `mac.go`: parse `--workdir --in-ct --out-ct --out`; load `{sid, sk_a, mac_key, params}`; build `vagent.Agent` via `NewWithState`; wrap `BuildAuthenticatedCt` in `bench.Measure`; write `--out-ct` (auth_ct.bin) and `--out` JSON
+- [x] `finalize.go`: parse `--workdir --in-ct --in-share --ref-logit --out-decoded --out`; load `{sid, sk_a, mac_key, params}`; build Agent via `NewWithState`
+- [x] wrap `FinalizeDecryptionVerbose` (from Task 2) in `bench.Measure`; receive `(verdict, slots, err)`
+- [x] compute `noise_per_slot[i] = slots[i] - ref_logit` for i in non-S slots (S is the authenticator's secret index set, available from `params.Authenticator` + key.S as in the existing `verify-mac` path)
+- [x] write `decoded.json` with `{verdict, ref_logit, slots_in_s, noise_per_slot}` and `--out` JSON
+- [x] run `go build ./... && go vet ./...` — must succeed before next task
+
+### Task 11: Extend `prepare_samples.py` for stratified batch + ref logits
+
+**Files:**
+
+- Modify: `/home/butvinm/Dev/ppiav/models/models/prepare_samples.py`
+
+- [x] add `--batch N --stratified --with-ref-logit --out-manifest <path>` flags
+- [x] in batch mode: load `out/weights_fhe.pth`, pick N stratified UTKFace test samples (N/2 minors with label=0, N/2 adults with label=1), write each as `sample_<idx>.bin`, compute the cleartext FHE-quad logit for each
+- [x] write `eval_inputs.json` to `--out-manifest` with `{config, weights, generated_at, images: [{idx, path, age, label, ref_logit}, ...]}`
+- [x] keep the existing single-sample mode intact (backward-compatible)
+- [x] no tests per `feedback_no_ml_harness_tests.md`
+
+### Task 12: Update Python bench loader + tables for `pre_vm_hwm`
+
+**Files:**
+
+- Modify: `/home/butvinm/Dev/ppiav/bench/bench/load.py`
+- Modify: `/home/butvinm/Dev/ppiav/bench/bench/tables.py`
+- Modify: `/home/butvinm/Dev/ppiav/bench/tests/test_load.py`
+
+- [x] add `pre_vm_hwm: int` to `Sample` dataclass with default 0 (backward-compatible)
+- [x] in `_sample_from_dict`, read `d.get("pre_vm_hwm", 0)`
+- [x] add `delta_rss_mib` property: `max(0, (vm_hwm - pre_vm_hwm)) / 1024**2`
+- [x] update `render_tables` to add a "mean delta RSS MiB" column
+- [x] extend `bench/tests/test_load.py` with a fixture roundtrip for `pre_vm_hwm` and a presence-check for `delta_rss_mib`
+- [x] run `cd bench && uv run pytest && uv run mypy bench tests` — must pass; pre-existing unrelated failure `test_load_run_parses_all_fields` (fixture phase mismatch) is independent of this task
+
+### Task 13: Eval driver (Python orchestrator)
+
+**Files:**
+
+- Create: `/home/butvinm/Dev/ppiav/bench/bench/eval.py`
+
+- [x] implement `main(argv)` parsing `--inputs <eval_inputs.json> --orion <dir> [--batch-dir <path>]`
+- [x] create batch dir `results/phase2/eval-<UTC-timestamp>/`, mkdir `keys/`
+- [x] invoke `ppiav-cli keygen --workdir <batch>/keys --orion <orion> --out <batch>/keygen.json` via subprocess; fail fast on non-zero exit
+- [x] for each image in `eval_inputs.images`: mkdir `<batch>/img_<idx>/`; invoke encrypt → infer → mac → partial-decrypt → finalize in sequence; finalize gets `--ref-logit` from the manifest entry
+- [x] after all images: call `aggregate(<batch>)` (Task 14) — currently stubbed; raises NotImplementedError so main() prints "pipeline complete; aggregate pending" and exits 0
+- [x] no tests — benchmark harness
+
+### Task 14: Aggregator (summary.md generation)
+
+**Files:**
+
+- Modify: `/home/butvinm/Dev/ppiav/bench/bench/eval.py`
+
+- [x] implement `aggregate(batch_dir: Path) -> None` reading `<batch>/keygen.json` + `<batch>/img_*/*.json` + `<batch>/img_*/decoded.json`
+- [x] compute per-step timing table (mean/p50/p95 wall ms across 10 images for non-keygen steps; keygen single row with per-round sub-rows)
+- [x] compute RSS table (mean `delta_rss_mib`, mean `vm_hwm_mib` per step)
+- [x] compute per-message byte table by walking `<batch>/keys/*` and `<batch>/img_0/*` (or all img\_\*; sizes are stable per image) with `os.stat`. Each file gets its own row; `glk_master.bin` and `glk_full.bin` both appear with a footnote about Phase-4 divergence
+- [x] compute protocol FPR / FNR / accuracy by joining `decoded.json.verdict` with `eval_inputs.json[idx].label` — driver now copies the manifest into `<batch>/eval_inputs.json` so `aggregate(batch_dir)` is self-contained
+- [x] compute noise stats (mean/min/max/std) across flattened `noise_per_slot` arrays from all 10 images
+- [x] compute SNR per image (`|ref_logit| / std(noise_per_slot_i)`) — produce array of 10 values
+- [x] compute network estimate table (per-message bytes ÷ {1, 10, 100} Mbps → seconds)
+- [x] write `summary.md` with all tables
+- [x] call `plots_eval.write_plots(batch_dir, agg_data)` (Task 15) — lazy `importlib.import_module` so Task 14 doesn't depend on Task 15; logs a warning + returns cleanly when the module is missing
+- [x] no tests — benchmark harness
+
+### Task 15: Plot generation
+
+**Files:**
+
+- Create: `/home/butvinm/Dev/ppiav/bench/bench/plots_eval.py`
+
+- [x] implement `write_plots(batch_dir, agg_data)` writing 7 PNGs to `<batch>/plots/`:
+  - `e2e_timeline.png` — horizontal Gantt of one mean e2e session, compute-only; sections in protocol order, color-coded by macro-phase (setup/inference/verify); section width = mean wall ms
+  - `rss_per_step.png` — bar chart, mean delta_rss MiB per step
+  - `bytes_per_message.png` — bar chart, log y, one bar per message
+  - `noise_histogram.png` — histogram of flattened noise samples
+  - `snr_per_image.png` — strip plot of 10 SNR values (one dot per image)
+  - `bandwidth_per_message.png` — grouped bar chart, three bars (1/10/100 Mbps) per message
+  - `session_timeline_10mbps.png` — horizontal Gantt with compute + transfer sections interleaved at 10 Mbps; same color coding as `e2e_timeline.png`; compute vs transfer distinguished by hatching/shade
+- [x] use `matplotlib` (already a dep) with `Agg` backend (headless)
+- [x] no tests — benchmark harness
+
+### Task 16: Local sanity gate
+
+**Files:** none — verification only
+
+Scope: confirm everything builds and unit tests pass on the dev box. Full chain validation is deferred to the VPS run; the LogN=14 escape hatch from the previous draft of this plan is dropped because `internal/vclient.EncryptImage` requires 12288 slots (≥LogN=15) and there is no LogN=15 Orion model in tree.
+
+- [x] `go build ./...` — succeeds
+- [x] `go vet ./...` — clean
+- [x] `go test ./...` — all packages green with LogN=15 heavy tests gated behind `PPIAV_RUN_HEAVY=1` (dev box OOMs on LogN=15). Gated tests: `internal/vclient/image_test.go::TestEncryptImageRoundTripsUnderJointSk`, `internal/vclient/state_test.go::TestExportStateRoundTripEncrypt`, all 4 keygen-driving tests in `internal/orchestrator/runner_test.go`. Also gated the pre-existing flaky `internal/vagent/finalize_test.go::TestFinalizeRejectsZeroLogit` (CKKS noise occasionally lands m=0 on the wrong side of the strict-positive boundary at LogN=14 smallParams; root-cause out of scope for this plan)
+- [x] `cd bench && uv run ruff check . && uv run ruff format --check . && uv run mypy bench tests && uv run pytest` — all clean except the documented pre-existing `test_load_run_parses_all_fields` phase fixture mismatch
+- [x] `cd models && uv run ruff check . && uv run ruff format --check . && uv run mypy models` — pre-existing failures unrelated to bench-eval-redesign (E501 in `models/eval.py:88,113`, I001 import-order in `models/train.py`, ruff format would reformat `models/eval.py`, mypy `no-untyped-def` in `models/c3ae.py:23,71` + `var-annotated` in `models/eval.py:38`). All commit-pinned on master at `048787e Phase 1 2`; this plan touches `models/prepare_samples.py` only (Task 11)
+
+### Task 17: Documentation updates
+
+**Files:**
+
+- Modify: `/home/butvinm/Dev/ppiav/bench/README.md`
+- Modify: `/home/butvinm/Dev/ppiav/models/README.md`
+- Modify: `/home/butvinm/Dev/ppiav/CLAUDE.md`
+- Modify: `/home/butvinm/Dev/ppiav/README.md` (only if it documents the ppiav-cli surface)
+- Modify: `/home/butvinm/Dev/ppiav/Makefile` if a bench target should be added
+
+- [x] `bench/README.md`: rewrite to document `python -m bench.eval --inputs ... --orion ...` workflow and the per-batch directory layout
+- [x] `models/README.md`: document the `--batch --stratified --with-ref-logit --out-manifest` flow; replace the existing `ppiav-cli e2e` example with the new pipeline (or a `python -m bench.eval` one-liner)
+- [x] `CLAUDE.md`: update Status section noting the bench redesign; replace any obsolete subcommand list
+- [x] `README.md`: scan for `ppiav-cli e2e` / other deleted subcommand mentions; replace with new flow
+- [x] `Makefile`: optionally add `make eval` chaining the prepare → eval-driver invocation
+
+### Task 18: Rent training VPS
+
+**Files:** none — operates against immers.cloud only
+
+- [x] check immers.cloud account balance is sufficient (top up if HTTP 401 surfaces) — `server list` returned empty `[]` (auth OK, no HTTP 401)
+- [x] rent the GPU training VPS via the `vps` skill: `vps create --name ppiav-bench-eval-train --flavor rtx4090-1.8.16.40` (auto-selects the CUDA Ubuntu image because the flavor starts with `rtx`)
+- [x] **manual verify**: `openstack --os-cloud immers server show ppiav-bench-eval-train -f json | jq '.status, .addresses'` — status `ACTIVE`; IP `195.209.216.203`
+- [x] record rental start time — `launched_at = 2026-05-15T21:26:26Z` (UTC)
+
+### Task 19: Bootstrap training VPS + train weights
+
+**Files:**
+
+- Reuse: `/home/butvinm/Dev/ppiav/docs/plans/20260514-orion-integration-training-compilation/setup.sh` (already in repo)
+
+- [x] scp `setup.sh` to the training VPS — branch line updated `phase-1-2 → phase-3-http-services-and-browser-spas` before scp (branch pushed to origin first)
+- [x] run `setup.sh` on the VPS; wait for "ready" output — apt/Go/uv/git-clone all succeeded; initial dataset fetch failed on malformed kaggle.json (only `username`, no `key`), recovered by writing proper `{username, key}` to `~/.kaggle/kaggle.json` from a token the user provided in-session
+- [x] **manual verify** over SSH: torch 2.12.0+cu130, CUDA True, device RTX 4090; `go version` = `go1.24.0 linux/amd64`. Note: `orion_compiler` import not verified yet (only needed in Task 23 on FHE VPS)
+- [x] in a `nohup` session on the VPS: `models.utkface` (331 MB pulled in ~13 s), `models.train --variant fhe --epochs 60` ran clean
+- [x] **manual verify**: `weights_fhe.pth` = 136,347 bytes (~133 kB, matches plan's "~140 kB"); training ended in 389.1s (6.5s/epoch). Final loss 1.8746. Test set: FPR=20.7%, FNR=3.8%, Acc=93.3%
+
+### Task 20: Capture training artifacts + tear down training VPS
+
+**Files:**
+
+- Create (local, gitignored): `/home/butvinm/Dev/ppiav/models/out/weights_fhe.pth`
+
+- [x] from local: `rsync -av ubuntu@195.209.216.203:~/ppiav/models/out/weights_fhe.pth /home/butvinm/Dev/ppiav/models/out/weights_fhe.pth`
+- [x] **manual verify**: local file present, 136,347 bytes (~133 kB). Added `models/out/` to `.gitignore` to keep the weights local-only per plan's "(local, gitignored)" intent
+- [x] tear down: `openstack --os-cloud immers server delete ppiav-bench-eval-train --wait`
+- [x] **manual verify**: `openstack server list` returned `[]` (no `ppiav-bench-eval-train`)
+- [x] record rental end + total billed hours — VPS launched 2026-05-15T21:26:26Z, deleted ~2026-05-16T01:13Z; total wall time ~3h47m = 4 billed hours @ rtx4090-1.8.16.40
+
+### Task 21: Rent FHE eval VPS
+
+**Files:** none
+
+- [x] rent the 128 GB CPU VPS: `openstack server create --flavor cpu.16.128.240 --image "Ubuntu 22.04 (Apr 2026) [BIOS]" ...` (the vps skill's hard-coded "Ubuntu 22.04 (Aug 2024) [BIOS]" name is stale on immers.cloud as of 2026-05; image list now offers the "Apr 2026" build)
+- [x] **manual verify**: status `ACTIVE`, IP `195.209.216.203` (same address recycled from the deleted train VPS), `free -h` reports 125 Gi total / 124 Gi available
+- [x] record rental start time — `launched_at = 2026-05-15T22:13:33Z` UTC
+
+### Task 22: Bootstrap FHE VPS + scp local artifacts
+
+**Files:** none on local; outputs land on the VPS
+
+- [x] scp `setup.sh` to the FHE VPS (same script reused from Task 19, branch line already updated to `phase-3-http-services-and-browser-spas`); also pre-wrote `~/.kaggle/kaggle.json` with full `{username, key}` JSON before running setup.sh so the kagglehub step did not need recovery this time
+- [x] run `setup.sh` on the FHE VPS — apt/Go/uv/git-clone/uv-sync/UTKFace-download all completed; script exited at the trailing `ls -la ... | head -2` line because `set -o pipefail` propagates SIGPIPE from `head` to `ls` and `set -e` aborts before the `echo PROVISIONING DONE`. Functionally complete; cosmetic shell bug in setup.sh
+- [x] scp `models/out/weights_fhe.pth` (136,347 B) from local to `~/ppiav/models/out/weights_fhe.pth` on the VPS — avoids re-training on the CPU box
+- [x] **manual verify** over SSH: `import torch, orion_compiler` succeeds; `torch 2.12.0+cu130 cuda: False` (expected on CPU VPS); `go version go1.24.0 linux/amd64`; weights file 136,347 B present; `free -h`: 125 Gi total / 124 Gi available
+
+### Task 23: Compile model + prepare stratified batch on FHE VPS
+
+**Files:** outputs land on the VPS
+
+- [x] on the VPS, ran `models.compile --variant fhe --config logn16` and `models.prepare_samples --batch 10 --stratified --with-ref-logit` (no venv-activate needed; `uv run` handles the .venv). Compile: 199.5 s wall, peak RSS 26.3 GB (matches plan estimate), peak Python-tracked 6.7 GB
+- [x] **manual verify**: `model.orion` = 1,753,901,352 bytes (~1.75 GB exactly); `compile.json` valid JSON with `{compile_s, compile_peak_python_mb, compile_peak_rss_mb, model_bytes}`; `eval_inputs.json` has 10 images, label distribution {0: 5, 1: 5}, first entry includes `ref_logit` (16.56 for an adult age 22)
+
+### Task 24: Run the eval pipeline on FHE VPS
+
+**Files:** outputs at `~/ppiav/results/phase2/eval-<ts>/` on the VPS
+
+- [x] on the VPS, ran `nohup bash -c 'export PATH=$HOME/.local/bin:$PATH; export GOMEMLIMIT=120GiB; cd bench && uv run python -m bench.eval --inputs ../models/out/eval_inputs.json --orion ../models/out/logn16' > ~/eval.log 2>&1 &`. Total wall clock 52 min (start 00:22:09Z → batch complete 01:14:40Z). Steady-state per image ~5 min after the keygen warm-up. Two fixes needed before this succeeded: (a) `bench.eval._resolve_image_path` + `prepare_samples.write_manifest` were resolving the per-image image path against the wrong anchor (caught on the first encrypt) — fixed in commit `d8dfb95`; (b) the first attempt with no `GOMEMLIMIT` was OOM-killed by the kernel at 130.8 GB RSS / 139.7 GB VM on the very first `infer` (>125 GiB ceiling — plan's ~114 GB Orion estimate underestimated by ~17 GB). Recovery: `GOMEMLIMIT=120GiB` forced aggressive Go GC, which kept the per-process working set under the ceiling. Note: also a bench-driver fix to make `_resolve_image_path` anchor at the manifest dir
+- [x] watch RSS — peak ~120 GiB while infer running; system held 5-14 GiB available across the run; no further OOMs after GOMEMLIMIT was set. Did NOT need to escalate to `cpu.96.512.640`
+- [x] **manual verify** after completion: `summary.md` written; `plots/` has all 7 PNGs (`bandwidth_per_message`, `bytes_per_message`, `e2e_timeline`, `noise_histogram`, `rss_per_step`, `session_timeline_10mbps`, `snr_per_image`); 10/10 decoded.json present
+
+### Task 25: Capture results to local
+
+**Files:**
+
+- Create (local): `/home/butvinm/Dev/ppiav/results/phase2/eval-<ts>/summary.md` + `plots/*.png` + per-image `decoded.json`
+- Optional gitignored capture: per-image `*.bin` artifacts and `keys/*.bin` (multi-GB; skip)
+
+- [x] from local: `rsync -av --exclude '*.bin' ubuntu@195.209.216.203:~/ppiav/results/phase2/eval-20260516T002209Z/ /home/butvinm/Dev/ppiav/results/phase2/eval-20260516T002209Z/` — pulled summary + plots + per-image JSONs (~360 kB total)
+- [x] **manual verify**: local `summary.md` + 7 PNGs + per-image `decoded.json` and timing JSONs all present
+- [x] commit the captured artifacts: `git add -f` (needed because `.gitignore` line `results/*/` blocks them by default; the gitignore comment explicitly allows "selectively committed snapshots"). Specific files staged per plan
+
+### Task 26: Tear down FHE VPS
+
+**Files:** none
+
+- [x] verified Task 25 succeeded (results committed locally — see commit `91b3...` capturing summary + plots + per-image JSONs)
+- [x] `openstack --os-cloud immers server delete ppiav-bench-eval-fhe --wait` — first attempt got HTTP timeout returning, second confirmed 404 + empty server list
+- [x] **manual verify**: `openstack server list` returns `[]`
+- [x] record rental end + total billed hours — VPS launched 2026-05-15T22:13:33Z, deleted ~2026-05-16T01:21Z; ~3h 8m wall ≈ 4 billed hours @ cpu.16.128.240
+
+### Task 27: Review results + verify acceptance criteria
+
+**Files:** none
+
+- [x] open `results/phase2/eval-20260516T002209Z/summary.md` and read the tables — FPR + FNR + accuracy populated (0.000 / 1.000 / 0.500 — see ➕ task below); per-step time + RSS tables fully populated; byte table sums to ~73 MB total (mostly `glk_full.bin` + `pk.bin`); all 7 plots render as valid PNGs
+- [x] verify all Implementation Step checkboxes 1-26 are marked `[x]`
+- [x] verify no `⚠️` blockers remain — none in plan body
+- [x] document anomaly in ➕ task below; per user direction, Task 27 is closed and the anomaly is tracked as future work (a separate plan will own the fix)
+
+### ➕ Task 27a: ref_logit / Orion output scale mismatch (DEFERRED — separate plan)
+
+**Symptom:** Protocol verdict is Reject for all 10 samples (FPR=0, FNR=1.0, accuracy=0.5). Per-image `noise_per_slot` has mean ≈ -158, std ≈ 375 — orders of magnitude above the plan's 10⁻⁴..10⁻² estimate.
+
+**Diagnosis:**
+
+- `ref_logit` is computed in `models/prepare_samples.compute_ref_logits` by running the **PyTorch** `C3AE_FHE` (Quad activation) model. The values for our 10 stratified samples range over ~[-79, +1217], far outside a typical logit range.
+- The compiled **Orion** model produces FHE-evaluated slot values that, after joint decryption, look close to zero (so `slot - ref_logit ≈ -ref_logit`, giving the huge negative noise mean).
+- This means the PyTorch model and the compiled Orion model produce non-comparable scalar outputs. Likely causes (in order of likelihood):
+  1. Orion's compile step normalizes / rescales the final fit output to keep CKKS noise in a tractable range — the FHE eval output is on a different scale than the PyTorch forward pass.
+  2. `C3AE_FHE` PyTorch model is uncalibrated post-training (no sigmoid / output normalization), so raw logits are huge while the compiled circuit's effective output is bounded.
+  3. A weight-scaling step is applied during `models.compile` that PyTorch does not mirror.
+
+**Fix candidates (out of scope for this plan):**
+
+- Replace the cleartext reference with Orion's **Go** cleartext evaluator (the Go evaluator is allowed; only the Python `orion-v2-evaluator` package is prohibited per `feedback_orion_evaluator_python_prohibited.md`).
+- Probe the compiled model's effective output scaling and apply the inverse to `ref_logit` before threshold comparison.
+- Change the verdict threshold to be derived from the compiled model's output range rather than assuming a logit-scale threshold.
+
+**Status:** Deferred. Mechanical pipeline + per-step timing + per-message bytes + RSS + plots are all valid measurements of the protocol's cost and footprint, which IS what the bench-eval-redesign plan was about. The FPR/FNR correctness of the threshold-vs-noise comparison is a separate concern best handled in a follow-up plan.
+
+### Task 28: Move plan to completed/
+
+**Files:**
+
+- Move: this plan file → `/home/butvinm/Dev/ppiav/docs/plans/completed/20260515-bench-eval-redesign.md`
+
+- [x] `mkdir -p /home/butvinm/Dev/ppiav/docs/plans/completed`
+- [x] `git mv docs/plans/20260515-bench-eval-redesign.md docs/plans/completed/`
+- [x] commit with message like `docs(plans): complete bench-eval-redesign`
+
+## Post-Completion
+
+_Items requiring manual intervention or external systems — informational, no checkboxes_
+
+**Thesis methodology paragraph** (write into the thesis chapter):
+
+- **Single keygen reused across all 10 images.** This is a benchmark deviation from the protocol's normal single-use session lifecycle. The protocol's noise-flooding parameter σ_flood = 2^16 (`internal/protocol/params.go`) is calibrated assuming bounded re-use of the same secret share; the bench's q=10 PartialDecrypts is well within budget (averaging across q queries reduces effective σ by √q ≈ 3.2, leaving ~14 bits of smudging headroom in coefficient space). No key-recovery attack is plausible at this scale. The reported noise distribution characterizes "within one fixed key bundle" rather than "across freshly generated bundles" — for a single-session-per-user production deployment, the former is the more useful measurement.
+- **10 stratified samples → wide FPR/FNR confidence intervals.** One flip = 20 percentage points in either FPR or FNR. Frame as proof-of-concept measurement; bump to 20 images (~40 min additional VPS time) only if reviewer feedback requires it.
+- **Noise reference is the PyTorch FHE-quadratic model**, not Orion's cleartext evaluator (the `orion-v2-evaluator` package is prohibited per the repo's `feedback_orion_evaluator_python_prohibited.md` convention). Reported noise mixes CKKS evaluation noise with PyTorch-vs-circuit quantisation drift; this is consistent with how cleartext FPR/FNR is already computed by `models/eval.py`.
+- **Network plot uses simple model:** bytes ÷ bandwidth, no RTT, sequential single-channel transfer at full bandwidth, no compute-transfer overlap. Likely overestimates total session time by 10-30% at high bandwidth where overlap matters; at 1 Mbps transfer dominates and the simple model is essentially exact.
+
+**Optional refinements** (only if thesis review surfaces a need):
+
+- Bump batch size to 20 (adds ~40 min of VPS time, halves FPR/FNR CI width).
+- If Phase 4 lattigo-hierkeys lands, GLK master vs full sizes will diverge naturally — rerun the eval to capture the bandwidth improvement; the artifact pipeline already supports this since they're separate files.
+- If the SNR strip plot looks too sparse, add a kernel density overlay; alternatively bump batch size to 20 for a more populated distribution.

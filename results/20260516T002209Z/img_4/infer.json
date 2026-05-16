@@ -1,0 +1,32 @@
+{
+  "name": "infer",
+  "phase": "phase2",
+  "started": "2026-05-16T00:45:41.399138067Z",
+  "go_version": "go1.26.1",
+  "goos": "linux",
+  "goarch": "amd64",
+  "num_cpu": 16,
+  "metadata": {
+    "in_ct": "/home/ubuntu/ppiav/results/phase2/eval-20260516T002209Z/img_4/input_ct.bin",
+    "orion_dir": "/home/ubuntu/ppiav/models/out/logn16",
+    "out_ct": "/home/ubuntu/ppiav/results/phase2/eval-20260516T002209Z/img_4/result_ct.bin",
+    "sid": "f4a8bb1a9044ee5d88fc5173c4a1f202",
+    "workdir": "/home/ubuntu/ppiav/results/phase2/eval-20260516T002209Z/keys"
+  },
+  "samples": [
+    {
+      "name": "infer",
+      "iter": 0,
+      "wall": 244716781583,
+      "heap_alloc": 40025062952,
+      "heap_inuse": 40308613120,
+      "sys": 124117790120,
+      "alloc_delta": 301554419936,
+      "num_gc": 7,
+      "pause_ns": 1075476,
+      "pre_vm_hwm": 46531706880,
+      "vm_hwm": 124086644736,
+      "bytes": 0
+    }
+  ]
+}

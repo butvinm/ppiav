@@ -1,0 +1,33 @@
+{
+  "name": "finalize",
+  "phase": "phase2",
+  "started": "2026-05-16T00:30:48.046278066Z",
+  "go_version": "go1.26.1",
+  "goos": "linux",
+  "goarch": "amd64",
+  "num_cpu": 16,
+  "metadata": {
+    "in_ct": "/home/ubuntu/ppiav/results/phase2/eval-20260516T002209Z/img_0/auth_ct.bin",
+    "in_share": "/home/ubuntu/ppiav/results/phase2/eval-20260516T002209Z/img_0/client_share.bin",
+    "out_decoded": "/home/ubuntu/ppiav/results/phase2/eval-20260516T002209Z/img_0/decoded.json",
+    "ref_logit": 16.56282615661621,
+    "sid": "f4a8bb1a9044ee5d88fc5173c4a1f202",
+    "workdir": "/home/ubuntu/ppiav/results/phase2/eval-20260516T002209Z/keys"
+  },
+  "samples": [
+    {
+      "name": "finalize",
+      "iter": 0,
+      "wall": 7922096,
+      "heap_alloc": 73988592,
+      "heap_inuse": 74637312,
+      "sys": 89704728,
+      "alloc_delta": 32272512,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "pre_vm_hwm": 82857984,
+      "vm_hwm": 83398656,
+      "bytes": 0
+    }
+  ]
+}

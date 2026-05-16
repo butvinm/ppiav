@@ -1,0 +1,28 @@
+# VAgent — protocol mediator + VClient SPA host.
+# Embeds web/vclient (HTML + TS dist + wasm_exec.js) and web/ppiav (ppiav.wasm)
+# via //go:embed, so those assets must exist before `go build`. We build them
+# in-stage with Node.js (TS) and Go's js/wasm cross compiler (WASM blob).
+
+FROM golang:1.26-alpine AS builder
+RUN apk add --no-cache nodejs npm make
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY internal/ ./internal/
+COPY cmd/ppiav-vagent/ ./cmd/ppiav-vagent/
+COPY web/ ./web/
+COPY Makefile ./
+
+# Build TS bundles + WASM blob + wasm_exec.js shim before linking the binary.
+RUN make wasm spas
+
+RUN CGO_ENABLED=0 go build -o /out/vagent ./cmd/ppiav-vagent
+
+FROM alpine:latest
+RUN apk add --no-cache ca-certificates
+COPY --from=builder /out/vagent /usr/local/bin/vagent
+EXPOSE 8081
+ENTRYPOINT ["/usr/local/bin/vagent"]
+CMD ["--addr", ":8081"]

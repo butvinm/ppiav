@@ -23,26 +23,33 @@ import (
 const sidEntropyBytes = 16
 
 // sessionState carries per-session evaluator handles. Exactly one of
-// `eval` (Phase-1 x² path) or `orionEval` (Phase-2 Orion path) is non-nil
+// `eval` (synthetic-x² path) or `orionEval` (Orion path) is non-nil
 // after `StoreEvalKeys`; which one is decided by whether the parent
 // `Service` was built with `New` or `NewWithOrion`.
 //
 // `*ckks.Evaluator` is concurrency-safe (Lattigo v6.2.0). The Orion
 // `*evaluator.Evaluator` is NOT goroutine-safe (Orion doc.go); each
 // session therefore owns its own instance.
+//
+// `rlk` and `glk` are stashed by StoreEvalKeys so ExportState can hand
+// them back to the bench `infer` subprocess. The HTTP path doesn't read
+// them — only the evaluator built from the merged key set is consulted
+// at Infer time.
 type sessionState struct {
 	eval      *ckks.Evaluator
 	orionEval *orioneval.Evaluator
+	rlk       *rlwe.RelinearizationKey
+	glk       []*rlwe.GaloisKey
 }
 
 // Service is the FHE inference engine. The evaluator for each session is
 // built lazily by StoreEvalKeys; OpenSession only reserves the slot.
 //
-// When `orionModel` is non-nil the Service runs in Phase-2 mode: each
+// When `orionModel` is non-nil the Service runs in Orion mode: each
 // session builds an `orioneval.Evaluator` from its aggregated rlk+gks and
 // `Infer` calls `Forward` on the shared (goroutine-safe) Model. Otherwise
-// the Service runs the Phase-1 synthetic `x²` circuit against the
-// session's `*ckks.Evaluator`.
+// the Service runs the synthetic `x²` circuit against the session's
+// `*ckks.Evaluator`.
 type Service struct {
 	params     protocol.Params
 	orionModel *orioneval.Model
@@ -50,7 +57,7 @@ type Service struct {
 	mu         sync.Mutex
 }
 
-// New constructs a Phase-1 Service that runs the synthetic `x²` circuit.
+// New constructs a Service that runs the synthetic `x²` circuit.
 // The session map starts empty. Panics on a zero-valued `params.CKKS`
 // (LogN == 0) — misconfiguration should fail close to the bug rather
 // than at the first session.
@@ -64,7 +71,7 @@ func New(params protocol.Params) *Service {
 	}
 }
 
-// NewWithOrion constructs a Phase-2 Service that runs the compiled Orion
+// NewWithOrion constructs a Service that runs the compiled Orion
 // circuit at `<orionDir>/model.orion`. The model is loaded once at
 // construction; the returned Service overrides `params.CKKS` and
 // `params.InputLevel` with the model's `ClientParams()` so callers
@@ -124,8 +131,8 @@ func (s *Service) OpenSession() (protocol.SessionID, error) {
 }
 
 // StoreEvalKeys builds the session's *ckks.Evaluator from the aggregated
-// relinearization key and the per-rotation Galois keys. Phase 4 will
-// swap `gks` for a lattigo-hierkeys master key.
+// relinearization key and the per-rotation Galois keys. lattigo-hierkeys
+// integration will swap `gks` for a master key.
 //
 // The signature uses `[]*rlwe.GaloisKey` (not `*rlwe.GaloisKeySet`)
 // because Lattigo v6.2.0 does not expose a `GaloisKeySet` type — the
@@ -140,11 +147,13 @@ func (s *Service) StoreEvalKeys(
 	defer s.mu.Unlock()
 	sess, ok := s.sessions[sid]
 	if !ok {
-		return fmt.Errorf("vservice: unknown session id %q", sid)
+		return fmt.Errorf("%w: %q", ErrUnknownSession, sid)
 	}
 	evk := rlwe.NewMemEvaluationKeySet(rlk, gks...)
+	sess.rlk = rlk
+	sess.glk = gks
 	if s.orionModel != nil {
-		// Phase-2 path: per-session Orion Evaluator. The model is shared.
+		// Orion path: per-session Orion Evaluator. The model is shared.
 		// C3AE does not bootstrap, so btpKeys is nil.
 		oe, err := orioneval.NewEvaluatorFromKeySet(s.params.CKKS, evk, nil)
 		if err != nil {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/butvinm/ppiav/internal/authenticator"
 	"github.com/butvinm/ppiav/internal/protocol"
+	"github.com/butvinm/ppiav/internal/testutil"
 	"github.com/butvinm/ppiav/internal/vclient"
 	"github.com/butvinm/ppiav/internal/vservice"
 	"github.com/stretchr/testify/assert"
@@ -53,6 +54,7 @@ func sampleImage(v float64) []float64 {
 }
 
 func TestRunnerHappyPathAccept(t *testing.T) {
+	testutil.RequireHeavy(t, "LogN=15 orchestrator runner")
 	params := testParams(t)
 	r, err := NewRunner(params)
 	require.NoError(t, err)
@@ -122,6 +124,7 @@ func (n *negatingInferrer) Infer(sid protocol.SessionID, in *rlwe.Ciphertext) (*
 }
 
 func TestRunnerRejectsNegativeLogit(t *testing.T) {
+	testutil.RequireHeavy(t, "LogN=15 orchestrator runner")
 	params := testParams(t)
 	// LogN=15 with LogQ=[55,40,40] gives only 3 modulus levels — x²
 	// consumes 1 level and the negation consumes another. The
@@ -168,6 +171,7 @@ func TestRunnerF4bDenyByDefault(t *testing.T) {
 	// session that never reached a verdict callback must return
 	// VerdictUnknown, which the resource layer renders as 403. We pin the
 	// contract here by opening + setting up but skipping Infer/Verify.
+	testutil.RequireHeavy(t, "LogN=15 orchestrator runner")
 	params := testParams(t)
 	r, err := NewRunner(params)
 	require.NoError(t, err)
@@ -180,29 +184,48 @@ func TestRunnerF4bDenyByDefault(t *testing.T) {
 		"deny-by-default: no verdict delivered → CheckAccess returns Unknown")
 }
 
-func TestRunnerEnforcesStageOrdering(t *testing.T) {
+// TestRunnerEnforcesStageOrderingPreSetup covers the ordering invariants
+// that fire before any keygen happens — these are pure cursor checks and
+// stay ungated so default `go test ./...` catches regressions in the
+// stage-machine without needing the heavy Setup path. The matching
+// post-Setup invariant (Verify after Setup but before Infer) lives in
+// TestRunnerEnforcesStageOrderingPostSetup, gated behind PPIAV_RUN_HEAVY.
+func TestRunnerEnforcesStageOrderingPreSetup(t *testing.T) {
 	params := testParams(t)
 	r, err := NewRunner(params)
 	require.NoError(t, err)
 
-	// Verify before Setup must error.
+	// Verify before Open must error (cursor == init).
 	_, err = r.Verify(&rlwe.Ciphertext{})
 	require.Error(t, err, "Verify before Open must error")
 
-	// Infer before Setup must error.
+	// Infer before Open must error (cursor == init).
 	_, err = r.Infer(sampleImage(0.5))
 	require.Error(t, err, "Infer before Open must error")
 
-	// Setup before Open must error.
+	// Setup before Open must error (cursor == init).
 	require.Error(t, r.Setup(), "Setup before Open must error")
 
-	// Open then Verify (skipping Setup + Infer) must error.
+	// Open then Verify (skipping Setup + Infer) must error. Open is
+	// cheap (one sk_c keygen), so this stays ungated.
 	_, err = r.Open()
 	require.NoError(t, err)
 	_, err = r.Verify(&rlwe.Ciphertext{})
 	require.Error(t, err, "Verify after Open but before Setup+Infer must error")
+}
 
-	// Open + Setup then Verify (skipping Infer) must error.
+func TestRunnerEnforcesStageOrderingPostSetup(t *testing.T) {
+	// Setup runs the full collaborative keygen (PK + RLK rounds + Galois)
+	// at LogN=15, which OOMs modest dev boxes — gate behind
+	// PPIAV_RUN_HEAVY. The cheap pre-Setup invariants live in
+	// TestRunnerEnforcesStageOrderingPreSetup and run by default.
+	testutil.RequireHeavy(t, "LogN=15 orchestrator runner")
+	params := testParams(t)
+	r, err := NewRunner(params)
+	require.NoError(t, err)
+
+	_, err = r.Open()
+	require.NoError(t, err)
 	require.NoError(t, r.Setup())
 	_, err = r.Verify(&rlwe.Ciphertext{})
 	require.Error(t, err, "Verify after Setup but before Infer must error")

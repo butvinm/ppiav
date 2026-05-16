@@ -49,8 +49,11 @@ type sessionState struct {
 	encryptor *rlwe.Encryptor
 
 	// Populated by AggregateGaloisShares — VAgent needs the eval to run
-	// Auth's rotation+sum.
+	// Auth's rotation+sum. `gks` is stashed so ExportState can hand the
+	// full galois set to the bench `mac` / `finalize` subprocesses; the
+	// in-process HTTP path doesn't read it back (the evaluator is enough).
 	rlkAgg *rlwe.RelinearizationKey
+	gks    []*rlwe.GaloisKey
 	eval   *ckks.Evaluator
 
 	// PK protocol stash (between GenPKShare and AggregatePK).
@@ -72,6 +75,22 @@ type sessionState struct {
 	galCRPs   []multiparty.GaloisKeyGenCRP
 	galShares []multiparty.GaloisKeyGenShare
 	galLabels []int
+
+	// authResult is the Stage-3 → Stage-4a hand-off: capacity-1 buffered so
+	// the image POST handler can deposit ct_M before the SSE receiver opens
+	// without blocking (and without bookkeeping for the pre-arrival race).
+	// Receivers must use `select { case <-authResult: ...; case <-ctx.Done(): }`
+	// to remain cancellable on browser disconnect — `sync.Cond.Wait` would
+	// not. See docs/DESIGN.md line 175 (open SSE before image POST).
+	authResult chan *rlwe.Ciphertext
+
+	// authenticatedCt caches the ct_M produced by BuildAuthenticatedCt so
+	// the Stage-4a partial-decryption handler can pass it to
+	// FinalizeDecryption without re-deriving it. The HTTP layer needs this
+	// because the SSE channel is single-receive (the browser consumed it);
+	// FinalizeDecryption's signature requires the ciphertext as input.
+	// Populated by handleImage in http.go, consumed by handlePartialDecrypt.
+	authenticatedCt *rlwe.Ciphertext
 }
 
 // Agent holds VAgent's protocol-wide state. The Authenticator is built
@@ -128,11 +147,54 @@ func (a *Agent) OpenSession(sid protocol.SessionID) error {
 		return fmt.Errorf("vagent: session %q already open", sid)
 	}
 	a.sessions[sid] = &sessionState{
-		crs:     crs,
-		skShare: skShare,
-		authKey: authKey,
+		crs:        crs,
+		skShare:    skShare,
+		authKey:    authKey,
+		authResult: make(chan *rlwe.Ciphertext, 1),
 	}
 	return nil
+}
+
+// SessionAuthResult exposes the per-session authResult channel for the SSE
+// handler in http.go. Returns (nil, false) if the sid is unknown.
+// Package-internal: http.go and tests are the only callers.
+func (a *Agent) SessionAuthResult(sid protocol.SessionID) (chan *rlwe.Ciphertext, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	sess, ok := a.sessions[sid]
+	if !ok {
+		return nil, false
+	}
+	return sess.authResult, true
+}
+
+// storeAuthenticatedCt caches ct_M so the partial-decryption handler can
+// retrieve it. Returns false if the sid is unknown (the caller maps that
+// to a 404 with no callback per docs/DESIGN.md §`Failure modes`).
+func (a *Agent) storeAuthenticatedCt(sid protocol.SessionID, ct *rlwe.Ciphertext) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	sess, ok := a.sessions[sid]
+	if !ok {
+		return false
+	}
+	sess.authenticatedCt = ct
+	return true
+}
+
+// SessionAuthenticatedCt returns the cached ct_M for `sid`. The second
+// return is false if the sid is unknown. The ct value is nil until
+// storeAuthenticatedCt has run; callers check `ct != nil` to detect the
+// pre-image case. http.go uses this in the partial-decryption handler to
+// assemble FinalizeDecryption's input.
+func (a *Agent) SessionAuthenticatedCt(sid protocol.SessionID) (ct *rlwe.Ciphertext, ok bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	sess, exists := a.sessions[sid]
+	if !exists {
+		return nil, false
+	}
+	return sess.authenticatedCt, true
 }
 
 // session looks up a registered session under the mutex. Callers that
@@ -141,6 +203,17 @@ func (a *Agent) session(sid protocol.SessionID) (*sessionState, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.sessionLocked(sid)
+}
+
+// EvictSession removes `sid` from the sessions table. Used by the HTTP
+// layer to clean up after an unrecoverable Stage-2d failure (e.g.,
+// VService eval-keys forwarding error): the session's keygen stash is
+// already drained by AggregateGaloisShares, so retry is impossible —
+// evicting forces the client into a clean restart.
+func (a *Agent) EvictSession(sid protocol.SessionID) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.sessions, sid)
 }
 
 func (a *Agent) sessionLocked(sid protocol.SessionID) (*sessionState, error) {

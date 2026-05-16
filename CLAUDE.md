@@ -10,20 +10,35 @@ Companion thesis context lives at `~/Dev/ITMO/thesis/`.
 
 ## Status
 
-Phase 1 (multi-party CKKS + synthetic `x²` + MPD-Auth) and Phase 2 (Orion-compiled C3AE inference) complete. An in-process orchestrator (`internal/orchestrator`) drives the full §3 protocol via `cmd/ppiav-cli`, emitting per-stage benchmark JSON consumed by the Python `bench/` project. Phase 3 (HTTP services + browser SPAs) and Phase 4 (lattigo-hierkeys) are outstanding.
+Phase 1 (multi-party CKKS + synthetic `x²` + MPD-Auth), Phase 2 (Orion-compiled C3AE inference), and Phase 3 (HTTP services + browser SPAs) complete. Three Go HTTP services (`ppiav-vservice`, `ppiav-vagent`, `ppiav-rservice`) plus browser SPAs (vclient, rclient) demonstrate the protocol over a network using a WASM build of `internal/vclient`. Phase 4 (lattigo-hierkeys) is outstanding.
+
+`cmd/ppiav-cli` is now an **artifact pipeline**: six per-stage subcommands (`keygen | encrypt | infer | mac | partial-decrypt | finalize`) each load inputs from disk, run one cryptographic op, and write the resulting artifact plus a single-sample timing JSON. The old in-process `e2e` / seven step subcommands and the in-process orchestrator-driven bench harness are gone. A Python driver — `python -m bench.eval --inputs ... --orion ...` — chains the subcommands across a stratified UTKFace batch (single shared keygen) into `results/phase2/eval-<UTC-ts>/{keys/, img_<idx>/, eval_inputs.json, keygen.json, summary.md, plots/}`. Per-step peak RSS is now correct (each subcommand is a fresh process) and per-message wire bytes come straight from `os.Stat`. See `docs/plans/completed/20260515-bench-eval-redesign.md` for the design.
+
+**Subcommand `--orion` flag asymmetry**: `keygen` and `infer` need `--orion <dir>` to load the compiled-model manifest (Phase-2 only); `encrypt`, `mac`, `partial-decrypt`, and `finalize` do NOT — they reconstruct everything they need from the on-disk artifacts written by `keygen` (CKKS params + InputLevel via `params.json`, evaluation keys via `rlk.bin` + `glk_full.bin`).
+
+**`make eval` prerequisites** (the Python driver): `models/data/UTKFace/` (~331 MB) downloaded via `models/utkface.py` plus `models/out/weights_fhe.pth` produced by `models/train.py`. Neither lives in the repo; both are produced by the VPS pipeline (see `docs/plans/completed/20260514-orion-integration-training-compilation/`). The bench driver fails fast with a clear error if the manifest or weights are missing.
+
+Heavy `LogN=15` round-trip tests under `internal/` are gated behind `PPIAV_RUN_HEAVY=1` to keep `go test ./...` viable on a 38 GB dev box; CI and VPS runs export the flag.
 
 ## Implementation Phases
 
 1. **Phase 1** — done. Synthetic CKKS circuit (`x²`), in-process protocol with collaborative keygen + MPD-Auth + joint decryption, CLI + benchmark harness, no model, no Orion.
 2. **Phase 2** — done. Training and compilation are in-tree under `models/`. `orion-v2-compiler` is consumed from PyPI. Acceptance runs on a rented `cpu.16.128.240` VPS via the `vps` skill.
-3. **Phase 3** — pending. Verification Service / Verification Agent / Resource Service Go HTTP services + browser SPAs (vanilla JS + WASM, copy of Orion's `js/lattigo`).
+3. **Phase 3** — done. Verification Service / Verification Agent / Resource Service Go HTTP services + browser SPAs (vanilla JS + WASM, copy of Orion's `js/lattigo`). Run via `make phase3` then either three terminals or `cd deploy && docker compose up`.
 4. **Phase 4** — pending. lattigo-hierkeys for compressed key transmission.
 
 ## Code conventions
 
 - **Go**: simple, idiomatic, minimal comments. Comments only where the _why_ is non-obvious. No multi-paragraph docstrings.
 - **Python**: uv for environments — always activate the venv before any pip/python command. Never install deps to system Python. ruff format + lint, mypy strict.
+- **TypeScript** (Phase 3 SPAs in `web/vclient/`, `web/rclient/`, `web/ppiav/`): tsc strict, ES2022 target, DOM lib, no bundler — browsers load `dist/*.js` directly via ES module imports. Each SPA has a `package.json` declaring only `typescript` as a devDep; `web/vclient/` and `web/rclient/` build with `npm run build` (== `tsc`). `web/ppiav/` has no JS emit (the bridge ships as Go-compiled WASM) — its `npm run typecheck` runs `tsc` against the TS surface types. No emoji, no decorative comments. Type the raw `globalThis.ppiav` / `globalThis.lattigo` bridge inline in `main.ts` rather than importing wrappers — keeps the dist/main.js dependency surface to local relatives only.
 - **Atomic commits**: stage specific files (`git add path/to/file`), never `git add .`. Clear, concrete commit messages.
+
+## Build system (Phase 3)
+
+`make phase3` chains `wasm → spas → services` with explicit Make dependencies. Order matters: the Go cmd binaries (`ppiav-vservice`, `ppiav-vagent`, `ppiav-rservice`) import `web/ppiav`, `web/vclient`, `web/rclient` which `//go:embed` the compiled WASM blob and `dist/` directories, so those artifacts must exist before `go build`. On a fresh checkout `make phase3` runs `npm install && npm run build` in each SPA, copies `$(go env GOROOT)/lib/wasm/wasm_exec.js` into `web/vclient/`, builds `web/ppiav/ppiav.wasm` via `GOOS=js GOARCH=wasm go build`, then builds the three service binaries into `bin/`.
+
+URLs come in two flavors per peer: `--*-url` is the server-to-server URL (Docker DNS or localhost), `--*-public-url` is the browser-visible URL (host port-mapped or behind a proxy). When the public URL is empty it falls back to the server-to-server URL, preserving the localhost-on-one-host flow.
 
 ## Repo layout
 
