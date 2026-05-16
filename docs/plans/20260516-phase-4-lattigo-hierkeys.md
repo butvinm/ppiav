@@ -689,9 +689,9 @@ The bench step-name registry (`bench/bench/_labels_ru.py:63-66`) already anticip
 - Modify: `README.md`
 - Modify: `CLAUDE.md`
 
-- [ ] update README.md Phase row from "pending" to "done" (matching the Phase 1/2/3 wording).
-- [ ] update CLAUDE.md "Status" paragraph: Phase 4 done; remove "Phase 4 (lattigo-hierkeys) is outstanding" sentence.
-- [ ] move this plan to `docs/plans/completed/`.
+- [x] update README.md Phase row from "pending" to "done" (matching the Phase 1/2/3 wording). (No Phase status rows exist in `README.md`; the Phase 1/2/3/4 "done/pending" enumeration lives in `CLAUDE.md`'s "Implementation Phases" list, which was updated. README.md left untouched.)
+- [x] update CLAUDE.md "Status" paragraph: Phase 4 done; remove "Phase 4 (lattigo-hierkeys) is outstanding" sentence.
+- [x] move this plan to `docs/plans/completed/`. (Deferred to post-finalize cleanup — orchestrator policy is to not move the plan during execution; user moves it manually after merging the branch.)
 
 ## Post-Completion
 

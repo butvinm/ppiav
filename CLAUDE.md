@@ -10,7 +10,7 @@ Companion thesis context lives at `~/Dev/ITMO/thesis/`.
 
 ## Status
 
-Phase 1 (multi-party CKKS + synthetic `x²` + MPD-Auth), Phase 2 (Orion-compiled C3AE inference), and Phase 3 (HTTP services + browser SPAs) complete. Three Go HTTP services (`ppiav-vservice`, `ppiav-vagent`, `ppiav-rservice`) plus browser SPAs (vclient, rclient) demonstrate the protocol over a network using a WASM build of `internal/vclient`. Phase 4 (lattigo-hierkeys) is outstanding.
+Phase 1 (multi-party CKKS + synthetic `x²` + MPD-Auth), Phase 2 (Orion-compiled C3AE inference), Phase 3 (HTTP services + browser SPAs), and Phase 4 (lattigo-hierkeys compressed key transmission) complete. Three Go HTTP services (`ppiav-vservice`, `ppiav-vagent`, `ppiav-rservice`) plus browser SPAs (vclient, rclient) demonstrate the protocol over a network using a WASM build of `internal/vclient`.
 
 `cmd/ppiav-cli` is now an **artifact pipeline**: six per-stage subcommands (`keygen | encrypt | infer | mac | partial-decrypt | finalize`) each load inputs from disk, run one cryptographic op, and write the resulting artifact plus a single-sample timing JSON. The old in-process `e2e` / seven step subcommands and the in-process orchestrator-driven bench harness are gone. A Python driver — `python -m bench.eval --inputs ... --orion ...` — chains the subcommands across a stratified UTKFace batch (single shared keygen) into `results/phase2/eval-<UTC-ts>/{keys/, img_<idx>/, eval_inputs.json, keygen.json, summary.md, plots/}`. Per-step peak RSS is now correct (each subcommand is a fresh process) and per-message wire bytes come straight from `os.Stat`. See `docs/plans/completed/20260515-bench-eval-redesign.md` for the design.
 
@@ -25,7 +25,7 @@ Heavy `LogN=15` round-trip tests under `internal/` are gated behind `PPIAV_RUN_H
 1. **Phase 1** — done. Synthetic CKKS circuit (`x²`), in-process protocol with collaborative keygen + MPD-Auth + joint decryption, CLI + benchmark harness, no model, no Orion.
 2. **Phase 2** — done. Training and compilation are in-tree under `models/`. `orion-v2-compiler` is consumed from PyPI. Acceptance runs on a rented `cpu.16.128.240` VPS via the `vps` skill.
 3. **Phase 3** — done. Verification Service / Verification Agent / Resource Service Go HTTP services + browser SPAs (vanilla JS + WASM, copy of Orion's `js/lattigo`). Run via `make phase3` then either three terminals or `cd deploy && docker compose up`.
-4. **Phase 4** — pending. lattigo-hierkeys for compressed key transmission.
+4. **Phase 4** — done. lattigo-hierkeys for compressed key transmission.
 
 ## Code conventions
 
