@@ -31,8 +31,8 @@ func TestExportStateRoundTrip(t *testing.T) {
 	require.NoError(t, a.OpenSession(sid))
 	stub := newVClientStub(t, params, sid)
 
-	// Drive PK + RLK + Galois on Agent A. The returned (joint, rlk, gks)
-	// are the inputs we'll pass through ExportedState to Agent B.
+	// Drive PK + RLK + Galois on Agent A. The returned (joint, rlk,
+	// gksAuth) are the inputs we'll pass through ExportedState to Agent B.
 	joint, _, gks := runFullKeygen(t, a, sid, stub)
 
 	// Capture authKey before export so we can replay the deterministic v[i].
@@ -65,11 +65,12 @@ func TestExportStateRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, state)
 	assert.Equal(t, sid, state.SID)
-	require.NotNil(t, state.SkShare)
+	require.NotNil(t, state.SkTop)
 	require.NotNil(t, state.PkAgg)
+	require.NotNil(t, state.PkTop)
 	require.NotNil(t, state.Rlk)
-	require.NotEmpty(t, state.Gks, "ExportState must populate Gks from AggregateGaloisShares")
-	_ = gks // gks remains available for cross-reference but is no longer threaded.
+	require.NotEmpty(t, state.GksAuth, "ExportState must populate GksAuth from AggregateGaloisShares")
+	_ = gks // gksAuth remains available for cross-reference but is no longer threaded.
 
 	b, err := NewWithState(params, state)
 	require.NoError(t, err)
@@ -139,7 +140,7 @@ func TestNewWithStateRejectsInvalidInputs(t *testing.T) {
 	require.Error(t, err)
 
 	_, err = NewWithState(params, &ExportedState{SID: "x"})
-	require.Error(t, err, "missing SkShare must fail")
+	require.Error(t, err, "missing SkTop must fail")
 }
 
 // A second Agent built via NewWithState must also pass FinalizeDecryption
@@ -157,7 +158,7 @@ func TestNewWithStateSupportsFinalize(t *testing.T) {
 
 	state, err := a.ExportState(sid)
 	require.NoError(t, err)
-	require.NotEmpty(t, state.Gks, "ExportState must populate Gks")
+	require.NotEmpty(t, state.GksAuth, "ExportState must populate GksAuth")
 
 	b, err := NewWithState(params, state)
 	require.NoError(t, err)
@@ -165,7 +166,7 @@ func TestNewWithStateSupportsFinalize(t *testing.T) {
 	// Encrypt m=0.6 under pkAgg via Agent B's session encryptor.
 	sessB := agentState(t, b, sid)
 	require.NotNil(t, sessB.pkAgg)
-	require.NotNil(t, sessB.eval)
+	require.NotNil(t, sessB.authchain)
 	encoder := ckks.NewEncoder(params.CKKS)
 	values := make([]float64, params.CKKS.MaxSlots())
 	values[0] = 0.6
@@ -203,7 +204,7 @@ func runFinalizeOnAgentWithCtM(
 	require.NoError(t, err)
 	zeroSk := rlwe.NewSecretKey(params.CKKS)
 	clientShare := clientProto.AllocateShare(ctM.Level())
-	clientProto.GenShare(stub.skC, zeroSk, ctM, &clientShare)
+	clientProto.GenShare(stub.skCEval, zeroSk, ctM, &clientShare)
 	verdict, err := a.FinalizeDecryption(sid, ctM, clientShare)
 	require.NoError(t, err)
 	return verdict

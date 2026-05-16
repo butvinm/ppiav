@@ -167,7 +167,9 @@ func (r *Runner) Setup() error {
 		return fmt.Errorf("orchestrator: Setup called from stage %s, expected opened", r.cursor)
 	}
 
-	// Stage 2b — PK handshake.
+	// Stage 2b — dual PK handshake (eval + top level). Each side emits
+	// `VClientPKShare` / `VAgentPKShare{ShareEval, ShareTop}` and
+	// finalises pkEval (encryption) + pkTop (forwarded to VService).
 	clientPKShare, err := r.vclient.GenPKShare()
 	if err != nil {
 		return fmt.Errorf("orchestrator: VClient.GenPKShare: %w", err)
@@ -213,29 +215,34 @@ func (r *Runner) Setup() error {
 		return fmt.Errorf("orchestrator: VAgent.AggregateRLKRound2: %w", err)
 	}
 
-	// Stage 2d — dual atom-set Galois handshake (Phase 4). VClient emits
+	// Stage 2d — dual atom-set Galois handshake. VClient emits
 	// auth-atom shares (eval level) + infer-atom shares (top level);
-	// VAgent finalises them into raw eval-level *rlwe.GaloisKeys + a
-	// `map[int]*hierkeys.MasterKey` for the inference side. Task 6 wires
-	// the new VAgent signature; for now the vagent call site stays
-	// broken on purpose (Task 6 owns it).
+	// VAgent finalises them into raw eval-level *rlwe.GaloisKeys (used
+	// internally by Auth's chain rotator) + a `map[int]*hierkeys.MasterKey`
+	// for the inference side. The orchestrator forwards only the
+	// inference-side payload to VService — `gksAuth` stays inside VAgent.
 	clientAuthShares, clientInferShares, clientAuthLabels, clientInferLabels, err := r.vclient.GenAuthAndInferShares()
 	if err != nil {
 		return fmt.Errorf("orchestrator: VClient.GenAuthAndInferShares: %w", err)
 	}
-	_ = clientAuthShares
-	_ = clientInferShares
-	_ = clientAuthLabels
-	_ = clientInferLabels
-	if _, _, err := r.vagent.GenGaloisShares(r.sid); err != nil {
-		return fmt.Errorf("orchestrator: VAgent.GenGaloisShares: %w", err)
+	if _, _, _, _, err := r.vagent.GenAuthAndInferShares(r.sid); err != nil {
+		return fmt.Errorf("orchestrator: VAgent.GenAuthAndInferShares: %w", err)
 	}
-	rlk, gks, err := r.vagent.AggregateGaloisShares(r.sid, clientAuthShares, clientAuthLabels)
+	clientShares := protocol.VClientGaloisShares{
+		AuthAtomShares:  clientAuthShares,
+		InferAtomShares: clientInferShares,
+	}
+	rlk, _, _, err := r.vagent.AggregateGaloisShares(r.sid, clientShares, clientAuthLabels, clientInferLabels)
 	if err != nil {
 		return fmt.Errorf("orchestrator: VAgent.AggregateGaloisShares: %w", err)
 	}
 
-	if err := r.vsvc.StoreEvalKeys(r.sid, rlk, gks); err != nil {
+	// TODO(task 7): wire `pkTop` + `gksMasterInfer` through VService's
+	// `hierkeys.LevelExpansion` derivation. Until Task 7 lands the
+	// orchestrator hands an empty Galois-key slice — Phase-1-3
+	// vservice.StoreEvalKeys still has the same signature and the
+	// inference path is non-functional under Task 6.
+	if err := r.vsvc.StoreEvalKeys(r.sid, rlk, nil); err != nil {
 		return fmt.Errorf("orchestrator: VService.StoreEvalKeys: %w", err)
 	}
 

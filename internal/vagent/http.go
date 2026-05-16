@@ -287,20 +287,21 @@ func (s *Server) handlePKShare(w http.ResponseWriter, r *http.Request, sid proto
 		return
 	}
 	// GenPKShare must run before AggregatePK to set up the protocol/CRP/local
-	// share. The order mirrors orchestrator.runner's keygen sequence.
+	// shares. The order mirrors orchestrator.runner's keygen sequence.
+	// Returns the agent's dual (eval + top) PK shares directly.
 	agentShare, err := s.agent.GenPKShare(sid)
 	if err != nil {
 		httputil.WriteError(w, sidErrorStatus(err), err.Error())
 		return
 	}
-	if err := s.agent.AggregatePK(sid, client.Share); err != nil {
+	if err := s.agent.AggregatePK(sid, client); err != nil {
 		// AggregatePK fails when the wire share is semantically malformed
 		// (wrong ring, wrong degree). Still F2 per DESIGN.md §`Failure modes`:
 		// "Malformed wire input … plus Verdict = Reject. Session torn down."
 		s.rejectAndEvict(w, http.StatusBadRequest, sid, err.Error())
 		return
 	}
-	writeBinary(w, protocol.VAgentPKShare{Share: agentShare})
+	writeBinary(w, agentShare)
 }
 
 func (s *Server) handleRLKRound1(w http.ResponseWriter, r *http.Request, sid protocol.SessionID) {
@@ -380,27 +381,28 @@ func (s *Server) handleGKSShares(w http.ResponseWriter, r *http.Request, sid pro
 		s.rejectAndEvict(w, http.StatusBadRequest, sid, fmt.Sprintf("read body: %s", err))
 		return
 	}
-	var client protocol.VClientGaloisKeyShare
+	var client protocol.VClientGaloisShares
 	if err := client.UnmarshalBinary(body); err != nil {
-		s.rejectAndEvict(w, http.StatusBadRequest, sid, fmt.Sprintf("unmarshal VClientGaloisKeyShare: %s", err))
+		s.rejectAndEvict(w, http.StatusBadRequest, sid, fmt.Sprintf("unmarshal VClientGaloisShares: %s", err))
 		return
 	}
-	// GenGaloisShares draws CRPs in canonical label order; the resulting
-	// labels slice is what AggregateGaloisShares cross-checks against the
-	// client's parallel labels (both sides derive the labels from
-	// `params.RotationIndices()` so the agent slice is authoritative).
-	_, agentLabels, err := s.agent.GenGaloisShares(sid)
+	// GenAuthAndInferShares draws CRPs in canonical atom-set order; the
+	// resulting label slices are what AggregateGaloisShares cross-checks
+	// against the client's parallel labels (both sides derive the labels
+	// from `params.AuthAtoms()` / `params.InferAtoms()` so the agent
+	// slices are authoritative).
+	_, _, agentAuthLabels, agentInferLabels, err := s.agent.GenAuthAndInferShares(sid)
 	if err != nil {
 		httputil.WriteError(w, sidErrorStatus(err), err.Error())
 		return
 	}
-	rlk, gks, err := s.agent.AggregateGaloisShares(sid, client.Shares, agentLabels)
+	rlk, pkTop, gksMasterInfer, err := s.agent.AggregateGaloisShares(sid, client, agentAuthLabels, agentInferLabels)
 	if err != nil {
 		// Count-mismatch / share-shape mismatch is F2 (malformed wire input).
 		s.rejectAndEvict(w, http.StatusBadRequest, sid, err.Error())
 		return
 	}
-	keys := protocol.InferEvalKeys{RLK: rlk, GKS: gks}
+	keys := protocol.InferEvalKeys{RLK: rlk, PKTop: pkTop, GKSMasterInfer: gksMasterInfer}
 	keysBytes, err := keys.MarshalBinary()
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("marshal InferEvalKeys: %s", err))

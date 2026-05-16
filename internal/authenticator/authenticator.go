@@ -61,16 +61,29 @@ func New(cfg Config, params ckks.Parameters) (*Authenticator, error) {
 // Config returns the bundled authenticator configuration.
 func (a *Authenticator) Config() Config { return a.cfg }
 
+// Rotator is the rotation surface Auth needs from the
+// chain-rotation evaluator wrapper. `RotateNew(ct, -j)` must place
+// `ct`'s slot 0 at slot `j` (Lattigo convention); `Inner` exposes the
+// underlying `*ckks.Evaluator` for Auth's non-rotation operations (mask
+// multiply, add). `internal/authchain.Evaluator` satisfies this interface.
+type Rotator interface {
+	RotateNew(ct *rlwe.Ciphertext, j int) (*rlwe.Ciphertext, error)
+	Inner() *ckks.Evaluator
+}
+
 // Auth runs §MPD-Auth/Auth: masks slot 0 with the cached pt_one_hot,
 // rotates+sums into ct_m^Rep over [0, Lambda) \ S, encrypts v
 // deterministically from key.SeedF, adds, returns ct_M.
 //
-// Required Galois keys on `eval`: every index in [1, Lambda). Auth
-// validates this up front and errors clearly if the set is incomplete.
+// Required Galois keys on the chain rotator's inner evaluator: one per
+// auth atom `a ∈ {1, 2, 4, ..., 2^k}` (powers of two strictly less than
+// `Lambda`) at `GaloisElement(-a)`. The rotator's `RotateNew(ct, -j)`
+// internally chains `popcount(j)` atom rotations; Auth itself sees the
+// logical `-j` semantics unchanged from Phase 1-3.
 func (a *Authenticator) Auth(
 	key Key,
 	encryptor *rlwe.Encryptor,
-	eval *ckks.Evaluator,
+	rot Rotator,
 	resultCt *rlwe.Ciphertext,
 ) (*rlwe.Ciphertext, error) {
 	if err := a.cfg.validate(); err != nil {
@@ -79,6 +92,10 @@ func (a *Authenticator) Auth(
 	if len(key.S) != a.cfg.Lambda/2 {
 		return nil, fmt.Errorf("authenticator: Key.S size=%d does not match Lambda/2=%d", len(key.S), a.cfg.Lambda/2)
 	}
+	if rot == nil {
+		return nil, fmt.Errorf("authenticator: rotator is nil")
+	}
+	eval := rot.Inner()
 	if err := a.validateGaloisKeys(eval); err != nil {
 		return nil, err
 	}
@@ -98,9 +115,9 @@ func (a *Authenticator) Auth(
 	// Per docs/DESIGN.md §`Auth`, the goal is "Rot(ct_m, j) has m only at
 	// slot j". Lattigo's `RotateNew(ct, k)` is left-rotation: slot i ←
 	// slot (i+k) mod (N/2). To place ct_m's slot 0 at slot j we therefore
-	// rotate by -j (right-rotation by j). The protocol still labels these
-	// rotations 1..λ-1; the Galois key the label maps to is
-	// `params.GaloisElement(-j)`.
+	// rotate by -j (right-rotation by j). The chain rotator decomposes
+	// `|j|` into `popcount(|j|)` binary atoms and applies them one at a
+	// time — Auth itself stays unaware of the chaining.
 	inS := sInSet(key.S, a.cfg.Lambda)
 	var ctMRep *rlwe.Ciphertext
 	for j := 0; j < a.cfg.Lambda; j++ {
@@ -111,7 +128,7 @@ func (a *Authenticator) Auth(
 		if j == 0 {
 			term = ctM.CopyNew()
 		} else {
-			term, err = eval.RotateNew(ctM, -j)
+			term, err = rot.RotateNew(ctM, -j)
 			if err != nil {
 				return nil, fmt.Errorf("authenticator: rotate by -%d: %w", j, err)
 			}
@@ -161,12 +178,11 @@ func (a *Authenticator) Auth(
 }
 
 // validateGaloisKeys checks that `eval` carries Galois keys for every
-// rotation `Rot(ct_m, j)` Auth's step 4 needs (j ∈ [1, Lambda)). The
-// underlying Lattigo call is `RotateNew(ct, -j)`, so the required Galois
-// element per index is `params.GaloisElement(-j)`. We enumerate them
-// directly rather than invert the eval's keys via
-// `SolveDiscreteLogGaloisElement` (which the DESIGN.md note mentions as an
-// equivalent approach) — direct lookup yields cleaner missing-key errors.
+// auth atom in `{1, 2, 4, ..., 2^k}` with `2^k < Lambda`. The chain
+// rotator decomposes any `j ∈ [1, Lambda)` into a sum of these atoms via
+// binary expansion; missing an atom means some `j` cannot be chain-
+// rotated. The required Galois element per atom is
+// `params.GaloisElement(-atom)` because Auth issues `RotateNew(ct, -j)`.
 func (a *Authenticator) validateGaloisKeys(eval *ckks.Evaluator) error {
 	if eval == nil || eval.EvaluationKeySet == nil {
 		return fmt.Errorf("authenticator: evaluator missing EvaluationKeySet")
@@ -177,14 +193,14 @@ func (a *Authenticator) validateGaloisKeys(eval *ckks.Evaluator) error {
 		carried[galEl] = true
 	}
 	var missing []int
-	for j := 1; j < a.cfg.Lambda; j++ {
-		wantGalEl := a.params.GaloisElement(-j)
+	for atom := 1; atom < a.cfg.Lambda; atom <<= 1 {
+		wantGalEl := a.params.GaloisElement(-atom)
 		if !carried[wantGalEl] {
-			missing = append(missing, j)
+			missing = append(missing, atom)
 		}
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("authenticator: evaluator missing Galois keys for rotation labels %v (need GaloisElement(-j) for j ∈ [1, %d))", missing, a.cfg.Lambda)
+		return fmt.Errorf("authenticator: evaluator missing Galois keys for auth atoms %v (need GaloisElement(-atom) for atom ∈ powers-of-two < %d)", missing, a.cfg.Lambda)
 	}
 	return nil
 }

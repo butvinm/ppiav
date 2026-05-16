@@ -5,15 +5,17 @@ import (
 	"math"
 	"testing"
 
+	"github.com/butvinm/ppiav/internal/authchain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
 )
 
-// authTestFixture wires up a single-party CKKS deployment with rotation
-// keys for the range [1, lambda). The authenticator package needs the full
-// evaluator surface; the multi-party handshake is exercised in Tasks 5/6.
+// authTestFixture wires up a single-party CKKS deployment with Galois
+// keys for the eval-level base-2 atom set Auth's chain rotator consumes.
+// The full multi-party handshake is exercised in `phase4_neg_base2_test.go`
+// (chain-rotation math) and `internal/vagent/*_test.go` (end-to-end).
 type authTestFixture struct {
 	params    ckks.Parameters
 	kgen      *rlwe.KeyGenerator
@@ -21,11 +23,25 @@ type authTestFixture struct {
 	pk        *rlwe.PublicKey
 	rlk       *rlwe.RelinearizationKey
 	gks       []*rlwe.GaloisKey
+	atoms     []int
 	evk       rlwe.EvaluationKeySet
 	encoder   *ckks.Encoder
 	encryptor *rlwe.Encryptor
 	decryptor *rlwe.Decryptor
-	eval      *ckks.Evaluator
+	rot       *authchain.Evaluator
+}
+
+// authAtoms returns the powers-of-two strictly less than lambda — the
+// eval-level base-2 atom set used by the chain rotator.
+func authAtoms(lambda int) []int {
+	if lambda <= 1 {
+		return nil
+	}
+	out := []int{}
+	for a := 1; a < lambda; a <<= 1 {
+		out = append(out, a)
+	}
+	return out
 }
 
 func newAuthTestFixture(t *testing.T, lambda int) authTestFixture {
@@ -35,16 +51,20 @@ func newAuthTestFixture(t *testing.T, lambda int) authTestFixture {
 	sk, pk := kgen.GenKeyPairNew()
 	rlk := kgen.GenRelinearizationKeyNew(sk)
 
-	// Auth's `Rot(ct, j)` (DESIGN notation, "place slot 0 at slot j") is
-	// implemented as Lattigo `RotateNew(ct, -j)`. Generate keys for the
-	// negative rotation amounts.
-	rots := make([]int, 0, lambda-1)
-	for j := 1; j < lambda; j++ {
-		rots = append(rots, -j)
+	// Generate keys only for the auth atoms (negative galEl convention).
+	// The chain rotator decomposes any `j ∈ [1, lambda)` into a sum of
+	// these atoms via binary expansion.
+	atoms := authAtoms(lambda)
+	rots := make([]int, len(atoms))
+	for i, a := range atoms {
+		rots[i] = -a
 	}
 	galEls := p.GaloisElements(rots)
 	gks := kgen.GenGaloisKeysNew(galEls, sk)
 	evk := rlwe.NewMemEvaluationKeySet(rlk, gks...)
+
+	rot, err := authchain.New(p, rlk, gks, atoms)
+	require.NoError(t, err)
 
 	return authTestFixture{
 		params:    p,
@@ -53,11 +73,12 @@ func newAuthTestFixture(t *testing.T, lambda int) authTestFixture {
 		pk:        pk,
 		rlk:       rlk,
 		gks:       gks,
+		atoms:     atoms,
 		evk:       evk,
 		encoder:   ckks.NewEncoder(p),
 		encryptor: rlwe.NewEncryptor(p, pk),
 		decryptor: rlwe.NewDecryptor(p, sk),
-		eval:      ckks.NewEvaluator(p, evk),
+		rot:       rot,
 	}
 }
 
@@ -95,7 +116,7 @@ func TestAuthRoundTripWithVer(t *testing.T) {
 	require.NoError(t, err)
 
 	resultCt := f.encryptSlot0(t, 0.5)
-	ctM, err := a.Auth(key, f.encryptor, f.eval, resultCt)
+	ctM, err := a.Auth(key, f.encryptor, f.rot, resultCt)
 	require.NoError(t, err)
 
 	plaintext := f.decryptToSlots(t, ctM)
@@ -142,7 +163,7 @@ func TestVerRejectsTamperedSlot(t *testing.T) {
 	require.NoError(t, err)
 
 	resultCt := f.encryptSlot0(t, 0.5)
-	ctM, err := a.Auth(key, f.encryptor, f.eval, resultCt)
+	ctM, err := a.Auth(key, f.encryptor, f.rot, resultCt)
 	require.NoError(t, err)
 
 	plaintext := f.decryptToSlots(t, ctM)
@@ -171,7 +192,7 @@ func TestVerRejectsTamperedValueSlot(t *testing.T) {
 	require.NoError(t, err)
 
 	resultCt := f.encryptSlot0(t, 0.5)
-	ctM, err := a.Auth(key, f.encryptor, f.eval, resultCt)
+	ctM, err := a.Auth(key, f.encryptor, f.rot, resultCt)
 	require.NoError(t, err)
 
 	plaintext := f.decryptToSlots(t, ctM)
@@ -212,14 +233,16 @@ func TestAuthMissingGaloisKeys(t *testing.T) {
 	key, err := KeyGen(cfg, rand.Reader)
 	require.NoError(t, err)
 
-	// Build an evaluator with only a subset of the needed Galois keys.
-	partial := f.gks[:len(f.gks)-1]
-	partialEvk := rlwe.NewMemEvaluationKeySet(f.rlk, partial...)
-	partialEval := ckks.NewEvaluator(f.params, partialEvk)
+	// Build a chain rotator with one fewer atom key than required. Auth's
+	// validateGaloisKeys must flag the missing atom and refuse to run.
+	partialGks := f.gks[:len(f.gks)-1]
+	partialAtoms := f.atoms[:len(f.atoms)-1]
+	partialRot, err := authchain.New(f.params, f.rlk, partialGks, partialAtoms)
+	require.NoError(t, err)
 
 	resultCt := f.encryptSlot0(t, 0.5)
-	_, err = a.Auth(key, f.encryptor, partialEval, resultCt)
-	require.Error(t, err, "Auth must error when Galois key set is incomplete")
+	_, err = a.Auth(key, f.encryptor, partialRot, resultCt)
+	require.Error(t, err, "Auth must error when atom Galois key set is incomplete")
 }
 
 func TestAuthRejectsMismatchedKey(t *testing.T) {
@@ -233,7 +256,7 @@ func TestAuthRejectsMismatchedKey(t *testing.T) {
 	// Hand-built Key with wrong |S|.
 	badKey := Key{S: []int{0, 1, 2}, SeedF: [32]byte{1, 2, 3}}
 	resultCt := f.encryptSlot0(t, 0.5)
-	_, err = a.Auth(badKey, f.encryptor, f.eval, resultCt)
+	_, err = a.Auth(badKey, f.encryptor, f.rot, resultCt)
 	require.Error(t, err)
 }
 

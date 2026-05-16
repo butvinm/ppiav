@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"sync"
 
+	hierkeys "github.com/butvinm/lattigo-hierkeys"
+	"github.com/butvinm/ppiav/internal/authchain"
 	"github.com/butvinm/ppiav/internal/authenticator"
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
@@ -37,29 +39,55 @@ import (
 type sessionState struct {
 	crs *sampling.KeyedPRNG
 
-	// skShare is sk_a — the agent's share of the joint secret sk = sk_c + sk_a.
-	skShare *rlwe.SecretKey
+	// skTop is sk_a at TOP level (`params.LLKN.Top()`). The joint top-level
+	// secret is sk_top = sk_c_top + sk_a_top.
+	skTop *rlwe.SecretKey
+
+	// skEvalCached is the lazy projection of skTop to eval level. Computed
+	// on first call to skEval(); the projection is linear so each party
+	// derives it independently from their own skTop. Consumed by: RLK
+	// gen rounds, KeySwitch (partial-decrypt), eval-level PK gen, and
+	// auth-atom Galois gen.
+	skEvalCached *rlwe.SecretKey
 
 	// authKey is the per-session MPD-Auth key minted in OpenSession; consumed
 	// once by FinalizeDecryption and then evicted from the sessions map.
 	authKey authenticator.Key
 
-	// Populated by AggregatePK and onward.
+	// Populated by AggregatePK and onward. `pkAgg` is the eval-level
+	// aggregated pk used by Auth to encrypt v under pkAgg. `pkTopAgg` is
+	// the top-level aggregated pk shipped to VService inside
+	// InferEvalKeys (consumed by hierkeys.PubToRot to seed the
+	// LevelExpansion).
 	pkAgg     *rlwe.PublicKey
+	pkTopAgg  *rlwe.PublicKey
 	encryptor *rlwe.Encryptor
 
-	// Populated by AggregateGaloisShares — VAgent needs the eval to run
-	// Auth's rotation+sum. `gks` is stashed so ExportState can hand the
-	// full galois set to the bench `mac` / `finalize` subprocesses; the
-	// in-process HTTP path doesn't read it back (the evaluator is enough).
-	rlkAgg *rlwe.RelinearizationKey
-	gks    []*rlwe.GaloisKey
-	eval   *ckks.Evaluator
+	// Populated by AggregateGaloisShares.
+	// `rlkAgg` is the aggregated eval-level relinearization key.
+	// `gksAuth` is the per-auth-atom raw `*rlwe.GaloisKey` slice (eval
+	// level, negative galEls). Used directly by `authchain` (no
+	// hierarchical derivation at VAgent). Stashed so ExportState can
+	// hand the full set to the bench `mac` / `finalize` subprocesses.
+	// `gksMasterInfer` is the inference-side master-key bundle
+	// (top level, positive galEls, hierkeys.GaloisKeyToMasterKey'd).
+	// Shipped to VService via InferEvalKeys.
+	// `authchain` wraps a `*ckks.Evaluator` over rlkAgg + gksAuth and
+	// performs the binary-decompose chain rotation Auth's step 4 issues.
+	rlkAgg         *rlwe.RelinearizationKey
+	gksAuth        []*rlwe.GaloisKey
+	gksMasterInfer map[int]*hierkeys.MasterKey
+	authchain      *authchain.Evaluator
 
-	// PK protocol stash (between GenPKShare and AggregatePK).
-	pkProto      multiparty.PublicKeyGenProtocol
-	pkCRP        multiparty.PublicKeyGenCRP
-	pkShareLocal multiparty.PublicKeyGenShare
+	// PK protocol stash (between GenPKShare and AggregatePK). Two
+	// protocols run per stage — one per level. Each carries its own
+	// CRP and local share, finalised into eval-level + top-level pks.
+	pkProtoEval      multiparty.PublicKeyGenProtocol
+	pkCRPEval        multiparty.PublicKeyGenCRP
+	pkShareLocalEval multiparty.PublicKeyGenShare
+	pkProtoTop       multiparty.PublicKeyGenProtocol
+	pkCRPTop         multiparty.PublicKeyGenCRP
+	pkShareLocalTop  multiparty.PublicKeyGenShare
 
 	// RLK protocol stash (across all four Gen/Aggregate calls). The CRP is
 	// drawn once in Round 1 and reused in Round 2 per Lattigo's protocol.
@@ -70,11 +98,18 @@ type sessionState struct {
 	rlkShare1Agg multiparty.RelinearizationKeyGenShare
 	rlkShare2Loc multiparty.RelinearizationKeyGenShare
 
-	// Galois protocol stash (between GenGaloisShares and AggregateGaloisShares).
-	galProto  multiparty.GaloisKeyGenProtocol
-	galCRPs   []multiparty.GaloisKeyGenCRP
-	galShares []multiparty.GaloisKeyGenShare
-	galLabels []int
+	// Galois protocol stash (between GenAuthAndInferShares and
+	// AggregateGaloisShares). Two iterations run — one per atom set.
+	// Each iteration is keyed by its own CRP and local share slice in
+	// ascending atom order.
+	galProtoEval  multiparty.GaloisKeyGenProtocol
+	galCRPsAuth   []multiparty.GaloisKeyGenCRP
+	galSharesAuth []multiparty.GaloisKeyGenShare
+	authLabels    []int
+	galProtoTop   multiparty.GaloisKeyGenProtocol
+	galCRPsInfer  []multiparty.GaloisKeyGenCRP
+	galSharesInfer []multiparty.GaloisKeyGenShare
+	inferLabels   []int
 
 	// authResult is the Stage-3 → Stage-4a hand-off: capacity-1 buffered so
 	// the image POST handler can deposit ct_M before the SSE receiver opens
@@ -126,10 +161,16 @@ func New(params protocol.Params) (*Agent, error) {
 // Params returns the bundled protocol parameters.
 func (a *Agent) Params() protocol.Params { return a.params }
 
-// OpenSession registers `sid`, mints `sk_a` and the per-session
+// OpenSession registers `sid`, mints `sk_a` at TOP level, the per-session
 // `authenticator.Key`, and builds the session-scoped CRS. The CRS stream
 // is shared with VClient — both sides build it identically from the sid.
 // Returns an error if the sid is already registered.
+//
+// sk_a lives at top level (`params.LLKN.Top()`) so the top-level PK gen
+// and infer-atom Galois gen consume it directly; eval-level operations
+// (RLK gen, KeySwitch, eval-level PK gen, auth-atom Galois gen) consume
+// the lazy `skEval = params.ProjectSKToEval(skTop)` projection cached on
+// the session.
 func (a *Agent) OpenSession(sid protocol.SessionID) error {
 	crs, err := protocol.NewSessionCRS(sid)
 	if err != nil {
@@ -139,7 +180,7 @@ func (a *Agent) OpenSession(sid protocol.SessionID) error {
 	if err != nil {
 		return fmt.Errorf("vagent: mint authKey: %w", err)
 	}
-	skShare := rlwe.NewKeyGenerator(a.params.CKKS).GenSecretKeyNew()
+	skTop := rlwe.NewKeyGenerator(a.params.LLKN.Top()).GenSecretKeyNew()
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -148,11 +189,30 @@ func (a *Agent) OpenSession(sid protocol.SessionID) error {
 	}
 	a.sessions[sid] = &sessionState{
 		crs:        crs,
-		skShare:    skShare,
+		skTop:      skTop,
 		authKey:    authKey,
 		authResult: make(chan *rlwe.Ciphertext, 1),
 	}
 	return nil
+}
+
+// sessionSkEval returns the eval-level projection of the session's
+// skTop, computing and caching it on first call. Returns an error only
+// if skTop is missing (impossible by protocol) or the LLKN projection
+// itself fails (infrastructure error). The caller must hold a.mu.
+func (a *Agent) sessionSkEvalLocked(sess *sessionState) (*rlwe.SecretKey, error) {
+	if sess.skEvalCached != nil {
+		return sess.skEvalCached, nil
+	}
+	if sess.skTop == nil {
+		return nil, fmt.Errorf("vagent: sessionSkEval called before skTop is minted")
+	}
+	out, err := a.params.ProjectSKToEval(sess.skTop)
+	if err != nil {
+		return nil, fmt.Errorf("vagent: project sk_top to sk_eval: %w", err)
+	}
+	sess.skEvalCached = out
+	return out, nil
 }
 
 // SessionAuthResult exposes the per-session authResult channel for the SSE
