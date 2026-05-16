@@ -549,11 +549,11 @@ VService keeps Phase 1–3's in-memory shape — full per-rotation Galois keys f
 - Modify: `internal/vservice/http.go`
 - Modify: `internal/vservice/http_test.go`
 
-- [ ] VAgent route `POST /sessions/:sid/gks-shares` keeps its URL; payload type changes from `VClientGaloisKeyShare` to `VClientGaloisShares` (carries both `AuthAtomShares` and `InferAtomShares` per Task 4 amendment).
-- [ ] VAgent's onward `POST /sessions/:sid/eval-keys` to VService keeps its route but the body type changes to the new `InferEvalKeys` (RLK + PKTop + GKSMasterInfer). VAgent's `gksAuth` is NOT shipped — it stays inside the VAgent session.
-- [ ] VService's handler decodes the new body shape and forwards to `StoreEvalKeys(sid, rlk, pkTop, gksMasterInfer)`.
-- [ ] write tests: HTTP round-trip with synthetic `(pkTop, gksMasterInfer)` at `LogN=14`; verify the payload shape change is enforced (sending a Phase 1-3-shaped body returns 400).
-- [ ] run `go test ./internal/vagent/... ./internal/vservice/...`.
+- [x] VAgent route `POST /sessions/:sid/gks-shares` keeps its URL; payload type changes from `VClientGaloisKeyShare` to `VClientGaloisShares` (carries both `AuthAtomShares` and `InferAtomShares` per Task 4 amendment).
+- [x] VAgent's onward `POST /sessions/:sid/eval-keys` to VService keeps its route but the body type changes to the new `InferEvalKeys` (RLK + PKTop + GKSMasterInfer). VAgent's `gksAuth` is NOT shipped — it stays inside the VAgent session.
+- [x] VService's handler decodes the new body shape and forwards to `StoreEvalKeys(sid, rlk, pkTop, gksMasterInfer)`.
+- [x] write tests: HTTP round-trip with synthetic `(pkTop, gksMasterInfer)` at `LogN=14`; verify the payload shape change is enforced (sending a Phase 1-3-shaped body returns 400).
+- [x] run `go test ./internal/vagent/... ./internal/vservice/...`.
 
 ### Task 9: Orchestrator integration sanity check
 

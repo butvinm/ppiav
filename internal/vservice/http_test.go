@@ -170,6 +170,46 @@ func TestHTTPStoreEvalKeysMalformedBody(t *testing.T) {
 	assert.NotEmpty(t, body.Error)
 }
 
+// TestHTTPStoreEvalKeysRejectsPhase13ShapedBody asserts that the
+// pre-hierkeys wire shape (rlwe.MemEvaluationKeySet marshaling: RLK +
+// GaloisKey map, no length-prefixed PKTop, no atom-count framing) is
+// rejected by the new InferEvalKeys decoder. The MemEvaluationKeySet
+// marshal starts with the RLK length prefix that happens to be valid for
+// the new layout, so the decoder advances past RLK and then trips on the
+// PKTop / atom framing.
+func TestHTTPStoreEvalKeysRejectsPhase13ShapedBody(t *testing.T) {
+	svc, params := httpSvcParams(t)
+	srv := NewServer(svc)
+
+	openReq := httptest.NewRequest(http.MethodPost, "/sessions", nil)
+	openW := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(openW, openReq)
+	require.Equal(t, http.StatusOK, openW.Code)
+	var sess protocol.VerificationSession
+	require.NoError(t, json.Unmarshal(openW.Body.Bytes(), &sess))
+
+	// Build a Phase-1-3-shape body: a MemEvaluationKeySet with just an RLK,
+	// no Galois keys. Its byte layout is the old `InferEvalKeys.MarshalBinary`
+	// output. The new decoder must reject it because the bytes following
+	// the embedded RLK do not form a valid PKTop length-prefix + body.
+	kgen := rlwe.NewKeyGenerator(params.CKKS)
+	sk := kgen.GenSecretKeyNew()
+	rlk := kgen.GenRelinearizationKeyNew(sk)
+	oldShape := rlwe.NewMemEvaluationKeySet(rlk)
+	payload, err := oldShape.MarshalBinary()
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/sessions/"+string(sess.SessionID)+"/eval-keys", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code, "phase 1-3 wire shape must be rejected: body=%s", w.Body.String())
+	var body httputil.ErrorBody
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Contains(t, body.Error, "InferEvalKeys")
+}
+
 func TestHTTPStoreEvalKeysRejectsGet(t *testing.T) {
 	svc, _ := httpSvcParams(t)
 	srv := NewServer(svc)

@@ -90,9 +90,9 @@ func TestHTTPVAgent_PostSessions_AllocatesSidAndRegisters(t *testing.T) {
 	// (it only checks the sessions map) and 404s with "unknown session"
 	// otherwise. Using it as a probe avoids reflecting into the private
 	// sessions map.
-	require.NoError(t, svc.StoreEvalKeys(sid, nil, nil),
+	require.NoError(t, svc.StoreEvalKeys(sid, nil, nil, nil),
 		"vservice must have the sid registered (StoreEvalKeys is the probe)")
-	require.ErrorContains(t, svc.StoreEvalKeys("never-allocated", nil, nil),
+	require.ErrorContains(t, svc.StoreEvalKeys("never-allocated", nil, nil, nil),
 		"unknown session", "control: probe distinguishes registered sids")
 }
 
@@ -318,7 +318,7 @@ func TestHTTPVAgent_FullKeygenForwardsEvalKeysToVService(t *testing.T) {
 
 	// Re-issue StoreEvalKeys directly against the vservice — if the sid
 	// hadn't been stored, this would 404. (It overwrites; that's fine.)
-	require.NoError(t, svc.StoreEvalKeys(sid, sess.rlkAgg, nil))
+	require.NoError(t, svc.StoreEvalKeys(sid, sess.rlkAgg, nil, nil))
 }
 
 func TestHTTPVAgent_RLKRound1_UnknownSidReturns404(t *testing.T) {
@@ -365,6 +365,30 @@ func TestHTTPVAgent_GKSShares_LabelMismatchReturns400(t *testing.T) {
 	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/gks-shares", emptyBytes)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+// TestHTTPVAgent_GKSShares_RejectsPhase13ShapedBody asserts that the
+// pre-hierkeys wire shape (single `VClientGaloisKeyShare` list, no
+// trailing infer-atom list) is rejected by the new `VClientGaloisShares`
+// decoder. The phase 1-3 wire is `[count:4][share_len:4][share]...` —
+// after the new decoder eats the auth list it then trips on the missing
+// 4-byte infer count header.
+func TestHTTPVAgent_GKSShares_RejectsPhase13ShapedBody(t *testing.T) {
+	_, vagentSrv, _, _, _, _ := newHTTPFixture(t)
+	sid := openSessionViaHTTP(t, vagentSrv)
+
+	// Build a phase 1-3 body: a single list of zero shares — wire form is
+	// just the 4-byte count prefix `[0, 0, 0, 0]`. The new format expects
+	// two such lists in succession (auth then infer); with only one list
+	// present the decoder reports "short infer header".
+	phase13Body := []byte{0x00, 0x00, 0x00, 0x00}
+
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/gks-shares", phase13Body)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode, "phase 1-3 wire shape must be rejected")
+	var body httputil.ErrorBody
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Contains(t, body.Error, "VClientGaloisShares")
 }
 
 func TestHTTPVAgent_UnknownPathReturns404(t *testing.T) {
