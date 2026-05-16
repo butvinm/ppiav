@@ -522,15 +522,9 @@ Scope: confirm everything builds and unit tests pass on the dev box. Full chain 
 
 **Files:** outputs at `~/ppiav/results/phase2/eval-<ts>/` on the VPS
 
-- [ ] on the VPS, in a `nohup`-wrapped block (expected wall clock ~1 h: keygen ~3 min + 10 × (encrypt + infer + mac + partial + finalize ≈ 4-5 min each) + per-CLI Orion-load overhead):
-  ```sh
-  cd ~/ppiav
-  source ./bench/.venv/bin/activate  # or however bench's venv is wired post-bootstrap
-  nohup python -m bench.eval --inputs ./models/out/eval_inputs.json --orion ./models/out/logn16 \
-      > ~/ppiav/eval.log 2>&1 &
-  ```
-- [ ] watch RSS via `watch -n 5 'free -h | head -2'` — must stay below 125 GiB total (logn16 peak is ~114 GB; ~10 GB headroom). If OOM risk surfaces, escalate to `cpu.96.512.640` (per Orion's contingency at `c3ae-vps-runs.md:471`)
-- [ ] **manual verify** after completion: `~/ppiav/results/phase2/eval-<ts>/summary.md` exists and renders cleanly; `~/ppiav/results/phase2/eval-<ts>/plots/` has all 7 PNGs; FPR/FNR/accuracy line present; noise + SNR stats present
+- [x] on the VPS, ran `nohup bash -c 'export PATH=$HOME/.local/bin:$PATH; export GOMEMLIMIT=120GiB; cd bench && uv run python -m bench.eval --inputs ../models/out/eval_inputs.json --orion ../models/out/logn16' > ~/eval.log 2>&1 &`. Total wall clock 52 min (start 00:22:09Z → batch complete 01:14:40Z). Steady-state per image ~5 min after the keygen warm-up. Two fixes needed before this succeeded: (a) `bench.eval._resolve_image_path` + `prepare_samples.write_manifest` were resolving the per-image image path against the wrong anchor (caught on the first encrypt) — fixed in commit `d8dfb95`; (b) the first attempt with no `GOMEMLIMIT` was OOM-killed by the kernel at 130.8 GB RSS / 139.7 GB VM on the very first `infer` (>125 GiB ceiling — plan's ~114 GB Orion estimate underestimated by ~17 GB). Recovery: `GOMEMLIMIT=120GiB` forced aggressive Go GC, which kept the per-process working set under the ceiling. Note: also a bench-driver fix to make `_resolve_image_path` anchor at the manifest dir
+- [x] watch RSS — peak ~120 GiB while infer running; system held 5-14 GiB available across the run; no further OOMs after GOMEMLIMIT was set. Did NOT need to escalate to `cpu.96.512.640`
+- [x] **manual verify** after completion: `summary.md` written; `plots/` has all 7 PNGs (`bandwidth_per_message`, `bytes_per_message`, `e2e_timeline`, `noise_histogram`, `rss_per_step`, `session_timeline_10mbps`, `snr_per_image`); 10/10 decoded.json present
 
 ### Task 25: Capture results to local
 

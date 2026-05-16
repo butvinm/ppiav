@@ -1,0 +1,31 @@
+{
+  "name": "mac",
+  "phase": "phase2",
+  "started": "2026-05-16T00:40:30.580127905Z",
+  "go_version": "go1.26.1",
+  "goos": "linux",
+  "goarch": "amd64",
+  "num_cpu": 16,
+  "metadata": {
+    "in_ct": "/home/ubuntu/ppiav/results/phase2/eval-20260516T002209Z/img_2/result_ct.bin",
+    "out_ct": "/home/ubuntu/ppiav/results/phase2/eval-20260516T002209Z/img_2/auth_ct.bin",
+    "sid": "f4a8bb1a9044ee5d88fc5173c4a1f202",
+    "workdir": "/home/ubuntu/ppiav/results/phase2/eval-20260516T002209Z/keys"
+  },
+  "samples": [
+    {
+      "name": "mac",
+      "iter": 0,
+      "wall": 1328295635,
+      "heap_alloc": 22760849568,
+      "heap_inuse": 22762889216,
+      "sys": 44893416120,
+      "alloc_delta": 170414784,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "pre_vm_hwm": 44894965760,
+      "vm_hwm": 44895907840,
+      "bytes": 0
+    }
+  ]
+}

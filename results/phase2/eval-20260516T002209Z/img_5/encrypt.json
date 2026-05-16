@@ -1,0 +1,31 @@
+{
+  "name": "encrypt",
+  "phase": "phase2",
+  "started": "2026-05-16T00:50:12.043832032Z",
+  "go_version": "go1.26.1",
+  "goos": "linux",
+  "goarch": "amd64",
+  "num_cpu": 16,
+  "metadata": {
+    "image": "/home/ubuntu/ppiav/models/out/inputs/sample_5.bin",
+    "out_ct": "/home/ubuntu/ppiav/results/phase2/eval-20260516T002209Z/img_5/input_ct.bin",
+    "sid": "f4a8bb1a9044ee5d88fc5173c4a1f202",
+    "workdir": "/home/ubuntu/ppiav/results/phase2/eval-20260516T002209Z/keys"
+  },
+  "samples": [
+    {
+      "name": "encrypt",
+      "iter": 0,
+      "wall": 122682036,
+      "heap_alloc": 107297144,
+      "heap_inuse": 107962368,
+      "sys": 149526824,
+      "alloc_delta": 83652536,
+      "num_gc": 1,
+      "pause_ns": 50198,
+      "pre_vm_hwm": 99700736,
+      "vm_hwm": 134807552,
+      "bytes": 0
+    }
+  ]
+}
