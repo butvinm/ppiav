@@ -563,9 +563,9 @@ VService keeps Phase 1–3's in-memory shape — full per-rotation Galois keys f
 
 The orchestrator's call-site renames already landed inside Tasks 5/6/7 so the tree compiles after each. This task is the end-to-end sanity gate for the in-process driver before HTTP and CLI changes start.
 
-- [ ] re-run the orchestrator's end-to-end test suite at `LogN=14`: `go test -count=1 ./internal/orchestrator/...`. These tests exercise the full keygen → infer → MPD-Auth chain in-process and are the canary that the protocol shape survived the Tasks 5/6/7 surgery.
-- [ ] if any new behaviour (e.g. session-state shape change) leaked through, add or update a single targeted test rather than tweaking the orchestrator.
-- [ ] no new code expected; if this task requires more than verification, that's a signal one of 5/6/7 was incomplete — go back and fix there, not here.
+- [x] re-run the orchestrator's end-to-end test suite at `LogN=14`: `go test -count=1 ./internal/orchestrator/...`. These tests exercise the full keygen → infer → MPD-Auth chain in-process and are the canary that the protocol shape survived the Tasks 5/6/7 surgery.
+- [x] if any new behaviour (e.g. session-state shape change) leaked through, add or update a single targeted test rather than tweaking the orchestrator.
+- [x] no new code expected; if this task requires more than verification, that's a signal one of 5/6/7 was incomplete — go back and fix there, not here.
 
 ### Task 10: CLI artifact pipeline — `keygen` writes master + `gks_infer.bin`
 
