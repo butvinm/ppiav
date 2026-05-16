@@ -16,20 +16,20 @@ func TestDefaults(t *testing.T) {
 
 	assert.Equal(t, 16, params.CKKS.LogN())
 	assert.Equal(t, 1<<15, params.CKKS.MaxSlots())
-	assert.Equal(t, 15, params.CKKS.MaxLevel())
+	assert.Equal(t, 16, params.CKKS.MaxLevel())
 	assert.InDelta(t, math.Exp2(40), params.CKKS.DefaultScale().Float64(), 1e-3)
 
 	assert.Equal(t, 128, params.Authenticator.Lambda)
 	assert.InDelta(t, math.Exp2(20), params.Authenticator.Epsilon, 1e-9)
 	assert.InDelta(t, math.Exp2(16), params.FloodSigma, 1e-9)
 
-	// LLKN hierarchy: top-level Q = Q_eval (16) ∪ P_eval (6) = 22 primes,
-	// P_top = DefaultLLKNLogPHK (11 primes).
+	// LLKN hierarchy: top-level Q = Q_eval (17) ∪ P_eval (6) = 23 primes,
+	// P_top = DefaultLLKNLogPHK (12 primes).
 	assert.Equal(t, DefaultLLKNBase, params.LLKNBase)
 	require.Equal(t, 2, params.LLKN.NumLevels(), "LLKN hierarchy must be 2-level")
 	top := params.LLKN.Top()
-	assert.Equal(t, 22, top.QCount(), "top-level QCount = Q_eval + P_eval")
-	assert.Equal(t, 11, top.PCount(), "top-level PCount = len(DefaultLLKNLogPHK)")
+	assert.Equal(t, 23, top.QCount(), "top-level QCount = Q_eval + P_eval")
+	assert.Equal(t, 12, top.PCount(), "top-level PCount = len(DefaultLLKNLogPHK)")
 }
 
 func TestDefaultFloodSigma(t *testing.T) {
@@ -95,13 +95,13 @@ func TestParams_ProjectSKToEval_RoundTrip(t *testing.T) {
 	skEval, err := params.ProjectSKToEval(skTop)
 	require.NoError(t, err)
 
-	// Projected key lives at eval level: QCount=16, PCount=6.
-	assert.Equal(t, 16, skEval.LevelQ()+1, "projected sk_eval QCount")
+	// Projected key lives at eval level: QCount=17, PCount=6.
+	assert.Equal(t, 17, skEval.LevelQ()+1, "projected sk_eval QCount")
 	assert.Equal(t, 6, skEval.LevelP()+1, "projected sk_eval PCount")
 
-	// The first 16 Q-coefficient rows of sk_top are copied byte-identically
+	// The first 17 Q-coefficient rows of sk_top are copied byte-identically
 	// into the projected sk_eval's Q ring; the next 6 rows are reused as
-	// sk_eval.P (the LLKN projection routes Q_top[16..22] → P_eval[0..6]).
+	// sk_eval.P (the LLKN projection routes Q_top[17..23] → P_eval[0..6]).
 	for q := 0; q <= skEval.LevelQ(); q++ {
 		assert.Equalf(t, skTop.Value.Q.Coeffs[q], skEval.Value.Q.Coeffs[q],
 			"sk_eval.Q row %d must match sk_top.Q row %d byte-for-byte", q, q)

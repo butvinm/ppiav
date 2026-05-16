@@ -1,13 +1,13 @@
 {
-  "_comment": "C3AE fixture manifest. Mirrors ~/Dev/orion/examples/c3ae-demo/models/params.py:51 (logn16 profile). `rotation_indices` are raw Orion k_orion values (the positive offsets Orion's evaluator calls RotateNew(ct, +k) with); LoadOrionParams negates them on ingest to fit the signed-label convention on protocol.Params. The list below is a representative subset — the real circuit declares hundreds of k_orion values.",
+  "_comment": "C3AE fixture manifest. Mirrors models/models/params.py logn16 profile (LogN16_D16_P6: 17 Q primes, 6 P primes — one extra 40-bit prime over the original logn16 so result_ct lands at level ≥ 1 for MAC). `rotation_indices` are raw Orion k_orion values (the positive offsets Orion's evaluator calls RotateNew(ct, +k) with); LoadOrionParams negates them on ingest to fit the signed-label convention on protocol.Params. The list below is a representative subset — the real circuit declares hundreds of k_orion values.",
   "version": 2,
   "params": {
     "logn": 16,
-    "logq": [55, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40],
+    "logq": [55, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40],
     "logp": [55, 55, 55, 55, 55, 55],
     "log_default_scale": 40,
     "ring_type": "standard"
   },
-  "input_level": 15,
+  "input_level": 16,
   "rotation_indices": [1, 4, 16, 64, 128, 256, 512, 1024]
 }

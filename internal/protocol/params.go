@@ -20,9 +20,12 @@ var DefaultFloodSigma = math.Exp2(16)
 
 // DefaultLLKNLogPHK is the master-level auxiliary prime bit-size schedule
 // for the LLKN 2-level scheme used by the inference-side hierarchical key
-// derivation. Eleven 55-bit primes match the `LogN16_D15_P6` scenario in
-// lattigo-hierkeys (`~/Dev/lattigo-hierkeys/internal/testutil/scenarios.go`).
-var DefaultLLKNLogPHK = []int{55, 55, 55, 55, 55, 55, 55, 55, 55, 55, 55}
+// derivation. Twelve 55-bit primes match the `LogN16_D16_P6` scenario in
+// lattigo-hierkeys (`~/Dev/lattigo-hierkeys/internal/testutil/scenarios.go`):
+// QCount_master = 17 Q + 6 P = 23, dnum_master = ⌈23/12⌉ = 2; the eval QP
+// of 1025 b plus PHK = 12·55 = 660 b totals 1685 b, fitting under the
+// Lattigo Q_max(2N) = 1714 b LogN=16 ceiling with 29 b spare.
+var DefaultLLKNLogPHK = []int{55, 55, 55, 55, 55, 55, 55, 55, 55, 55, 55, 55}
 
 // DefaultLLKNBase is the radix used to decompose target rotations into the
 // master atom set. Base-4 keeps the atom count at 8 across the LogN=16
@@ -69,13 +72,18 @@ type Params struct {
 }
 
 // Defaults returns the synthetic-x² parameter set from docs/DESIGN.md
-// §`Implementation/Layout`. LogN=16, LogQ=[55]+[40]×15, LogP=[55]×6,
+// §`Implementation/Layout`. LogN=16, LogQ=[55]+[40]×16, LogP=[55]×6,
 // LogDefaultScale=40, RingType=Standard. FloodSigma=2^16. No extra
 // rotation indices; only the canonical authenticator atom set is
 // exercised. InputLevel=0 makes `EncryptImage` build the plaintext at
 // MaxLevel (no compiled circuit to constrain the budget).
+//
+// The chain length grew by one 40-bit prime over the original spec so
+// that Orion's deepest C3AE compile lands result_ct at level ≥ 1 — MAC's
+// Auth.MulNew at level 0 has no modulus headroom for the slot-mask scale
+// growth (see docs/plans for the level-0 wraparound analysis).
 func Defaults() (Params, error) {
-	logQ := make([]int, 1+15)
+	logQ := make([]int, 1+16)
 	logQ[0] = 55
 	for i := 1; i < len(logQ); i++ {
 		logQ[i] = 40

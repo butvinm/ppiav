@@ -14,11 +14,12 @@ func TestLoadOrionParams(t *testing.T) {
 	params, err := LoadOrionParams(path)
 	require.NoError(t, err)
 
-	// CKKS shape matches the documented logn16 profile in
-	// ~/Dev/orion/examples/c3ae-demo/models/params.py:51.
+	// CKKS shape matches the LogN16_D16_P6 profile in models/models/params.py
+	// (17 Q primes, 6 P primes — one extra 40-bit prime so the deepest
+	// C3AE compile lands result_ct at level ≥ 1 for MAC headroom).
 	assert.Equal(t, 16, params.CKKS.LogN())
-	assert.Equal(t, 16, len(params.CKKS.LogQi()))
-	assert.Equal(t, 15, params.CKKS.MaxLevel())
+	assert.Equal(t, 17, len(params.CKKS.LogQi()))
+	assert.Equal(t, 16, params.CKKS.MaxLevel())
 	assert.InDelta(t, math.Exp2(40), params.CKKS.DefaultScale().Float64(), 1e-3)
 
 	// Default authenticator + flooding settings carry over unchanged.
@@ -27,7 +28,7 @@ func TestLoadOrionParams(t *testing.T) {
 	assert.InDelta(t, math.Exp2(16), params.FloodSigma, 1e-9)
 
 	// InputLevel pulled from the manifest verbatim.
-	assert.Equal(t, 15, params.InputLevel)
+	assert.Equal(t, 16, params.InputLevel)
 
 	// Extras stashed for the inference-side handshake. The fixture stores
 	// raw Orion k_orion values; LoadOrionParams negates them on ingest
