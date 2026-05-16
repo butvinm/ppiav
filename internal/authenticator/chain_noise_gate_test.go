@@ -2,7 +2,7 @@
 // Auth pipeline.
 //
 // This file is the canonical 1k-trial gate that supersedes the earlier
-// `phase4_neg_base2_test.go` exploration test. Two variants are defined:
+// negative-base2 exploration test. Two variants are defined:
 //
 //   - TestAuthChainNoiseGate (fast, default): 100 trials, runs in ~a few
 //     minutes wall on 16 cores via a worker pool. Asserts every trial
@@ -65,7 +65,8 @@ const (
 
 // gen2PartyAtomKeys runs the 2-party multi-party GaloisKeyGen handshake
 // at the seven negative-galEl auth atoms and returns the aggregated keys.
-// Matches the wire-protocol shape Phase 4 VAgent emits to VClient.
+// Matches the wire-protocol shape VAgent emits to VClient under the
+// lattigo-hierkeys split.
 //
 // Returns an error instead of calling t.FailNow — this helper runs from
 // worker goroutines and `t.FailNow` is undefined-behaviour off the main
@@ -191,8 +192,8 @@ func chainGateTrial(params ckks.Parameters, atoms []int, trialIdx int) (bool, er
 	skC := kgen.GenSecretKeyNew()
 	skA := kgen.GenSecretKeyNew()
 
-	pkLabel := []byte("phase4-chain-gate-crs-pk-" + strconv.Itoa(trialIdx))
-	atomLabel := []byte("phase4-chain-gate-crs-atoms-" + strconv.Itoa(trialIdx))
+	pkLabel := []byte("chain-gate-crs-pk-" + strconv.Itoa(trialIdx))
+	atomLabel := []byte("chain-gate-crs-atoms-" + strconv.Itoa(trialIdx))
 
 	pkJoint, err := gen2PartyPK(params, skC, skA, pkLabel)
 	if err != nil {

@@ -124,7 +124,7 @@ func TestExportStateRoundTripPartialDecrypt(t *testing.T) {
 	assert.InDelta(t, 0.42, got[0], 1e-2, "rebuilt Client's partial-decrypt must recover m")
 }
 
-// NewWithState must reject nil state and nil SkShare so misuse fails
+// NewWithState must reject nil state and nil SkTop so misuse fails
 // loudly instead of producing a half-built Client that crashes later.
 func TestNewWithStateRejectsInvalidInputs(t *testing.T) {
 	params := smallParams(t)

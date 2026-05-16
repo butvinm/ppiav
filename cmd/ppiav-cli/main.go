@@ -41,7 +41,7 @@ import (
 // pinned to keep wire compatibility with bench/bench/load.py's required
 // `phase` field and existing on-disk results. Renaming it (e.g. to
 // "ppiav") requires a coordinated change in the Python loader; deferred
-// to avoid breaking previously-captured results during Phase 4 review.
+// as ppiav-side ABI debt until that coordinated change lands.
 const benchPhase = "phase2"
 
 // usage prints the top-level help and exits with status 2 (flag convention).

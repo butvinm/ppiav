@@ -4,7 +4,6 @@ import (
 	"math"
 	"testing"
 
-	"github.com/butvinm/lattigo-hierkeys/llkn"
 	"github.com/butvinm/ppiav/internal/authenticator"
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/stretchr/testify/assert"
@@ -27,7 +26,7 @@ func smallParams(t *testing.T) protocol.Params {
 	}
 	ckksParams, err := ckks.NewParametersFromLiteral(lit)
 	require.NoError(t, err)
-	llknParams, err := llkn.NewParameters(ckksParams.Parameters, [][]int{{40}})
+	llknParams, err := protocol.BuildLLKNParams(ckksParams)
 	require.NoError(t, err)
 	return protocol.Params{
 		CKKS:     ckksParams,

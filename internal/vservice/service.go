@@ -100,36 +100,10 @@ func New(params protocol.Params) *Service {
 // handshake covers both the authenticator's `[1, Lambda)` set and any
 // rotations the circuit needs.
 func NewWithOrion(params protocol.Params, orionDir string) (*Service, error) {
-	model, ckksParams, inputLevel, rotations, err := loadOrionModel(orionDir)
+	merged, model, err := mergeOrionParams(params, orionDir)
 	if err != nil {
 		return nil, err
 	}
-
-	merged := params
-	merged.CKKS = ckksParams
-	merged.InputLevel = inputLevel
-	// Rebuild LLKN against the Orion-overridden CKKS — the caller's
-	// `params.LLKN` was built against `Defaults().CKKS` (or whatever CKKS
-	// the caller passed in) and is now stale. The multi-party top-level
-	// Galois handshake CRPs are sampled over the LLKN top ring; if VClient
-	// rebuilds LLKN from the wire CKKS while VService keeps a stale LLKN,
-	// the two sides draw CRPs over different rings and the aggregated keys
-	// silently mismatch.
-	llknParams, err := protocol.BuildLLKNParams(ckksParams)
-	if err != nil {
-		return nil, fmt.Errorf("vservice: rebuild LLKN against Orion CKKS: %w", err)
-	}
-	merged.LLKN = llknParams
-	// Defensive copy: appending to merged.ExtraRotationIndices must not
-	// mutate the caller's slice (params is passed by value but the
-	// underlying array is shared).
-	if len(params.ExtraRotationIndices) > 0 || len(rotations) > 0 {
-		combined := make([]int, 0, len(params.ExtraRotationIndices)+len(rotations))
-		combined = append(combined, params.ExtraRotationIndices...)
-		combined = append(combined, rotations...)
-		merged.ExtraRotationIndices = combined
-	}
-
 	return &Service{
 		params:     merged,
 		orionModel: model,
@@ -179,7 +153,8 @@ func (s *Service) OpenSession() (protocol.SessionID, error) {
 //
 // `gksMasterInfer` may be nil (synthetic-x² mode, no rotations needed);
 // in that case derivation is skipped and the evaluator is built with an
-// empty Galois-key slice — same shape as Phase 1–3 with no rotations.
+// empty Galois-key slice — same shape as the pre-hierkeys protocol with
+// no rotations.
 func (s *Service) StoreEvalKeys(
 	sid protocol.SessionID,
 	rlk *rlwe.RelinearizationKey,

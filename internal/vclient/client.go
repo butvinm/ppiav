@@ -65,14 +65,14 @@ type Client struct {
 
 	// Stashed per-protocol state. PK and RLK protocols are stateless across
 	// calls, but the CRPs and the client-side shares need to survive
-	// between Gen* and Aggregate* calls. Two PK protocols run — one per
-	// level — each with its own CRP and local share.
+	// between Gen* and Aggregate* calls. Only the eval-level PK state needs
+	// to outlive GenPKShare — VClient's encryptor wires the eval-level
+	// aggregated pk. The top-level PK share is emitted to VAgent inside
+	// VClientPKShare and never re-touched on this side; its
+	// protocol/CRP/share are locals inside GenPKShare.
 	pkProtoEval      multiparty.PublicKeyGenProtocol
 	pkCRPEval        multiparty.PublicKeyGenCRP
 	pkShareLocalEval multiparty.PublicKeyGenShare
-	pkProtoTop       multiparty.PublicKeyGenProtocol
-	pkCRPTop         multiparty.PublicKeyGenCRP
-	pkShareLocalTop  multiparty.PublicKeyGenShare
 
 	rlkProto     multiparty.RelinearizationKeyGenProtocol
 	rlkCRP       multiparty.RelinearizationKeyGenCRP

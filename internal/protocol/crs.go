@@ -17,20 +17,19 @@
 //     seed VService's `LevelExpansion`).
 //  3. `multiparty.NewRelinearizationKeyGenProtocol(params.CKKS).SampleCRP(crs, evkParams)`
 //     — single CRP reused for both RLK rounds (Lattigo's protocol shape).
-//  4. For each atom in `CanonicalAuthAtoms(params)` (ascending):
+//  4. For each atom in `params.AuthAtoms()` (ascending):
 //     `multiparty.NewGaloisKeyGenProtocol(params.CKKS).SampleCRP(crs, evkParams)`
 //     — eval-level Galois CRP for VAgent's auth-side atom set.
-//  5. For each atom in `CanonicalInferAtoms(params)` (ascending):
+//  5. For each atom in `params.InferAtoms()` (ascending):
 //     `multiparty.NewGaloisKeyGenProtocol(params.LLKN.Top()).SampleCRP(crs, evkParams)`
 //     — top-level Galois CRP for VService's inference-side master atom set.
 //
-// Steps 1 and 3 are eval-level and byte-for-byte identical to Phase 1–3;
-// steps 2, 4 and 5 are Phase 4 additions for the LLKN hierarchy. The two
-// atom sets are disjoint mechanisms: auth atoms produce raw `*rlwe.GaloisKey`s
-// (no hierarchical derivation), infer atoms produce `*hierkeys.MasterKey`s.
-// See `docs/plans/20260516-phase-4-lattigo-hierkeys.md` for the
-// per-consumer atom split and `docs/DESIGN.md` for the level-dimension
-// rationale.
+// Steps 1 and 3 are eval-level and byte-for-byte identical to the
+// pre-hierkeys protocol; steps 2, 4 and 5 are introduced by the
+// lattigo-hierkeys split for the LLKN hierarchy. The two atom sets are
+// disjoint mechanisms: auth atoms produce raw `*rlwe.GaloisKey`s (no
+// hierarchical derivation), infer atoms produce `*hierkeys.MasterKey`s.
+// See `docs/DESIGN.md` for the level-dimension rationale.
 package protocol
 
 import (

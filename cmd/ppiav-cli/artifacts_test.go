@@ -17,9 +17,9 @@ import (
 
 // smallParams builds the CLI artifact-test profile: LogN=14 (8192 slots),
 // λ=8 so 3 auth atoms, LLKN with a single 40-bit P prime to exercise the
-// Phase 4 dual-PK + master-key write/read paths. Kept here so the artifact
-// tests stay self-contained; vclient/vagent each maintain their own
-// equivalents.
+// dual-PK + master-key write/read paths introduced by the lattigo-hierkeys
+// split. Kept here so the artifact tests stay self-contained; vclient and
+// vagent each maintain their own equivalents.
 func smallCLIParams(t *testing.T) protocol.Params {
 	t.Helper()
 	lit := ckks.ParametersLiteral{

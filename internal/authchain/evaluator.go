@@ -2,10 +2,10 @@
 // over a `*ckks.Evaluator` that the MPD-Auth `Auth` step uses to rotate
 // ciphertexts when only the base-2 atom-set Galois keys are present.
 //
-// Background. Phase 4's wire-transport optimization splits the canonical
-// `[1, Lambda)` rotation set into a small **eval-level base-2 atom set**
-// (`{1, 2, 4, ..., 2^k}` for k = floor(log2(Lambda-1))) carried as raw
-// `*rlwe.GaloisKey`s. Auth's `RotateNew(ct, -j)` for arbitrary
+// Background. The lattigo-hierkeys wire-transport split reduces the
+// canonical `[1, Lambda)` rotation set into a small **eval-level base-2
+// atom set** (`{1, 2, 4, ..., 2^k}` for k = floor(log2(Lambda-1))) carried
+// as raw `*rlwe.GaloisKey`s. Auth's `RotateNew(ct, -j)` for arbitrary
 // `j ∈ [1, Lambda)` is realised by decomposing `|j|` into binary atoms
 // (`popcount(j)` atoms) and chaining the negative-direction rotations one
 // atom at a time. No hierarchical key derivation is involved — this is
@@ -72,6 +72,15 @@ func New(
 // Inner exposes the underlying `*ckks.Evaluator` for non-rotation
 // operations Auth uses (`MulNew`, `Add`, `AddNew`, ...).
 func (e *Evaluator) Inner() *ckks.Evaluator { return e.inner }
+
+// Atoms returns the ascending base-2 atom set the evaluator was
+// constructed with. The slice is a defensive copy so callers cannot
+// mutate the evaluator's internal state.
+func (e *Evaluator) Atoms() []int {
+	out := make([]int, len(e.atoms))
+	copy(out, e.atoms)
+	return out
+}
 
 // Decompose returns the binary expansion of `|j|` as a list of powers of
 // two (ascending). `chain length == popcount(|j|)`. The result is a subset

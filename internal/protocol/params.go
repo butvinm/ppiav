@@ -3,7 +3,6 @@ package protocol
 import (
 	"fmt"
 	"math"
-	"sort"
 
 	"github.com/butvinm/ppiav/internal/authenticator"
 	hierkeys "github.com/butvinm/lattigo-hierkeys"
@@ -47,9 +46,9 @@ const DefaultLLKNBase = 4
 // `ExtraRotationIndices` carries the inference-circuit labels (already in
 // the signed-label convention above) on top of the authenticator's
 // canonical positive set. The `Defaults()` caller leaves it nil; the
-// Orion path populates it via `vservice.NewWithOrion`.
-// `RotationIndices()` returns the sorted union; VClient/VAgent iterate
-// that union when running the collaborative GaloisKeyGen handshake.
+// Orion path populates it via `vservice.NewWithOrion`. The auth-side and
+// infer-side handshakes iterate the disjoint atom sets returned by
+// `Params.AuthAtoms()` and `Params.InferAtoms()` respectively.
 //
 // `InputLevel` is the ciphertext level at which `EncryptImage` produces
 // the encrypted input. The synthetic-x² path leaves it zero, which
@@ -69,9 +68,9 @@ type Params struct {
 // Defaults returns the synthetic-x² parameter set from docs/DESIGN.md
 // §`Implementation/Layout`. LogN=16, LogQ=[55]+[40]×15, LogP=[55]×6,
 // LogDefaultScale=40, RingType=Standard. FloodSigma=2^16. No extra
-// rotation indices; `RotationIndices()` returns the canonical
-// `[1, Lambda)` set. InputLevel=0 makes `EncryptImage` build the
-// plaintext at MaxLevel (no compiled circuit to constrain the budget).
+// rotation indices; only the canonical authenticator atom set is
+// exercised. InputLevel=0 makes `EncryptImage` build the plaintext at
+// MaxLevel (no compiled circuit to constrain the budget).
 func Defaults() (Params, error) {
 	logQ := make([]int, 1+15)
 	logQ[0] = 55
@@ -175,33 +174,3 @@ func (p Params) ProjectSKToEval(skTop *rlwe.SecretKey) (*rlwe.SecretKey, error) 
 	return out, nil
 }
 
-// RotationIndices returns the sorted-ascending union of the canonical
-// authenticator rotation set `[1, Lambda)` and any `ExtraRotationIndices`
-// pulled from the inference-circuit manifest. Duplicates are removed.
-// Label 0 (identity) is dropped — Lattigo short-circuits
-// `Automorphism(galEl=1)` so no Galois key is required. Negative labels
-// are kept verbatim: see the `Params` doc for the signed-label convention
-// (Orion stores `-k_orion` so the keygen's `GaloisElement(-label)` lands
-// on `GaloisElement(+k_orion)`).
-//
-// VClient and VAgent iterate this slice in lockstep when running the
-// collaborative GaloisKeyGen handshake; identical inputs guarantee the
-// same CRP draw order on both sides.
-func (p Params) RotationIndices() []int {
-	seen := map[int]struct{}{}
-	for j := 1; j < p.Authenticator.Lambda; j++ {
-		seen[j] = struct{}{}
-	}
-	for _, j := range p.ExtraRotationIndices {
-		if j == 0 {
-			continue
-		}
-		seen[j] = struct{}{}
-	}
-	out := make([]int, 0, len(seen))
-	for j := range seen {
-		out = append(out, j)
-	}
-	sort.Ints(out)
-	return out
-}

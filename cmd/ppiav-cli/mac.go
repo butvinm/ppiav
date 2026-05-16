@@ -15,9 +15,9 @@ import (
 // authenticated ciphertext is written to --out-ct; a single-sample
 // bench.Run named "mac" is written to --out (default <workdir>/mac.json).
 //
-// Phase 4 reads from disk: pk_eval.bin (drives the authenticator-side
-// encryptor), rlk.bin + gks_auth.bin (drive authchain.Evaluator), sk_a +
-// mac_key (per-session secrets). gks_auth.bin is the largest input by far
+// Reads from disk: pk_eval.bin (drives the authenticator-side encryptor),
+// rlk.bin + gks_auth.bin (drive authchain.Evaluator), sk_a + mac_key
+// (per-session secrets). gks_auth.bin is the largest input by far
 // (~1.57 GB at LogN=16); the read time is recorded as
 // `read_gks_auth_seconds` in mac.json metadata for the bench harness.
 //

@@ -16,8 +16,8 @@ import (
 //
 // Why dual: the eval-level PK powers VClient's session encryptor and the
 // authenticator-side encryptor inside Auth. The top-level PK seeds
-// VService's `hierkeys.PubToRot` LevelExpansion (Phase 4 hierarchical key
-// derivation) — see docs/DESIGN.md §`internal/vservice`.
+// VService's `hierkeys.PubToRot` LevelExpansion (lattigo-hierkeys
+// hierarchical key derivation) — see docs/DESIGN.md §`internal/vservice`.
 //
 // CRS order: these are the FIRST TWO draws from c.crs (pk_eval, then
 // pk_top); RLK and per-atom Galois CRPs follow. See docs/DESIGN.md
@@ -34,16 +34,18 @@ func (c *Client) GenPKShare() (protocol.VClientPKShare, error) {
 	c.pkShareLocalEval = c.pkProtoEval.AllocateShare()
 	c.pkProtoEval.GenShare(skEval, c.pkCRPEval, &c.pkShareLocalEval)
 
-	// Top-level PK share.
+	// Top-level PK share. The protocol/CRP/share are locals: VClient does
+	// not aggregate pk_top on its own side (VAgent owns that), so there is
+	// nothing to stash between GenPKShare and AggregatePK.
 	topParams := c.params.LLKN.Top()
-	c.pkProtoTop = multiparty.NewPublicKeyGenProtocol(topParams)
-	c.pkCRPTop = c.pkProtoTop.SampleCRP(c.crs)
-	c.pkShareLocalTop = c.pkProtoTop.AllocateShare()
-	c.pkProtoTop.GenShare(c.skTop, c.pkCRPTop, &c.pkShareLocalTop)
+	pkProtoTop := multiparty.NewPublicKeyGenProtocol(topParams)
+	pkCRPTop := pkProtoTop.SampleCRP(c.crs)
+	pkShareLocalTop := pkProtoTop.AllocateShare()
+	pkProtoTop.GenShare(c.skTop, pkCRPTop, &pkShareLocalTop)
 
 	return protocol.VClientPKShare{
 		ShareEval: c.pkShareLocalEval,
-		ShareTop:  c.pkShareLocalTop,
+		ShareTop:  pkShareLocalTop,
 	}, nil
 }
 
@@ -67,9 +69,7 @@ func (c *Client) AggregatePK(agentShare protocol.VAgentPKShare) error {
 	// Top-level shares are emitted to VAgent inside VClientPKShare; VAgent
 	// owns the pk_top aggregation and ships the result to VService.
 	// VClient itself does not need pk_top after GenPKShare — the encryptor
-	// runs only at eval level. The agentShare.ShareTop value is therefore
-	// passed through (verified above) but not aggregated locally.
-	_ = agentShare.ShareTop
+	// runs only at eval level — so agentShare.ShareTop is not consumed here.
 
 	return nil
 }

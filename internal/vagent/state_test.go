@@ -132,7 +132,7 @@ func TestExportStateRequiresCompletedKeygen(t *testing.T) {
 	require.Error(t, err)
 }
 
-// NewWithState must reject nil state and nil SkShare so misuse fails
+// NewWithState must reject nil state and nil SkTop so misuse fails
 // loudly instead of producing a half-built Agent that crashes later.
 func TestNewWithStateRejectsInvalidInputs(t *testing.T) {
 	params := smallParams(t)

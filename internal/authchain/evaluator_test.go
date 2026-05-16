@@ -123,8 +123,8 @@ func TestRotateNew_MatchesDirectKey(t *testing.T) {
 	atoms := testAtoms(lambda)
 
 	// Two-party multi-party handshake to mint atom keys + a joint sk for
-	// decryption. Matches the production shape (Phase 4 VAgent +
-	// VClient).
+	// decryption. Matches the production VAgent + VClient handshake shape
+	// under the lattigo-hierkeys split.
 	kgen := rlwe.NewKeyGenerator(params)
 	skC := kgen.GenSecretKeyNew()
 	skA := kgen.GenSecretKeyNew()
@@ -136,7 +136,7 @@ func TestRotateNew_MatchesDirectKey(t *testing.T) {
 
 	// Joint sk = sk_c + sk_a (single combined key for single-party
 	// decryption — matches the chain-rotation correctness test in the
-	// authenticator's phase4_neg_base2_test.go).
+	// authenticator's chain_noise_gate_test.go).
 	skJoint := rlwe.NewSecretKey(params)
 	params.RingQP().Add(skC.Value, skA.Value, skJoint.Value)
 	dec := rlwe.NewDecryptor(params, skJoint)

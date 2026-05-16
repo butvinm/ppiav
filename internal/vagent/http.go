@@ -74,11 +74,11 @@ func NewServer(agent *Agent, vserviceURL, rserviceURL, rservicePublicURL string)
 		rserviceURL:       rsvcURL,
 		rservicePublicURL: rsvcPubURL,
 		// Default transport (no Client.Timeout): per-request deadlines are
-		// applied via context.WithTimeout at the call site. The Phase 4
-		// VService /eval-keys handler runs hierkeys.LevelExpansion +
-		// FinalizeKey across ExtraRotationIndices, which is multi-minute
-		// sequential / tens-of-seconds concurrent at LogN=16 — a single
-		// 30s Client.Timeout would force a guaranteed-failure across all
+		// applied via context.WithTimeout at the call site. The VService
+		// /eval-keys handler runs hierkeys.LevelExpansion + FinalizeKey
+		// across ExtraRotationIndices, which is multi-minute sequential /
+		// tens-of-seconds concurrent at LogN=16 — a single 30s
+		// Client.Timeout would force a guaranteed-failure across all
 		// requests at the production parameter set.
 		httpClient: &http.Client{},
 		mux:        http.NewServeMux(),

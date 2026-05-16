@@ -70,7 +70,7 @@ func (a *Authenticator) Config() Config { return a.cfg }
 // auth atom `a ∈ {1, 2, 4, ..., 2^k}` (powers of two strictly less than
 // `Lambda`) at `GaloisElement(-a)`. The rotator's `RotateNew(ct, -j)`
 // internally chains `popcount(j)` atom rotations; Auth itself sees the
-// logical `-j` semantics unchanged from Phase 1-3.
+// logical `-j` semantics unchanged from the pre-hierkeys protocol.
 func (a *Authenticator) Auth(
 	key Key,
 	encryptor *rlwe.Encryptor,
@@ -87,7 +87,7 @@ func (a *Authenticator) Auth(
 		return nil, fmt.Errorf("authenticator: rotator is nil")
 	}
 	eval := rot.Inner()
-	if err := a.validateGaloisKeys(eval); err != nil {
+	if err := a.validateGaloisKeys(eval, rot.Atoms()); err != nil {
 		return nil, err
 	}
 
@@ -169,12 +169,14 @@ func (a *Authenticator) Auth(
 }
 
 // validateGaloisKeys checks that `eval` carries Galois keys for every
-// auth atom in `{1, 2, 4, ..., 2^k}` with `2^k < Lambda`. The chain
-// rotator decomposes any `j ∈ [1, Lambda)` into a sum of these atoms via
-// binary expansion; missing an atom means some `j` cannot be chain-
-// rotated. The required Galois element per atom is
+// supplied atom. The chain rotator decomposes any `j ∈ [1, Lambda)` into
+// a sum of these atoms via binary expansion; missing an atom means some
+// `j` cannot be chain-rotated. The required Galois element per atom is
 // `params.GaloisElement(-atom)` because Auth issues `RotateNew(ct, -j)`.
-func (a *Authenticator) validateGaloisKeys(eval *ckks.Evaluator) error {
+// `atoms` is provided by the caller (typically `rot.Atoms()`) so the atom
+// enumeration lives in a single place — `authchain.Evaluator` — and is
+// not re-derived from `a.cfg.Lambda` here.
+func (a *Authenticator) validateGaloisKeys(eval *ckks.Evaluator, atoms []int) error {
 	if eval == nil || eval.EvaluationKeySet == nil {
 		return fmt.Errorf("authenticator: evaluator missing EvaluationKeySet")
 	}
@@ -184,7 +186,7 @@ func (a *Authenticator) validateGaloisKeys(eval *ckks.Evaluator) error {
 		carried[galEl] = true
 	}
 	var missing []int
-	for atom := 1; atom < a.cfg.Lambda; atom <<= 1 {
+	for _, atom := range atoms {
 		wantGalEl := a.params.GaloisElement(-atom)
 		if !carried[wantGalEl] {
 			missing = append(missing, atom)

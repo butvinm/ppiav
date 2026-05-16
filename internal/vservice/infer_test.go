@@ -4,7 +4,6 @@ import (
 	"math"
 	"testing"
 
-	"github.com/butvinm/lattigo-hierkeys/llkn"
 	"github.com/butvinm/ppiav/internal/authenticator"
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/stretchr/testify/assert"
@@ -18,10 +17,10 @@ import (
 // We deliberately skip protocol.Defaults() (LogN=16) so the unit suite
 // stays fast; the multi-party handshake is exercised in Task 8.
 //
-// The LLKN hierarchy is built with a single 40-bit master P-prime so the
-// dual-atom-set keygen surface compiles; the x² path itself uses no
-// rotations and the derivation in `StoreEvalKeys` short-circuits when
-// `ExtraRotationIndices` is empty.
+// The LLKN hierarchy is built via `protocol.BuildLLKNParams` so the wire
+// schedule matches the strict `DefaultLLKNLogPHK` check in
+// `writeParams` — tests must drive the same canonical builder production
+// uses or the /params HTTP path will reject the response.
 func smallParams(t *testing.T) protocol.Params {
 	t.Helper()
 	lit := ckks.ParametersLiteral{
@@ -33,7 +32,7 @@ func smallParams(t *testing.T) protocol.Params {
 	}
 	ckksParams, err := ckks.NewParametersFromLiteral(lit)
 	require.NoError(t, err)
-	llknParams, err := llkn.NewParameters(ckksParams.Parameters, [][]int{{40}})
+	llknParams, err := protocol.BuildLLKNParams(ckksParams)
 	require.NoError(t, err)
 	return protocol.Params{
 		CKKS:          ckksParams,

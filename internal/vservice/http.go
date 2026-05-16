@@ -175,10 +175,22 @@ func writeParams(w http.ResponseWriter, p protocol.Params) error {
 	if err != nil {
 		return fmt.Errorf("marshal CKKS params: %w", err)
 	}
+	// Read the LLKNLogPHK schedule off the live top-level params rather
+	// than re-stamping the default — a future custom-LLKN constructor must
+	// not be silently overridden by the default schedule. The only
+	// supported schedule today is `DefaultLLKNLogPHK`; mismatch is a
+	// caller-side bug and aborts the response.
+	logPHK := p.LLKN.Top().LogPi()
+	if !equalIntSlice(logPHK, protocol.DefaultLLKNLogPHK) {
+		return fmt.Errorf(
+			"vservice writeParams: LLKN top LogPi %v does not match DefaultLLKNLogPHK %v",
+			logPHK, protocol.DefaultLLKNLogPHK,
+		)
+	}
 	pw := paramsWire{
 		CKKS:                 ckksBytes,
 		LLKNBase:             p.LLKNBase,
-		LLKNLogPHK:           protocol.DefaultLLKNLogPHK,
+		LLKNLogPHK:           logPHK,
 		AuthenticatorLambda:  p.Authenticator.Lambda,
 		AuthenticatorEpsilon: p.Authenticator.Epsilon,
 		FloodSigma:           p.FloodSigma,
@@ -187,5 +199,20 @@ func writeParams(w http.ResponseWriter, p protocol.Params) error {
 	}
 	httputil.WriteJSON(w, http.StatusOK, pw)
 	return nil
+}
+
+// equalIntSlice reports whether two int slices have identical length and
+// element-wise contents. Used to validate the wire LLKNLogPHK schedule
+// against the canonical default.
+func equalIntSlice(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 

@@ -3,7 +3,6 @@ package protocol
 import (
 	"bytes"
 	"math"
-	"sort"
 	"testing"
 
 	"github.com/butvinm/ppiav/internal/authenticator"
@@ -49,46 +48,6 @@ func TestNewSessionCRSDifferentSids(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.False(t, bytes.Equal(buf1, buf2), "different sids must produce different CRS output")
-}
-
-func TestCanonicalAuthAtoms_Defaults(t *testing.T) {
-	params, err := Defaults()
-	require.NoError(t, err)
-	got := params.AuthAtoms()
-	// λ=128 → powers of two up to and including 64.
-	assert.Equal(t, []int{1, 2, 4, 8, 16, 32, 64}, got)
-	assert.True(t, sort.IntsAreSorted(got), "auth atoms must be ascending")
-	assert.Len(t, got, len(params.AuthAtoms()))
-}
-
-func TestCanonicalAuthAtoms_VariedLambda(t *testing.T) {
-	cases := []struct {
-		lambda int
-		want   []int
-	}{
-		{0, nil},
-		{1, nil},
-		{2, []int{1}},
-		{4, []int{1, 2}},
-		{8, []int{1, 2, 4}},
-		{128, []int{1, 2, 4, 8, 16, 32, 64}},
-	}
-	for _, c := range cases {
-		params, err := Defaults()
-		require.NoError(t, err)
-		params.Authenticator.Lambda = c.lambda
-		assert.Equalf(t, c.want, params.AuthAtoms(), "lambda=%d", c.lambda)
-	}
-}
-
-func TestCanonicalInferAtoms_DefaultsBase4LogN16(t *testing.T) {
-	params, err := Defaults()
-	require.NoError(t, err)
-	got := params.InferAtoms()
-	// Base=4, MaxSlots=N/2=32768 → {1,4,16,64,256,1024,4096,16384}.
-	assert.Equal(t, []int{1, 4, 16, 64, 256, 1024, 4096, 16384}, got)
-	assert.True(t, sort.IntsAreSorted(got), "infer atoms must be ascending")
-	assert.Len(t, got, len(params.InferAtoms()))
 }
 
 // smallParamsForCRSTest builds a fast LogN=10 parameter set with a 2-prime

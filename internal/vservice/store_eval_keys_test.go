@@ -97,7 +97,7 @@ func buildMultiPartyTransmission(t *testing.T, params protocol.Params) (
 //  4. Encrypt a fresh ciphertext under `skEval`, rotate it via the
 //     in-process *ckks.Evaluator (built from the derived gks_infer),
 //     decrypt under `skEval`, and verify the rotation matches the
-//     plaintext rotated by `r` within Phase 1-3's precision bounds.
+//     plaintext rotated by `r` within the protocol's precision bound.
 //
 // Byte-equality with freshly-generated multi-party Galois keys is NOT
 // asserted: hierarchical derivation produces a different `a`-part than
@@ -174,8 +174,8 @@ func TestStoreEvalKeysFunctionalEquivalence(t *testing.T) {
 		decoded := make([]float64, slots)
 		require.NoError(t, encoder.Decode(decryptor.DecryptNew(out), decoded))
 
-		// Phase 1-3's published precision bound is 1e-4 across the small
-		// CKKS profiles used elsewhere in this package (see infer_test's
+		// 1e-4 is the published precision bound across the small CKKS
+		// profiles used elsewhere in this package (see infer_test's
 		// InDelta).
 		for i := 0; i < slots; i++ {
 			want := values[(i+rotBy+slots)%slots]

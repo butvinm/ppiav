@@ -38,9 +38,11 @@ type ExportedState struct {
 // caller is responsible for any subsequent eviction.
 //
 // `Rlk`, `PKTop`, and `GksMasterInfer` are stashed by StoreEvalKeys and
-// shared by reference. NewWithState re-runs the hierarchical derivation
-// to materialise per-target Galois keys — the snapshot itself does not
-// carry them.
+// shared by reference. `GksInfer` is populated from the live session so
+// the CLI keygen subcommand can persist the derived rotation set to disk
+// (per-sample re-derivation is multi-minute at LogN=16). NewWithState
+// honours a non-nil `GksInfer` when supplied; otherwise it re-runs the
+// hierarchical derivation against `PKTop + GksMasterInfer`.
 func (s *Service) ExportState(sid protocol.SessionID) (*ExportedState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -86,27 +88,12 @@ func NewWithState(params protocol.Params, orionDir string, state *ExportedState)
 		mergedParams = params
 	)
 	if orionDir != "" {
-		m, ckksParams, inputLevel, rotations, err := loadOrionModel(orionDir)
+		merged, m, err := mergeOrionParams(params, orionDir)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("vservice: NewWithState: %w", err)
 		}
+		mergedParams = merged
 		model = m
-		mergedParams.CKKS = ckksParams
-		mergedParams.InputLevel = inputLevel
-		// Rebuild LLKN against the Orion-overridden CKKS — see
-		// NewWithOrion for the rationale (stale LLKN against caller's
-		// pre-override CKKS desynchronises the top-level Galois handshake).
-		llknParams, err := protocol.BuildLLKNParams(ckksParams)
-		if err != nil {
-			return nil, fmt.Errorf("vservice: NewWithState rebuild LLKN against Orion CKKS: %w", err)
-		}
-		mergedParams.LLKN = llknParams
-		if len(params.ExtraRotationIndices) > 0 || len(rotations) > 0 {
-			combined := make([]int, 0, len(params.ExtraRotationIndices)+len(rotations))
-			combined = append(combined, params.ExtraRotationIndices...)
-			combined = append(combined, rotations...)
-			mergedParams.ExtraRotationIndices = combined
-		}
 	} else if params.CKKS.LogN() <= 0 {
 		return nil, fmt.Errorf("vservice: NewWithState params.CKKS is zero-valued (LogN <= 0)")
 	}

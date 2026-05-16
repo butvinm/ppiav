@@ -46,8 +46,9 @@ type orionManifest struct {
 // scale/ring type), the per-circuit `InputLevel`, and the rotation index
 // set required to evaluate the circuit. The authenticator config and
 // flooding sigma come from the same defaults `Defaults()` uses — the Orion
-// path only changes the source of the CKKS knobs and unions the Orion
-// rotation indices into `RotationIndices()`.
+// path only changes the source of the CKKS knobs and stamps the Orion
+// rotation indices onto `ExtraRotationIndices` for the inference-side
+// handshake.
 //
 // File format: see `orionManifest`. The fixture under
 // `internal/protocol/testdata/orion_manifest.json` documents the exact

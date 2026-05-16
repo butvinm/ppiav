@@ -172,8 +172,8 @@ func runKeygen(args []string) error {
 	// keygen.rlk-r1 — same shape as pk: client_gen → agent_gen → agent_agg → client_agg.
 	{
 		var (
-			clientR1 any
-			agentR1  any
+			clientR1 multiparty.RelinearizationKeyGenShare
+			agentR1  multiparty.RelinearizationKeyGenShare
 		)
 		if err := measureStep("keygen.rlk-r1.client_gen", func() error {
 			cs, e := client.GenRLKShareRound1()
@@ -192,13 +192,13 @@ func runKeygen(args []string) error {
 			return fmt.Errorf("keygen: rlk-r1.agent_gen: %w", err)
 		}
 		if err := measureStep("keygen.rlk-r1.agent_agg", func() error {
-			return agent.AggregateRLKRound1(sid, clientR1.(multiparty.RelinearizationKeyGenShare))
+			return agent.AggregateRLKRound1(sid, clientR1)
 		}); err != nil {
 			writeRunOnExit()
 			return fmt.Errorf("keygen: rlk-r1.agent_agg: %w", err)
 		}
 		if err := measureStep("keygen.rlk-r1.client_agg", func() error {
-			return client.AggregateRLKRound1(agentR1.(multiparty.RelinearizationKeyGenShare))
+			return client.AggregateRLKRound1(agentR1)
 		}); err != nil {
 			writeRunOnExit()
 			return fmt.Errorf("keygen: rlk-r1.client_agg: %w", err)
@@ -207,7 +207,7 @@ func runKeygen(args []string) error {
 
 	// keygen.rlk-r2 — final rlk lives on the agent; no client_agg.
 	{
-		var clientR2 any
+		var clientR2 multiparty.RelinearizationKeyGenShare
 		if err := measureStep("keygen.rlk-r2.client_gen", func() error {
 			cs, e := client.GenRLKShareRound2()
 			clientR2 = cs
@@ -224,7 +224,7 @@ func runKeygen(args []string) error {
 			return fmt.Errorf("keygen: rlk-r2.agent_gen: %w", err)
 		}
 		if err := measureStep("keygen.rlk-r2.agent_agg", func() error {
-			return agent.AggregateRLKRound2(sid, clientR2.(multiparty.RelinearizationKeyGenShare))
+			return agent.AggregateRLKRound2(sid, clientR2)
 		}); err != nil {
 			writeRunOnExit()
 			return fmt.Errorf("keygen: rlk-r2.agent_agg: %w", err)
@@ -244,8 +244,8 @@ func runKeygen(args []string) error {
 	)
 	{
 		var (
-			clientAuthShares  any
-			clientInferShares any
+			clientAuthShares  []multiparty.GaloisKeyGenShare
+			clientInferShares []multiparty.GaloisKeyGenShare
 		)
 		if err := measureStep("keygen.galois.client_gen", func() error {
 			ca, ci, _, _, e := client.GenAuthAndInferShares()
@@ -268,8 +268,8 @@ func runKeygen(args []string) error {
 		}
 		if err := measureStep("keygen.galois.agent_agg", func() error {
 			shares := protocol.VClientGaloisShares{
-				AuthAtomShares:  clientAuthShares.([]multiparty.GaloisKeyGenShare),
-				InferAtomShares: clientInferShares.([]multiparty.GaloisKeyGenShare),
+				AuthAtomShares:  clientAuthShares,
+				InferAtomShares: clientInferShares,
 			}
 			aggRlk, aggPkTop, aggMasters, e := agent.AggregateGaloisShares(sid, shares)
 			if e != nil {

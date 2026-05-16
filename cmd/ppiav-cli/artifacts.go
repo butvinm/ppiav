@@ -22,17 +22,17 @@ import (
 // aggregator pulls byte sizes from os.Stat against these names — single
 // source of truth lives here.
 //
-// Phase 4 (lattigo-hierkeys) splits the keygen output into three Galois-key
+// The lattigo-hierkeys split breaks the keygen output into three Galois-key
 // artifacts:
 //
 //   - gks_auth.bin         — 7 raw *rlwe.GaloisKey at eval level, negative
 //     galEls. Consumed by `mac` to drive authchain.Evaluator.
 //   - gks_master_infer.bin — VAgent's 8 *hierkeys.MasterKey wire artifact
-//     (cross-phase wire-size comparison reads this).
+//     (the wire-size comparison reads this).
 //   - gks_infer.bin        — VService's expand-fully derived set, eval level.
 //     Cached at keygen because per-sample derivation is multi-minute at LogN=16.
 //
-// pk.bin from Phase 1-3 is split into pk_eval.bin (encryption + Auth's
+// The pre-hierkeys pk.bin is split into pk_eval.bin (encryption + Auth's
 // encrypt-v step) and pk_top.bin (seeds hierkeys.PubToRot inside infer).
 const (
 	artifactSID            = "sid.txt"
@@ -155,7 +155,7 @@ func readSecretKey(workdir, name string) (*rlwe.SecretKey, error) {
 
 // writePublicKey serialises a PublicKey via its MarshalBinary. `name` is
 // either artifactPKEval or artifactPKTop — the two collective PKs persisted
-// at keygen for the dual-level Phase 4 handshake.
+// at keygen for the dual-level handshake under the lattigo-hierkeys split.
 func writePublicKey(workdir, name string, pk *rlwe.PublicKey) error {
 	if pk == nil {
 		return fmt.Errorf("artifacts: writePublicKey %s: pk is nil", name)

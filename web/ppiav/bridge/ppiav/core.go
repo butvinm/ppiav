@@ -14,7 +14,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/butvinm/lattigo-hierkeys/llkn"
 	"github.com/butvinm/ppiav/internal/authenticator"
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/butvinm/ppiav/internal/vclient"
@@ -58,7 +57,10 @@ func ParseParamsJSON(data []byte) (protocol.Params, error) {
 	if err := ckksParams.UnmarshalJSON(pw.CKKS); err != nil {
 		return protocol.Params{}, fmt.Errorf("ppiav: decode CKKS params: %w", err)
 	}
-	llknParams, err := llkn.NewParameters(ckksParams.Parameters, [][]int{pw.LLKNLogPHK})
+	// LLKNLogPHK was validated above against DefaultLLKNLogPHK — route
+	// through the canonical builder so this stays the single LLKN
+	// construction site shared with Defaults / LoadOrionParams / vservice.
+	llknParams, err := protocol.BuildLLKNParams(ckksParams)
 	if err != nil {
 		return protocol.Params{}, fmt.Errorf("ppiav: build LLKN parameters: %w", err)
 	}

@@ -14,7 +14,7 @@ import (
 
 // authTestFixture wires up a single-party CKKS deployment with Galois
 // keys for the eval-level base-2 atom set Auth's chain rotator consumes.
-// The full multi-party handshake is exercised in `phase4_neg_base2_test.go`
+// The full multi-party handshake is exercised in `chain_noise_gate_test.go`
 // (chain-rotation math) and `internal/vagent/*_test.go` (end-to-end).
 type authTestFixture struct {
 	params    ckks.Parameters
