@@ -65,7 +65,10 @@ func TestParams_RotationIndices_DefaultsCanonicalOnly(t *testing.T) {
 	got := params.RotationIndices()
 
 	// Defaults have no extras: RotationIndices() = canonical [1, λ).
-	want := CanonicalRotationIndices(params.Authenticator.Lambda)
+	want := make([]int, 0, params.Authenticator.Lambda-1)
+	for j := 1; j < params.Authenticator.Lambda; j++ {
+		want = append(want, j)
+	}
 	assert.Equal(t, want, got)
 	assert.Len(t, got, 127)
 	assert.Equal(t, 1, got[0])
@@ -93,9 +96,8 @@ func TestParams_RotationIndices_UnionWithExtras(t *testing.T) {
 	}
 
 	// Canonical [1..127] is a subset of the result.
-	canonical := CanonicalRotationIndices(params.Authenticator.Lambda)
 	canonSet := map[int]struct{}{}
-	for _, j := range canonical {
+	for j := 1; j < params.Authenticator.Lambda; j++ {
 		canonSet[j] = struct{}{}
 	}
 	resultSet := map[int]struct{}{}

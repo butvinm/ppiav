@@ -370,15 +370,15 @@ Per-file wire sizes are auto-discovered by `_per_message_bytes` via `os.stat()` 
 - Modify: `internal/protocol/crs.go`
 - Modify: `internal/protocol/crs_test.go`
 
-- [ ] update `CanonicalRotationIndices` — replace with two helpers: `CanonicalAuthAtoms(params Params) []int` and `CanonicalInferAtoms(params Params) []int`, each returning the ascending atom set. The Galois keygen iterates these in sequence (auth first, then infer) when drawing CRPs.
-- [ ] document the new five-step CRP draw order in the package doc-comment in sync with DESIGN.md (post-Task-1 wording):
+- [x] update `CanonicalRotationIndices` — replace with two helpers: `CanonicalAuthAtoms(params Params) []int` and `CanonicalInferAtoms(params Params) []int`, each returning the ascending atom set. The Galois keygen iterates these in sequence (auth first, then infer) when drawing CRPs.
+- [x] document the new five-step CRP draw order in the package doc-comment in sync with DESIGN.md (post-Task-1 wording):
   1. `PublicKeyGenProtocol(evalParams).SampleCRP(crs)` — pk_eval
   2. `PublicKeyGenProtocol(topParams).SampleCRP(crs)` — pk_top
   3. `RelinearizationKeyGenProtocol(evalParams).SampleCRP(crs, evkParams)` — single CRP for both RLK rounds
   4. For each atom in `CanonicalAuthAtoms` (ascending): `GaloisKeyGenProtocol(evalParams).SampleCRP(crs, evkParams)`
   5. For each atom in `CanonicalInferAtoms` (ascending): `GaloisKeyGenProtocol(topParams).SampleCRP(crs, evkParams)`
-- [ ] write tests: both atom sets returned in ascending order; counts match `len(params.AuthAtoms())` and `len(params.InferAtoms())`; the documented draw order is callable in lockstep from a test that mirrors VClient and VAgent against the same CRS — both parties consume the CRS in the exact 5-step order above, byte-for-byte.
-- [ ] run `go test ./internal/protocol/...`.
+- [x] write tests: both atom sets returned in ascending order; counts match `len(params.AuthAtoms())` and `len(params.InferAtoms())`; the documented draw order is callable in lockstep from a test that mirrors VClient and VAgent against the same CRS — both parties consume the CRS in the exact 5-step order above, byte-for-byte.
+- [x] run `go test ./internal/protocol/...`.
 
 ### Task 4: Update wire types for master payloads + dual PK
 

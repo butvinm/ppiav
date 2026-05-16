@@ -99,8 +99,8 @@ func (a *Authenticator) Auth(
 	// slot j". Lattigo's `RotateNew(ct, k)` is left-rotation: slot i ←
 	// slot (i+k) mod (N/2). To place ct_m's slot 0 at slot j we therefore
 	// rotate by -j (right-rotation by j). The protocol still labels these
-	// rotations 1..λ-1 in `CanonicalRotationIndices`; the Galois key the
-	// label maps to is `params.GaloisElement(-j)`.
+	// rotations 1..λ-1; the Galois key the label maps to is
+	// `params.GaloisElement(-j)`.
 	inS := sInSet(key.S, a.cfg.Lambda)
 	var ctMRep *rlwe.Ciphertext
 	for j := 0; j < a.cfg.Lambda; j++ {
