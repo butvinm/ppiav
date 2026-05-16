@@ -260,14 +260,14 @@ All three subcommands follow the same refactor pattern: take the single `bench.M
 - Modify: `bench/bench/eval.py`
 - Modify: `bench/bench/_labels_ru.py` (add new section headers if needed)
 
-- [ ] in `eval.py`, replace `_per_message_bytes` body with a catalog-driven walk over `_messages.MESSAGES`. Return `list[tuple[message_id, label_ru, sender, receiver, bytes]]`.
-- [ ] build a `samples_by_name: dict[str, list[Sample]]` index in `aggregate()` covering keygen Run + every per-image Run, pass it into the resolver
-- [ ] add `_key_inventory_md(batch_dir, samples_by_name)` returning a markdown table with columns: key, location, on_wire, bytes, KiB, MiB
-- [ ] update `_bytes_table_md` to consume the new row shape (message_id + label) and render columns: `id | сообщение | отправитель | получатель | байт | КиБ | МиБ`
-- [ ] update `_network_table_md` similarly so bandwidth column is keyed by message_id
-- [ ] update `bytes.json` cache format to persist the catalog-keyed rows. Schema check is simple: if the loaded JSON's first entry has the old shape (`{"name", "bytes"}` instead of `{"message_id", "label_ru", ...}`), delete the cache file and re-stat. No version migration code — this is a single-developer bench cache, not a persisted user artifact.
-- [ ] add the new `## Key inventory` section to `aggregate()`'s `sections` list, between bytes and verdict accuracy
-- [ ] add an aggregator-level test in `bench/tests/test_eval_aggregate.py` that calls `aggregate()` on the fixture from Task 4 and asserts the resulting `summary.md` contains: each expected section header, every message_id from `MESSAGES`, every key from `KEYS`, plain + FHE accuracy columns. This is the contract test for Tasks 5–7 combined.
+- [x] in `eval.py`, replace `_per_message_bytes` body with a catalog-driven walk over `_messages.MESSAGES`. Return `list[tuple[message_id, label_ru, sender, receiver, bytes]]`.
+- [x] build a `samples_by_name: dict[str, list[Sample]]` index in `aggregate()` covering keygen Run + every per-image Run, pass it into the resolver
+- [x] add `_key_inventory_md(batch_dir, samples_by_name)` returning a markdown table with columns: key, location, on_wire, bytes, KiB, MiB
+- [x] update `_bytes_table_md` to consume the new row shape (message_id + label) and render columns: `id | сообщение | отправитель | получатель | байт | КиБ | МиБ`
+- [x] update `_network_table_md` similarly so bandwidth column is keyed by message_id
+- [x] update `bytes.json` cache format to persist the catalog-keyed rows. Schema check is simple: if the loaded JSON's first entry has the old shape (`{"name", "bytes"}` instead of `{"message_id", "label_ru", ...}`), delete the cache file and re-stat. No version migration code — this is a single-developer bench cache, not a persisted user artifact.
+- [x] add the new `## Key inventory` section to `aggregate()`'s `sections` list, between bytes and verdict accuracy
+- [x] add an aggregator-level test in `bench/tests/test_eval_aggregate.py` that calls `aggregate()` on the fixture from Task 4 and asserts the resulting `summary.md` contains: each expected section header, every message_id from `MESSAGES`, every key from `KEYS`, plain + FHE accuracy columns. This is the contract test for Tasks 5–7 combined. (Task 5: section headers + message_ids + key names asserted; plain + FHE accuracy assertions deferred to Task 6 per plan.)
 
 ### Task 6: Plaintext baseline + side-by-side accuracy
 

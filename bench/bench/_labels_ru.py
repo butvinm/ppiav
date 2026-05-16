@@ -116,6 +116,51 @@ PARTY_NAMES: dict[str, str] = {
     "joint": "совместно",
 }
 
+# Section headers + table column labels for summary.md. Keep keys ASCII;
+# values stay Russian per project convention.
+SECTION_HEADERS: dict[str, str] = {
+    "per_message_bytes": "Размер сообщений",
+    "key_inventory": "Инвентарь ключей",
+    "network_wire_time": "Время передачи по сети",
+}
+
+# Column headers for the per-message bytes / key inventory tables. Kept
+# here so adjacent tables stay terminology-consistent.
+TABLE_HEADERS: dict[str, str] = {
+    "message_id": "id",
+    "message_label": "сообщение",
+    "sender": "отправитель",
+    "receiver": "получатель",
+    "bytes": "байт",
+    "kib": "КиБ",
+    "mib": "МиБ",
+    "key_name": "ключ",
+    "key_location": "расположение",
+    "on_wire": "передаётся",
+    "on_wire_yes": "да",
+    "on_wire_no": "нет",
+    "empty": "—",
+}
+
+# Display names for KeyEntry.location values (KeyLocation literal).
+KEY_LOCATION_NAMES: dict[str, str] = {
+    "client_local": "клиент",
+    "agent_local": "агент",
+    "service_local": "сервис",
+    "derived_agent": "агент (производный)",
+    "derived_service": "сервис (производный)",
+    "aggregated_all": "у всех (агрегированный)",
+    "share": "доля (на проводе)",
+}
+
+# Display names for Party values used in the per-message bytes table.
+PARTY_SHORT_NAMES: dict[str, str] = {
+    "client": "клиент",
+    "agent": "агент",
+    "service": "сервис",
+    "resource_service": "ресурс-сервис",
+}
+
 # Axis / legend / table-header strings.
 AXIS: dict[str, str] = {
     "wall_ms": "время выполнения, мс",

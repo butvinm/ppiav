@@ -36,11 +36,16 @@ from typing import Any
 
 import numpy as np
 
+from bench import _messages
 from bench._labels_ru import (
+    KEY_LOCATION_NAMES,
     KEYGEN_ROUND_SUBSTEPS,
     PARTY_BY_STEP,
     PARTY_NAMES,
+    PARTY_SHORT_NAMES,
+    SECTION_HEADERS,
     STEP_NAMES,
+    TABLE_HEADERS,
 )
 from bench.load import Run, Sample, load_run
 
@@ -352,49 +357,86 @@ def _load_keygen_run(batch_dir: Path) -> Run:
     return load_run(batch_dir / "keygen.json")
 
 
-def _per_message_bytes(batch_dir: Path) -> list[tuple[str, int]]:
-    """Per-message wire sizes for the bytes / bandwidth tables and Gantt.
+# Per-message bytes row: (message_id, label_ru, sender, receiver, bytes_or_None).
+MessageBytesRow = tuple[str, str, str, str, int | None]
 
-    Tries the on-disk `.bin` artifacts first (canonical source: stat the
-    files in `keys/` and `img_0/`). When those have been pruned (e.g. the
-    batch was rsynced with `--exclude '*.bin'` to strip secret material
-    before commit), falls back to the persisted `bytes.json` written by
-    a prior aggregate call. If neither is available the table is empty.
+
+def _per_message_bytes(
+    batch_dir: Path, samples_by_name: dict[str, list[Sample]]
+) -> list[MessageBytesRow]:
+    """Per-message wire sizes driven by ``_messages.MESSAGES``.
+
+    Each catalog entry resolves its size via ``resolve_message_bytes``. Missing
+    files and ``Unavailable`` sources yield ``bytes=None`` (rendered as ``—``).
+
+    A bytes cache at ``<batch>/bytes.json`` persists the catalog-keyed rows so
+    re-aggregation works after stripping ``.bin`` artifacts (e.g. for commit).
+    Cache writes happen only when at least one row has a real (non-None) size;
+    otherwise the cache wins. The cache shape is checked on load — if the first
+    row has the old ``{"name", "bytes"}`` layout, the file is deleted and the
+    catalog is re-resolved.
     """
-    bytes_json = batch_dir / "bytes.json"
-    rows: list[tuple[str, int]] = []
-    has_bin = False
-    keys_dir = batch_dir / "keys"
-    if keys_dir.is_dir():
-        for path in sorted(keys_dir.iterdir()):
-            if not path.is_file():
-                continue
-            rows.append((f"keys/{path.name}", path.stat().st_size))
-            if path.name.endswith(".bin"):
-                has_bin = True
-    img_dirs = _image_dirs(batch_dir)
-    if img_dirs:
-        _, first = img_dirs[0]
-        for path in sorted(first.iterdir()):
-            if not path.is_file() or path.name.endswith(".json"):
-                continue
-            rows.append((f"img/{path.name}", path.stat().st_size))
-            if path.name.endswith(".bin"):
-                has_bin = True
+    rows: list[MessageBytesRow] = []
+    saw_real_byte = False
+    for msg in _messages.MESSAGES:
+        size = _messages.resolve_message_bytes(msg, batch_dir, samples_by_name)
+        if size is not None:
+            saw_real_byte = True
+        rows.append((msg.id, msg.label_ru, msg.sender, msg.receiver, size))
 
-    # Persist the cache only when the on-disk picture is "full" (at least
-    # one .bin observed). This keeps replot-from-bin-stripped working
-    # against an authoritative cache from the original VPS run.
-    if has_bin:
+    bytes_json = batch_dir / "bytes.json"
+    if saw_real_byte:
+        payload = [
+            {
+                "message_id": mid,
+                "label_ru": lab,
+                "sender": snd,
+                "receiver": rcv,
+                "bytes": size,
+            }
+            for mid, lab, snd, rcv, size in rows
+        ]
         with bytes_json.open("w", encoding="utf-8") as f:
-            json.dump([{"name": n, "bytes": b} for n, b in rows], f, indent=2)
+            json.dump(payload, f, indent=2, ensure_ascii=False)
         return rows
 
-    # Cache wins over partial on-disk view (no .bin present).
+    # Nothing resolved on-disk; try the cache if present.
     if bytes_json.is_file():
         with bytes_json.open("r", encoding="utf-8") as f:
             cached: list[dict[str, Any]] = json.load(f)
-        return [(str(e["name"]), int(e["bytes"])) for e in cached]
+        if cached and "message_id" not in cached[0]:
+            # Old cache shape — drop and re-resolve next time.
+            bytes_json.unlink()
+            return rows
+        return [
+            (
+                str(e["message_id"]),
+                str(e["label_ru"]),
+                str(e["sender"]),
+                str(e["receiver"]),
+                None if e.get("bytes") is None else int(e["bytes"]),
+            )
+            for e in cached
+        ]
+    return rows
+
+
+# Per-key inventory row: (key_name, location_label, on_wire_label, bytes_or_None).
+KeyInventoryRow = tuple[str, str, str, int | None]
+
+
+def _key_inventory_rows(
+    batch_dir: Path, samples_by_name: dict[str, list[Sample]]
+) -> list[KeyInventoryRow]:
+    """Resolve each KeyEntry in ``_messages.KEYS`` to a display row."""
+    rows: list[KeyInventoryRow] = []
+    for key in _messages.KEYS:
+        size = _messages.resolve_key_bytes(key, batch_dir, samples_by_name)
+        location_label = KEY_LOCATION_NAMES.get(key.location, key.location)
+        on_wire_label = (
+            TABLE_HEADERS["on_wire_yes"] if key.on_wire else TABLE_HEADERS["on_wire_no"]
+        )
+        rows.append((key.name, location_label, on_wire_label, size))
     return rows
 
 
@@ -618,14 +660,26 @@ def _keygen_by_round_table_md(keygen_run: Run) -> str:
     return "\n".join(lines)
 
 
-def _bytes_table_md(rows: Sequence[tuple[str, int]]) -> str:
-    lines: list[str] = []
-    lines.append("| message | bytes | KiB | MiB |")
-    lines.append("|---|---:|---:|---:|")
-    for name, size in rows:
-        kib = size / 1024.0
-        mib = size / (1024.0 * 1024.0)
-        lines.append(f"| {name} | {size} | {kib:.1f} | {mib:.2f} |")
+def _bytes_table_md(rows: Sequence[MessageBytesRow]) -> str:
+    """Per-message bytes table keyed by catalog message_id."""
+    empty = TABLE_HEADERS["empty"]
+    header = (
+        f"| {TABLE_HEADERS['message_id']} | {TABLE_HEADERS['message_label']} | "
+        f"{TABLE_HEADERS['sender']} | {TABLE_HEADERS['receiver']} | "
+        f"{TABLE_HEADERS['bytes']} | {TABLE_HEADERS['kib']} | {TABLE_HEADERS['mib']} |"
+    )
+    lines: list[str] = [header, "|---|---|---|---|---:|---:|---:|"]
+    for mid, label, sender, receiver, size in rows:
+        snd = PARTY_SHORT_NAMES.get(sender, sender)
+        rcv = PARTY_SHORT_NAMES.get(receiver, receiver)
+        if size is None:
+            lines.append(f"| {mid} | {label} | {snd} | {rcv} | {empty} | {empty} | {empty} |")
+        else:
+            kib = size / 1024.0
+            mib = size / (1024.0 * 1024.0)
+            lines.append(
+                f"| {mid} | {label} | {snd} | {rcv} | {size} | {kib:.1f} | {mib:.2f} |"
+            )
     lines.append("")
     lines.append(
         "_Note: lattigo-hierkeys ships a single compressed master atom set: "
@@ -639,15 +693,42 @@ def _bytes_table_md(rows: Sequence[tuple[str, int]]) -> str:
     return "\n".join(lines)
 
 
-def _network_table_md(rows: Sequence[tuple[str, int]]) -> str:
-    """Per-message bytes / bandwidth → seconds at 1/10/100 Mbps."""
+def _key_inventory_md(rows: Sequence[KeyInventoryRow]) -> str:
+    """Key inventory table — every key, on-wire flag, serialized size."""
+    empty = TABLE_HEADERS["empty"]
+    header = (
+        f"| {TABLE_HEADERS['key_name']} | {TABLE_HEADERS['key_location']} | "
+        f"{TABLE_HEADERS['on_wire']} | {TABLE_HEADERS['bytes']} | "
+        f"{TABLE_HEADERS['kib']} | {TABLE_HEADERS['mib']} |"
+    )
+    lines: list[str] = [header, "|---|---|---|---:|---:|---:|"]
+    for name, location, on_wire, size in rows:
+        if size is None:
+            lines.append(f"| {name} | {location} | {on_wire} | {empty} | {empty} | {empty} |")
+        else:
+            kib = size / 1024.0
+            mib = size / (1024.0 * 1024.0)
+            lines.append(
+                f"| {name} | {location} | {on_wire} | {size} | {kib:.1f} | {mib:.2f} |"
+            )
+    return "\n".join(lines)
+
+
+def _network_table_md(rows: Sequence[MessageBytesRow]) -> str:
+    """Per-message bytes / bandwidth → seconds at 1/10/100 Mbps, keyed by message_id."""
+    empty = TABLE_HEADERS["empty"]
+    head_cells = [TABLE_HEADERS["message_id"], TABLE_HEADERS["bytes"]] + [
+        f"t @ {b} Mbps" for b in _BANDWIDTHS_MBPS
+    ]
     lines: list[str] = []
-    head_cells = ["message", "bytes"] + [f"t @ {b} Mbps" for b in _BANDWIDTHS_MBPS]
     lines.append("| " + " | ".join(head_cells) + " |")
     lines.append("|" + "|".join(["---"] + ["---:"] * (len(head_cells) - 1)) + "|")
-    for name, size in rows:
-        # Mbps == 1e6 bits / sec; 1 byte = 8 bits → bytes_per_sec = mbps * 1e6 / 8.
-        cells = [name, str(size)]
+    for mid, _label, _sender, _receiver, size in rows:
+        if size is None:
+            cells = [mid, empty] + [empty] * len(_BANDWIDTHS_MBPS)
+            lines.append("| " + " | ".join(cells) + " |")
+            continue
+        cells = [mid, str(size)]
         for mbps in _BANDWIDTHS_MBPS:
             bps = mbps * 1_000_000 / 8.0
             cells.append(_format_seconds(size / bps))
@@ -717,6 +798,19 @@ def aggregate(batch_dir: Path) -> None:
     manifest_by_idx = _load_manifest_labels(batch_dir)
     per_image_samples = _load_step_runs(img_dirs)
 
+    # Flat samples-by-name index spanning keygen Run + every per-image Run.
+    # Drives both the message-bytes resolver and the key-inventory resolver.
+    samples_by_name: dict[str, list[Sample]] = {}
+    for s in keygen_run.samples:
+        samples_by_name.setdefault(s.name, []).append(s)
+    for _, img_dir in img_dirs:
+        for json_path in sorted(img_dir.glob("*.json")):
+            if json_path.name == "decoded.json":
+                continue
+            run = load_run(json_path)
+            for s in run.samples:
+                samples_by_name.setdefault(s.name, []).append(s)
+
     # Decoded payloads keyed by idx for the noise + verdict tables.
     decoded_by_idx: dict[int, dict[str, Any]] = {}
     verdicts: list[str] = []
@@ -734,7 +828,8 @@ def aggregate(batch_dir: Path) -> None:
         for v in d.get("noise_per_slot", []):
             all_noise.append(float(v))
 
-    bytes_rows = _per_message_bytes(batch_dir)
+    bytes_rows = _per_message_bytes(batch_dir, samples_by_name)
+    key_rows = _key_inventory_rows(batch_dir, samples_by_name)
     verdict_stats = _classify(verdicts, labels)
     noise_stats = _noise_stats(all_noise)
     snr = _snr_per_image(img_dirs, decoded_by_idx)
@@ -754,9 +849,13 @@ def aggregate(batch_dir: Path) -> None:
     sections.append("")
     sections.append(_keygen_by_round_table_md(keygen_run))
     sections.append("")
-    sections.append("## Per-message bytes")
+    sections.append(f"## {SECTION_HEADERS['per_message_bytes']}")
     sections.append("")
     sections.append(_bytes_table_md(bytes_rows))
+    sections.append("")
+    sections.append(f"## {SECTION_HEADERS['key_inventory']}")
+    sections.append("")
+    sections.append(_key_inventory_md(key_rows))
     sections.append("")
     sections.append("## Protocol verdict accuracy")
     sections.append("")
@@ -766,7 +865,7 @@ def aggregate(batch_dir: Path) -> None:
     sections.append("")
     sections.append(_noise_block_md(noise_stats, snr))
     sections.append("")
-    sections.append("## Network wire time")
+    sections.append(f"## {SECTION_HEADERS['network_wire_time']}")
     sections.append("")
     sections.append(_network_table_md(bytes_rows))
     sections.append("")
@@ -775,11 +874,26 @@ def aggregate(batch_dir: Path) -> None:
     summary_path.write_text("\n".join(sections), encoding="utf-8")
     _format_with_prettier(summary_path)
 
+    # Legacy-shape bytes_rows for plots_eval (renamed-message label by Task 8).
+    # Task 8 will switch plots to read catalog-keyed rows; until then keep the
+    # plot module's existing (name, size) contract intact by passing the
+    # legacy artifact-named view derived from the catalog. ``None`` sizes
+    # are coerced to 0 so the log-scaled bar plot does not crash.
+    legacy_bytes_rows: list[tuple[str, int]] = []
+    for msg in _messages.MESSAGES:
+        size = _messages.resolve_message_bytes(msg, batch_dir, samples_by_name)
+        if size is None:
+            continue
+        legacy_bytes_rows.append((msg.id, size))
+
     agg_data: dict[str, Any] = {
         "batch_dir": str(batch_dir),
         "keygen_run": keygen_run,
         "per_image_samples": per_image_samples,
-        "bytes_rows": bytes_rows,
+        "samples_by_name": samples_by_name,
+        "bytes_rows": legacy_bytes_rows,
+        "message_bytes_rows": bytes_rows,
+        "key_rows": key_rows,
         "verdict_stats": verdict_stats,
         "noise_stats": noise_stats,
         "snr": snr,
