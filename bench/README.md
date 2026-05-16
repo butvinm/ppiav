@@ -25,50 +25,62 @@ uv run python -m bench.eval \
     --orion  ../models/out/logn16
 ```
 
-The driver creates `../results/phase2/eval-<UTC-ts>/`, runs `ppiav-cli keygen`
-once into `keys/`, then iterates each image through encrypt → infer → mac →
+The driver creates `../results/<UTC-ts>/`, runs `ppiav-cli keygen` once
+into `keys/`, then iterates each image through encrypt → infer → mac →
 partial-decrypt → finalize, and finally writes `summary.md` + `plots/`.
+
+To re-render `summary.md` + `plots/` from an existing batch dir without
+re-running the protocol (useful after editing `bench/_labels_ru.py` or
+`bench/plots_eval.py`):
+
+```sh
+uv run python -m bench.eval --aggregate-only ../results/<UTC-ts>/
+```
 
 ## Per-batch directory layout
 
 ```
-results/phase2/eval-<UTC-ts>/
+results/<UTC-ts>/
 ├── keys/
 │   ├── pk.bin sk_c.bin sk_a.bin
 │   ├── rlk.bin glk_master.bin glk_full.bin
 │   ├── mac_key.bin sid.txt params.json
 ├── img_0/
 │   ├── input_ct.bin result_ct.bin auth_ct.bin client_share.bin
-│   ├── encrypt.json infer.json mac.json partial.json finalize.json
+│   ├── encrypt.json infer.json mac.json partial-decrypt.json finalize.json
 │   └── decoded.json            # verdict + ref_logit + slots_in_s + noise_per_slot
 ├── img_1/ ... img_9/
 ├── eval_inputs.json            # copy of the input manifest (self-contained batch dir)
 ├── keygen.json                 # per-round timing + RSS (one Run, five Samples)
-├── summary.md                  # per-step timing / RSS / bytes / FPR-FNR / noise / SNR / network tables
+├── bytes.json                  # cached wire sizes for replot when .bin files are stripped
+├── summary.md                  # combined per-party time+memory / bytes / FPR-FNR / noise / SNR / network tables
 └── plots/
-    ├── e2e_timeline.png
     ├── rss_per_step.png
     ├── bytes_per_message.png
     ├── noise_histogram.png
     ├── snr_per_image.png
     ├── bandwidth_per_message.png
-    └── session_timeline_10mbps.png
+    └── session_timeline_10mbps.png   # 3-row swim-lane Gantt (client/service/agent)
 ```
 
 Per-step peak RSS is correct per-process now (each subcommand is a fresh
 process); per-message byte sizes come straight from `os.Stat` on the on-disk
-artifacts. See `docs/plans/completed/20260515-bench-eval-redesign.md` for
-the design rationale.
+artifacts (and from `bytes.json` when those have been pruned for git
+commit).
+
+Plot strings are in Russian via `bench/_labels_ru.py`; edit that module to
+adjust labels and rerun `--aggregate-only` to re-render.
 
 ## Layout
 
 - `bench/eval.py` — driver + aggregator (`python -m bench.eval`).
-- `bench/plots_eval.py` — 7 PNG generators called by the aggregator.
+- `bench/plots_eval.py` — 6 PNG generators called by the aggregator.
+- `bench/_labels_ru.py` — user-editable Russian label glossary.
 - `bench/load.py` — parse `Run`/`Sample` JSON into dataclasses; carries
   `pre_vm_hwm` so callers can compute `delta_rss_mib` (op-attributable RSS
   vs. process baseline).
 - `bench/tables.py` — `render_tables(runs)` + `__main__` for ad-hoc table
-  rendering against any `results/phaseN/` tree.
+  rendering against any `results/<ts>/` tree.
 - `tests/fixtures/sample_run.json` — committed schema example.
 
 ## Heavy local tests
