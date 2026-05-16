@@ -260,6 +260,51 @@ func TestAuthRejectsMismatchedKey(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestAuthRejectsLevelZeroInput locks in the depth guard: an input
+// ciphertext at level 0 must surface a clear error rather than silently
+// produce a ≈0 output. The level-0 case wraps mod Q[0] inside MulNew (see
+// the Auth doc and Task 27a analysis); the guard exists so future
+// upstream-pipeline regressions that consume a level too many fail loud.
+func TestAuthRejectsLevelZeroInput(t *testing.T) {
+	const lambda = 16
+	f := newAuthTestFixture(t, lambda)
+
+	cfg := Config{Lambda: lambda, Epsilon: math.Exp2(20)}
+	a, err := New(cfg, f.params)
+	require.NoError(t, err)
+	key, err := KeyGen(cfg, rand.Reader)
+	require.NoError(t, err)
+
+	// Encode + encrypt directly at level 0 so the guard fires.
+	values := make([]float64, f.params.MaxSlots())
+	values[0] = 0.5
+	pt := ckks.NewPlaintext(f.params, 0)
+	require.NoError(t, f.encoder.Encode(values, pt))
+	ctLevel0, err := f.encryptor.EncryptNew(pt)
+	require.NoError(t, err)
+	require.Equal(t, 0, ctLevel0.Level(), "fixture precondition")
+
+	_, err = a.Auth(key, f.encryptor, f.rot, ctLevel0)
+	require.Error(t, err, "Auth must reject ciphertext at level 0")
+	assert.Contains(t, err.Error(), "Level() ≥ 1",
+		"error should explain the depth requirement")
+}
+
+func TestAuthRejectsNilResultCt(t *testing.T) {
+	const lambda = 16
+	f := newAuthTestFixture(t, lambda)
+
+	cfg := Config{Lambda: lambda, Epsilon: math.Exp2(20)}
+	a, err := New(cfg, f.params)
+	require.NoError(t, err)
+	key, err := KeyGen(cfg, rand.Reader)
+	require.NoError(t, err)
+
+	_, err = a.Auth(key, f.encryptor, f.rot, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "resultCt is nil")
+}
+
 func TestDeriveVDeterministic(t *testing.T) {
 	const lambda = 16
 	p := testParams(t)

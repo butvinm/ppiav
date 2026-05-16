@@ -86,6 +86,24 @@ func (a *Authenticator) Auth(
 	if rot == nil {
 		return nil, fmt.Errorf("authenticator: rotator is nil")
 	}
+	if resultCt == nil {
+		return nil, fmt.Errorf("authenticator: resultCt is nil")
+	}
+	// MulNew below auto-picks pt.Scale = q_level_modulus (= Q[ct.Level()]),
+	// inflating the output scale to ct.Scale * Q[level]. At ct.Level() == 0
+	// the only available modulus IS Q[0], so the inflated scale exceeds the
+	// modulus and the encoded coefficients wrap mod Q[0] — the slot values
+	// silently decode to ≈ 0. The Q chain must leave at least one prime
+	// above the level the result ciphertext arrives at, i.e. Level() ≥ 1.
+	// See docs/plans for the Task 27a level-0 wraparound analysis.
+	if resultCt.Level() < 1 {
+		return nil, fmt.Errorf(
+			"authenticator: resultCt at level %d — Auth requires Level() ≥ 1 so MulNew's "+
+				"scale inflation (ct.Scale · Q[level]) fits within the cumulative modulus. "+
+				"Recompile the upstream circuit to leave one unused level, or extend the Q chain",
+			resultCt.Level(),
+		)
+	}
 	eval := rot.Inner()
 	if err := a.validateGaloisKeys(eval, rot.Atoms()); err != nil {
 		return nil, err
@@ -96,6 +114,7 @@ func (a *Authenticator) Auth(
 	// quantization is well-defined (a scale-1 plaintext for [1,0,..] is
 	// unrepresentable — see the package doc on Authenticator). Output scale
 	// is ct.Scale * q_level_modulus; we propagate the same scale into ct_v.
+	// The Level() ≥ 1 guard above ensures the inflated scale fits.
 	ctM, err := eval.MulNew(resultCt, a.oneHot)
 	if err != nil {
 		return nil, fmt.Errorf("authenticator: mask result_ct: %w", err)
