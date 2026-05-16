@@ -110,6 +110,10 @@ func NewWithState(params protocol.Params, state *ExportedState) (*Agent, error) 
 	}
 	if state.Rlk != nil {
 		sess.rlkAgg = state.Rlk
+		// Stash gks on the session so a subsequent ExportState round-trips
+		// the full Galois set back out — without this the rebuilt Agent
+		// can build the evaluator but ExportState would return nil Gks.
+		sess.gks = state.Gks
 		evk := rlwe.NewMemEvaluationKeySet(state.Rlk, state.Gks...)
 		sess.eval = ckks.NewEvaluator(params.CKKS, evk)
 	}

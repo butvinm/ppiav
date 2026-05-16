@@ -94,7 +94,10 @@ func NewWithState(params protocol.Params, orionDir string, state *ExportedState)
 	}
 
 	evk := rlwe.NewMemEvaluationKeySet(state.Rlk, state.Glk...)
-	sess := &sessionState{}
+	// Stash rlk/glk on the session so a subsequent ExportState round-trips
+	// the same keys back out — without this the rebuilt Service can build
+	// the evaluator but ExportState would return nil keys.
+	sess := &sessionState{rlk: state.Rlk, glk: state.Glk}
 	if model != nil {
 		oe, err := orioneval.NewEvaluatorFromKeySet(mergedParams.CKKS, evk, nil)
 		if err != nil {

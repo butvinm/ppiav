@@ -184,30 +184,48 @@ func TestRunnerF4bDenyByDefault(t *testing.T) {
 		"deny-by-default: no verdict delivered → CheckAccess returns Unknown")
 }
 
-func TestRunnerEnforcesStageOrdering(t *testing.T) {
+// TestRunnerEnforcesStageOrderingPreSetup covers the ordering invariants
+// that fire before any keygen happens — these are pure cursor checks and
+// stay ungated so default `go test ./...` catches regressions in the
+// stage-machine without needing the heavy Setup path. The matching
+// post-Setup invariant (Verify after Setup but before Infer) lives in
+// TestRunnerEnforcesStageOrderingPostSetup, gated behind PPIAV_RUN_HEAVY.
+func TestRunnerEnforcesStageOrderingPreSetup(t *testing.T) {
+	params := testParams(t)
+	r, err := NewRunner(params)
+	require.NoError(t, err)
+
+	// Verify before Open must error (cursor == init).
+	_, err = r.Verify(&rlwe.Ciphertext{})
+	require.Error(t, err, "Verify before Open must error")
+
+	// Infer before Open must error (cursor == init).
+	_, err = r.Infer(sampleImage(0.5))
+	require.Error(t, err, "Infer before Open must error")
+
+	// Setup before Open must error (cursor == init).
+	require.Error(t, r.Setup(), "Setup before Open must error")
+
+	// Open then Verify (skipping Setup + Infer) must error. Open is
+	// cheap (one sk_c keygen), so this stays ungated.
+	_, err = r.Open()
+	require.NoError(t, err)
+	_, err = r.Verify(&rlwe.Ciphertext{})
+	require.Error(t, err, "Verify after Open but before Setup+Infer must error")
+}
+
+func TestRunnerEnforcesStageOrderingPostSetup(t *testing.T) {
+	// Setup runs the full collaborative keygen (PK + RLK rounds + Galois)
+	// at LogN=15, which OOMs modest dev boxes — gate behind
+	// PPIAV_RUN_HEAVY. The cheap pre-Setup invariants live in
+	// TestRunnerEnforcesStageOrderingPreSetup and run by default.
 	testutil.RequireHeavy(t, "LogN=15 orchestrator runner")
 	params := testParams(t)
 	r, err := NewRunner(params)
 	require.NoError(t, err)
 
-	// Verify before Setup must error.
-	_, err = r.Verify(&rlwe.Ciphertext{})
-	require.Error(t, err, "Verify before Open must error")
-
-	// Infer before Setup must error.
-	_, err = r.Infer(sampleImage(0.5))
-	require.Error(t, err, "Infer before Open must error")
-
-	// Setup before Open must error.
-	require.Error(t, r.Setup(), "Setup before Open must error")
-
-	// Open then Verify (skipping Setup + Infer) must error.
 	_, err = r.Open()
 	require.NoError(t, err)
-	_, err = r.Verify(&rlwe.Ciphertext{})
-	require.Error(t, err, "Verify after Open but before Setup+Infer must error")
-
-	// Open + Setup then Verify (skipping Infer) must error.
 	require.NoError(t, r.Setup())
 	_, err = r.Verify(&rlwe.Ciphertext{})
 	require.Error(t, err, "Verify after Setup but before Infer must error")
