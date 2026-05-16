@@ -234,5 +234,6 @@ func (a *Agent) AggregateGaloisShares(
 
 	evk := rlwe.NewMemEvaluationKeySet(sess.rlkAgg, gks...)
 	sess.eval = ckks.NewEvaluator(a.params.CKKS, evk)
+	sess.gks = gks
 	return sess.rlkAgg, gks, nil
 }

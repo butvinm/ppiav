@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,33 +35,10 @@ const (
 	artifactClientShare = "client_share.bin"
 )
 
-// writeBytes atomically writes data to <workdir>/<name>: write a sibling
-// tmp file then rename. Mirrors bench.Run.WriteJSON's atomicity contract
-// so partial writes never land in the workdir on a crashed run.
+// writeBytes atomically writes data to <workdir>/<name>. Thin wrapper over
+// writeBytesPath so all atomic-write logic lives in one place.
 func writeBytes(workdir, name string, data []byte) error {
-	if err := os.MkdirAll(workdir, 0o755); err != nil {
-		return fmt.Errorf("artifacts: mkdir %s: %w", workdir, err)
-	}
-	path := filepath.Join(workdir, name)
-	tmp, err := os.CreateTemp(workdir, name+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("artifacts: create tmp for %s: %w", name, err)
-	}
-	tmpPath := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("artifacts: write %s: %w", name, err)
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("artifacts: close tmp for %s: %w", name, err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("artifacts: rename tmp -> %s: %w", path, err)
-	}
-	return nil
+	return writeBytesPath(filepath.Join(workdir, name), data)
 }
 
 // readBytes reads <workdir>/<name> with a descriptive error wrap.
@@ -87,31 +65,50 @@ func readSID(workdir string) (protocol.SessionID, error) {
 	return protocol.SessionID(data), nil
 }
 
-// writeParams serialises the CKKS parameters as JSON. The Authenticator
-// config, FloodSigma, ExtraRotationIndices, and InputLevel are NOT
+// paramsFile is the on-disk JSON envelope written by writeParams: the
+// binary-marshalled CKKS parameters plus the (Phase-2) InputLevel. The
+// Authenticator config and FloodSigma are reconstructed from
+// `protocol.Defaults()` at load time — they're not session-dependent —
+// while ExtraRotationIndices is recoverable from the persisted glk_full.bin.
+// InputLevel IS persisted because EncryptImage uses it to pick the
+// plaintext level; Phase-2 manifests can set it below CKKS.MaxLevel() and
+// silently using MaxLevel would desync Orion's level accounting.
+type paramsFile struct {
+	CKKS       []byte `json:"ckks"`
+	InputLevel int    `json:"input_level"`
+}
+
+// writeParams persists the CKKS parameters + InputLevel as a JSON envelope.
+// The Authenticator config, FloodSigma, and ExtraRotationIndices are NOT
 // persisted here: the per-step CLI rebuilds them from `protocol.Defaults`
-// (Phase-1) or `protocol.LoadOrionParams` (Phase-2 via --orion). params.json
-// captures only the CKKS knobs because they are the only fields callers
-// cannot reconstruct from --orion + Defaults at load time.
+// (Phase-1) or `protocol.LoadOrionParams` (Phase-2 via --orion).
 func writeParams(workdir string, params protocol.Params) error {
-	data, err := params.CKKS.MarshalBinary()
+	ckksBytes, err := params.CKKS.MarshalBinary()
 	if err != nil {
 		return fmt.Errorf("artifacts: marshal CKKS params: %w", err)
+	}
+	data, err := json.Marshal(paramsFile{CKKS: ckksBytes, InputLevel: params.InputLevel})
+	if err != nil {
+		return fmt.Errorf("artifacts: marshal params envelope: %w", err)
 	}
 	return writeBytes(workdir, artifactParams, data)
 }
 
-// readCKKSParams reconstructs the CKKS parameters from params.json.
-func readCKKSParams(workdir string) (ckks.Parameters, error) {
+// readParamsFile reconstructs the CKKS parameters + InputLevel from params.json.
+func readParamsFile(workdir string) (ckks.Parameters, int, error) {
 	data, err := readBytes(workdir, artifactParams)
 	if err != nil {
-		return ckks.Parameters{}, err
+		return ckks.Parameters{}, 0, err
+	}
+	var pf paramsFile
+	if err := json.Unmarshal(data, &pf); err != nil {
+		return ckks.Parameters{}, 0, fmt.Errorf("artifacts: unmarshal params envelope: %w", err)
 	}
 	var p ckks.Parameters
-	if err := p.UnmarshalBinary(data); err != nil {
-		return ckks.Parameters{}, fmt.Errorf("artifacts: unmarshal CKKS params: %w", err)
+	if err := p.UnmarshalBinary(pf.CKKS); err != nil {
+		return ckks.Parameters{}, 0, fmt.Errorf("artifacts: unmarshal CKKS params: %w", err)
 	}
-	return p, nil
+	return p, pf.InputLevel, nil
 }
 
 // writeSecretKey serialises a SecretKey via its MarshalBinary.
@@ -268,34 +265,6 @@ func readMacKey(workdir string) (authenticator.Key, error) {
 	return k, nil
 }
 
-// writeCiphertext serialises a Ciphertext to <workdir>/<name>.
-func writeCiphertext(workdir, name string, ct *rlwe.Ciphertext) error {
-	if ct == nil {
-		return fmt.Errorf("artifacts: writeCiphertext %s: ct is nil", name)
-	}
-	data, err := ct.MarshalBinary()
-	if err != nil {
-		return fmt.Errorf("artifacts: marshal ct %s: %w", name, err)
-	}
-	return writeBytes(workdir, name, data)
-}
-
-// readCiphertext inverts writeCiphertext. The path is `<workdir>/<name>`
-// when `name` is a bare filename; callers passing an explicit path
-// outside the workdir should use the absolute form via filepath.Join
-// upstream.
-func readCiphertext(workdir, name string) (*rlwe.Ciphertext, error) {
-	data, err := readBytes(workdir, name)
-	if err != nil {
-		return nil, err
-	}
-	ct := &rlwe.Ciphertext{}
-	if err := ct.UnmarshalBinary(data); err != nil {
-		return nil, fmt.Errorf("artifacts: unmarshal ct %s: %w", name, err)
-	}
-	return ct, nil
-}
-
 // writeCiphertextPath serialises a Ciphertext to an arbitrary absolute or
 // relative path. Used by encrypt/infer/mac when the output ciphertext lives
 // in a per-image directory outside the keygen workdir.
@@ -378,14 +347,14 @@ func writeBytesPath(path string, data []byte) error {
 
 // loadParams reconstructs a full protocol.Params from the workdir's
 // params.json + protocol.Defaults() for non-CKKS fields (Authenticator,
-// FloodSigma). InputLevel is left at the Defaults() value (0 → EncryptImage
-// builds at MaxLevel); ExtraRotationIndices is left empty because the
-// rotation set is encoded in the persisted glk_full.bin via Galois elements
-// and no caller of loadParams runs the keygen handshake. Phase-2 callers
-// that need Orion's InputLevel or rotation labels reload via LoadOrionParams
-// from --orion <dir> in addition.
+// FloodSigma). InputLevel comes from the persisted envelope so EncryptImage
+// honours Phase-2 manifests where InputLevel < MaxLevel.
+// ExtraRotationIndices is left empty because the rotation set is encoded in
+// the persisted glk_full.bin via Galois elements and no caller of loadParams
+// runs the keygen handshake. Phase-2 callers that need Orion's full rotation
+// label set additionally pass --orion <dir>.
 func loadParams(workdir string) (protocol.Params, error) {
-	ckksParams, err := readCKKSParams(workdir)
+	ckksParams, inputLevel, err := readParamsFile(workdir)
 	if err != nil {
 		return protocol.Params{}, err
 	}
@@ -394,5 +363,6 @@ func loadParams(workdir string) (protocol.Params, error) {
 		return protocol.Params{}, fmt.Errorf("artifacts: build default params: %w", err)
 	}
 	defaults.CKKS = ckksParams
+	defaults.InputLevel = inputLevel
 	return defaults, nil
 }

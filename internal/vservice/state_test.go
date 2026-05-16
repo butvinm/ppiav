@@ -32,14 +32,14 @@ func TestExportStateRoundTripInfer(t *testing.T) {
 	rlk := kgen.GenRelinearizationKeyNew(sk)
 	require.NoError(t, a.StoreEvalKeys(sid, rlk, nil))
 
-	// Export and rebuild on a second Service.
+	// Export and rebuild on a second Service. ExportState now populates
+	// Rlk + Glk from the StoreEvalKeys-captured values, so the test does
+	// not have to thread keys back in.
 	state, err := a.ExportState(sid)
 	require.NoError(t, err)
 	require.NotNil(t, state)
 	assert.Equal(t, sid, state.SID)
-	// Threading the keys back in mirrors how the bench `infer` subcommand
-	// reads them from disk after `keygen`.
-	state.Rlk = rlk
+	require.NotNil(t, state.Rlk, "ExportState must populate Rlk from StoreEvalKeys")
 
 	b, err := NewWithState(params, "", state)
 	require.NoError(t, err)

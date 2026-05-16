@@ -34,9 +34,13 @@ func runKeygen(args []string) error {
 		return fmt.Errorf("keygen: --workdir is required")
 	}
 
-	params, err := buildKeygenParams(*orionDir)
+	// Phase-1 (no --orion) uses Defaults() directly; Phase-2 (--orion <dir>)
+	// also starts at Defaults() so VAgent has a parameter set to construct
+	// against before vservice.NewWithOrion produces the authoritative
+	// manifest-derived params (see the rebuild below).
+	params, err := protocol.Defaults()
 	if err != nil {
-		return err
+		return fmt.Errorf("keygen: build default params: %w", err)
 	}
 
 	run := bench.NewRun("keygen", "phase2")
@@ -96,7 +100,7 @@ func runKeygen(args []string) error {
 	})
 	run.Append(openSample)
 	if err != nil {
-		_ = run.WriteJSON(outPathOrDefault(*outPath, *workdir))
+		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
 		return fmt.Errorf("keygen: open: %w", err)
 	}
 
@@ -120,7 +124,7 @@ func runKeygen(args []string) error {
 	})
 	run.Append(pkSample)
 	if err != nil {
-		_ = run.WriteJSON(outPathOrDefault(*outPath, *workdir))
+		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
 		return fmt.Errorf("keygen: pk: %w", err)
 	}
 
@@ -144,7 +148,7 @@ func runKeygen(args []string) error {
 	})
 	run.Append(rlk1Sample)
 	if err != nil {
-		_ = run.WriteJSON(outPathOrDefault(*outPath, *workdir))
+		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
 		return fmt.Errorf("keygen: rlk-r1: %w", err)
 	}
 
@@ -164,7 +168,7 @@ func runKeygen(args []string) error {
 	})
 	run.Append(rlk2Sample)
 	if err != nil {
-		_ = run.WriteJSON(outPathOrDefault(*outPath, *workdir))
+		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
 		return fmt.Errorf("keygen: rlk-r2: %w", err)
 	}
 
@@ -196,7 +200,7 @@ func runKeygen(args []string) error {
 	})
 	run.Append(galSample)
 	if err != nil {
-		_ = run.WriteJSON(outPathOrDefault(*outPath, *workdir))
+		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
 		return fmt.Errorf("keygen: galois: %w", err)
 	}
 
@@ -216,38 +220,14 @@ func runKeygen(args []string) error {
 		return fmt.Errorf("keygen: write artifacts: %w", err)
 	}
 
-	if err := run.WriteJSON(outPathOrDefault(*outPath, *workdir)); err != nil {
+	if err := run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen")); err != nil {
 		return fmt.Errorf("keygen: write run JSON: %w", err)
 	}
 	return nil
 }
 
-// buildKeygenParams returns the protocol parameters keygen will run under.
-// Phase-1 (no --orion) picks `protocol.Defaults`. Phase-2 (--orion <dir>)
-// is delegated to `vservice.NewWithOrion` later because the manifest
-// drives the CKKS knobs; here we still return a Phase-1 Defaults() block
-// so VAgent has a parameter set to construct against before the service
-// rebuild kicks in. The caller (runKeygen) replaces this with the
-// service's authoritative params once vservice.NewWithOrion has run.
-func buildKeygenParams(orionDir string) (protocol.Params, error) {
-	if orionDir == "" {
-		return protocol.Defaults()
-	}
-	// Loading the manifest twice (here + inside vservice.NewWithOrion) is
-	// cheaper than threading params through a custom constructor; both
-	// reads agree by construction because the file is read-only on disk.
-	return protocol.Defaults()
-}
-
-// outPathOrDefault returns the explicit --out path when non-empty, else
-// the canonical `<workdir>/keygen.json` location used by the bench Python
-// driver.
-func outPathOrDefault(outPath, workdir string) string {
-	if outPath != "" {
-		return outPath
-	}
-	return defaultOutPath(workdir, "keygen")
-}
+// (buildKeygenParams + outPathOrDefault inlined: keygen now uses
+// protocol.Defaults() directly and stepOutPath in main.go.)
 
 // writeKeygenArtifacts persists every file the downstream subcommands
 // load. Aggregated GLK is emitted twice (glk_master.bin + glk_full.bin)

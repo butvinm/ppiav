@@ -66,9 +66,10 @@ def resolve_cli() -> list[str]:
 def _run_step(cli: Sequence[str], subcommand: str, args: Sequence[str], *, cwd: Path) -> None:
     """Invoke one ppiav-cli subcommand; fail fast on non-zero exit.
 
-    Errors stream the captured stderr to the parent process so the operator
-    sees the underlying protocol failure (e.g. an `auth.Ver` rejection) and
-    not just a Python traceback.
+    The child inherits the parent's stdout + stderr (no capture_output), so
+    the operator sees the underlying protocol failure (e.g. an `auth.Ver`
+    rejection) streamed live to the terminal — not just a Python traceback
+    after the fact.
     """
     argv: list[str] = [*cli, subcommand, *args]
     print(f"[bench.eval] {' '.join(argv)}", flush=True)
@@ -87,7 +88,15 @@ def _load_manifest(path: Path) -> dict[str, Any]:
 
 
 def _resolve_image_path(manifest_dir: Path, raw: str) -> Path:
-    """Resolve a manifest image path relative to the manifest's directory."""
+    """Resolve a manifest image path relative to the ORIGINAL manifest's directory.
+
+    `run_pipeline` copies the manifest into the batch dir for self-contained
+    aggregation, but the copy retains the original (relative) paths. Image
+    resolution happens here in `run_pipeline` against the original manifest
+    dir before the copy is read for any path-bearing field; the aggregator
+    only reads idx/label/ref_logit from the copy, so the copy's stale
+    relative paths are not consulted at aggregate time.
+    """
     p = Path(raw)
     if not p.is_absolute():
         p = (manifest_dir / raw).resolve()

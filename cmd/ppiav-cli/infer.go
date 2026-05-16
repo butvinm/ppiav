@@ -93,24 +93,18 @@ func runInfer(args []string) error {
 	})
 	run.Append(sample)
 	if err != nil {
-		_ = run.WriteJSON(inferOutPath(*outPath, *workdir))
+		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "infer"))
 		return fmt.Errorf("infer: %w", err)
 	}
 
 	if err := writeCiphertextPath(*outCt, outCipher); err != nil {
-		_ = run.WriteJSON(inferOutPath(*outPath, *workdir))
+		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "infer"))
 		return fmt.Errorf("infer: write ciphertext: %w", err)
 	}
 
-	if err := run.WriteJSON(inferOutPath(*outPath, *workdir)); err != nil {
+	if err := run.WriteJSON(stepOutPath(*outPath, *workdir, "infer")); err != nil {
 		return fmt.Errorf("infer: write run JSON: %w", err)
 	}
 	return nil
 }
 
-func inferOutPath(outPath, workdir string) string {
-	if outPath != "" {
-		return outPath
-	}
-	return defaultOutPath(workdir, "infer")
-}

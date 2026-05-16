@@ -238,30 +238,33 @@ func runFinalizeVerboseWith(t *testing.T, m float64) (protocol.Verdict, []float6
 
 // FinalizeDecryptionVerbose must return the same verdict as
 // FinalizeDecryption (single-source inner path) AND a fully populated
-// slot vector at params.CKKS.MaxSlots() length.
+// slot vector at params.CKKS.MaxSlots() length on BOTH Accept and Reject —
+// the bench `finalize` subcommand indexes slots[0, Lambda) regardless of
+// verdict so the length contract is load-bearing on both paths.
 func TestFinalizeVerboseReturnsSlotsAndMatchesVerdict(t *testing.T) {
 	verdict, slots, params, _, err := runFinalizeVerboseWith(t, 0.7)
 	require.NoError(t, err)
 	assert.Equal(t, protocol.VerdictAccept, verdict, "positive m must Accept")
 	require.NotNil(t, slots)
-	assert.Len(t, slots, params.CKKS.MaxSlots(), "slot vector must span every CKKS slot")
+	assert.Len(t, slots, params.CKKS.MaxSlots(), "Accept-path slot vector must span every CKKS slot")
 
-	rejVerdict, rejSlots, _, _, err := runFinalizeVerboseWith(t, -0.3)
+	rejVerdict, rejSlots, rejParams, _, err := runFinalizeVerboseWith(t, -0.3)
 	require.NoError(t, err)
 	assert.Equal(t, protocol.VerdictReject, rejVerdict, "negative m must Reject")
 	require.NotNil(t, rejSlots)
+	assert.Len(t, rejSlots, rejParams.CKKS.MaxSlots(), "Reject-path slot vector must also span every CKKS slot")
 }
 
 // On a fresh honest authenticated ciphertext, the post-decode plaintext
 // at non-S slots should track the broadcast logit m to ≪ 0.1 absolute
 // error. This pins the eval pipeline's noise-per-slot baseline: anything
 // > 0.1 here on a clean run would indicate a regression in keyswitch /
-// flooding / Auth.
+// flooding / Auth. The verdict on this honest path is covered by
+// TestFinalizeAcceptsPositiveLogit; here we only need slots to be present.
 func TestFinalizeVerboseNoiseAtNonSSlotsIsSmall(t *testing.T) {
 	m := 0.7
-	verdict, slots, params, sIdx, err := runFinalizeVerboseWith(t, m)
+	_, slots, params, sIdx, err := runFinalizeVerboseWith(t, m)
 	require.NoError(t, err)
-	require.Equal(t, protocol.VerdictAccept, verdict)
 	require.NotNil(t, slots)
 
 	lambda := params.Authenticator.Lambda

@@ -96,6 +96,17 @@ func defaultOutPath(workdir, step string) string {
 	return filepath.Join(workdir, step+".json")
 }
 
+// stepOutPath returns the explicit --out path when non-empty, else the
+// canonical `<workdir>/<step>.json` location used by the bench Python
+// driver. Shared by every subcommand to keep the default-path convention
+// in one place.
+func stepOutPath(outPath, workdir, step string) string {
+	if outPath != "" {
+		return outPath
+	}
+	return defaultOutPath(workdir, step)
+}
+
 // loadImage reads a 12288-little-endian-float64 .bin file and returns the
 // slice. Hard-fails on size mismatch — no silent padding (mirrors
 // internal/vclient.EncryptImage's contract).

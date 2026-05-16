@@ -79,24 +79,18 @@ func runPartialDecrypt(args []string) error {
 	})
 	run.Append(sample)
 	if err != nil {
-		_ = run.WriteJSON(partialDecryptOutPath(*outPath, *workdir))
+		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "partial-decrypt"))
 		return fmt.Errorf("partial-decrypt: %w", err)
 	}
 
 	if err := writeKeySwitchShare(*outShare, share); err != nil {
-		_ = run.WriteJSON(partialDecryptOutPath(*outPath, *workdir))
+		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "partial-decrypt"))
 		return fmt.Errorf("partial-decrypt: write share: %w", err)
 	}
 
-	if err := run.WriteJSON(partialDecryptOutPath(*outPath, *workdir)); err != nil {
+	if err := run.WriteJSON(stepOutPath(*outPath, *workdir, "partial-decrypt")); err != nil {
 		return fmt.Errorf("partial-decrypt: write run JSON: %w", err)
 	}
 	return nil
 }
 
-func partialDecryptOutPath(outPath, workdir string) string {
-	if outPath != "" {
-		return outPath
-	}
-	return defaultOutPath(workdir, "partial-decrypt")
-}

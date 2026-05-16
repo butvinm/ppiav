@@ -81,24 +81,18 @@ func runEncrypt(args []string) error {
 	})
 	run.Append(sample)
 	if err != nil {
-		_ = run.WriteJSON(encryptOutPath(*outPath, *workdir))
+		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "encrypt"))
 		return fmt.Errorf("encrypt: %w", err)
 	}
 
 	if err := writeCiphertextPath(*outCt, ct); err != nil {
-		_ = run.WriteJSON(encryptOutPath(*outPath, *workdir))
+		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "encrypt"))
 		return fmt.Errorf("encrypt: write ciphertext: %w", err)
 	}
 
-	if err := run.WriteJSON(encryptOutPath(*outPath, *workdir)); err != nil {
+	if err := run.WriteJSON(stepOutPath(*outPath, *workdir, "encrypt")); err != nil {
 		return fmt.Errorf("encrypt: write run JSON: %w", err)
 	}
 	return nil
 }
 
-func encryptOutPath(outPath, workdir string) string {
-	if outPath != "" {
-		return outPath
-	}
-	return defaultOutPath(workdir, "encrypt")
-}

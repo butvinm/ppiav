@@ -99,24 +99,18 @@ func runMAC(args []string) error {
 	})
 	run.Append(sample)
 	if err != nil {
-		_ = run.WriteJSON(macOutPath(*outPath, *workdir))
+		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "mac"))
 		return fmt.Errorf("mac: %w", err)
 	}
 
 	if err := writeCiphertextPath(*outCt, authCt); err != nil {
-		_ = run.WriteJSON(macOutPath(*outPath, *workdir))
+		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "mac"))
 		return fmt.Errorf("mac: write ciphertext: %w", err)
 	}
 
-	if err := run.WriteJSON(macOutPath(*outPath, *workdir)); err != nil {
+	if err := run.WriteJSON(stepOutPath(*outPath, *workdir, "mac")); err != nil {
 		return fmt.Errorf("mac: write run JSON: %w", err)
 	}
 	return nil
 }
 
-func macOutPath(outPath, workdir string) string {
-	if outPath != "" {
-		return outPath
-	}
-	return defaultOutPath(workdir, "mac")
-}

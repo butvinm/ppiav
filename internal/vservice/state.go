@@ -29,13 +29,9 @@ type ExportedState struct {
 // (StoreEvalKeys not called). The live session remains in the Service; the
 // caller is responsible for any subsequent eviction.
 //
-// Rlk and Glk are NOT held on `sessionState` once StoreEvalKeys returns —
-// they're consumed into the evaluator's key set. Callers needing them for
-// state export must capture them at the StoreEvalKeys call site; this
-// method returns whatever was provided at that time only if the Service
-// retained a reference. For the bench pipeline the keys are written to
-// disk by `keygen` and reloaded by `infer`, so this method's primary job
-// is the readiness check and SID round-trip.
+// Rlk and Glk are populated from the values passed to StoreEvalKeys; the
+// slice is shared by reference (GaloisKeys are large; tests and the HTTP
+// path do not mutate per-element entries).
 func (s *Service) ExportState(sid protocol.SessionID) (*ExportedState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -46,7 +42,7 @@ func (s *Service) ExportState(sid protocol.SessionID) (*ExportedState, error) {
 	if sess.eval == nil && sess.orionEval == nil {
 		return nil, fmt.Errorf("%w (sid %q)", ErrNoEvaluator, sid)
 	}
-	return &ExportedState{SID: sid}, nil
+	return &ExportedState{SID: sid, Rlk: sess.rlk, Glk: sess.glk}, nil
 }
 
 // NewWithState constructs a fresh Service seeded from `state`. When

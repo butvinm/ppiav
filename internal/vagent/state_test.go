@@ -58,7 +58,9 @@ func TestExportStateRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, ctMA)
 
-	// Export and rebuild on Agent B.
+	// Export and rebuild on Agent B. ExportState now populates Gks from the
+	// AggregateGaloisShares-captured slice, so the test does not have to
+	// thread the gks variable back in.
 	state, err := a.ExportState(sid)
 	require.NoError(t, err)
 	require.NotNil(t, state)
@@ -66,7 +68,8 @@ func TestExportStateRoundTrip(t *testing.T) {
 	require.NotNil(t, state.SkShare)
 	require.NotNil(t, state.PkAgg)
 	require.NotNil(t, state.Rlk)
-	state.Gks = gks
+	require.NotEmpty(t, state.Gks, "ExportState must populate Gks from AggregateGaloisShares")
+	_ = gks // gks remains available for cross-reference but is no longer threaded.
 
 	b, err := NewWithState(params, state)
 	require.NoError(t, err)
@@ -150,11 +153,11 @@ func TestNewWithStateSupportsFinalize(t *testing.T) {
 	sid := protocol.SessionID("finalize-sid")
 	require.NoError(t, a.OpenSession(sid))
 	stub := newVClientStub(t, params, sid)
-	_, _, gks := runFullKeygen(t, a, sid, stub)
+	_, _, _ = runFullKeygen(t, a, sid, stub)
 
 	state, err := a.ExportState(sid)
 	require.NoError(t, err)
-	state.Gks = gks
+	require.NotEmpty(t, state.Gks, "ExportState must populate Gks")
 
 	b, err := NewWithState(params, state)
 	require.NoError(t, err)

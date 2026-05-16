@@ -103,6 +103,8 @@ uv run python -m bench.eval \
 
 The driver creates `results/phase2/eval-<UTC-ts>/` containing `keys/`, per-image `img_<idx>/` directories, `keygen.json`, `eval_inputs.json`, `summary.md` (per-step timing / RSS / bytes / FPR-FNR / noise / SNR / network tables), and `plots/` (7 PNGs). See `bench/README.md` for the layout.
 
+On a 128 GB host the `logn16` configuration peaks at ~114 GB RSS at the first `infer` step — set `GOMEMLIMIT=120GiB` in the environment before invoking `bench.eval` so the Go runtime applies back-pressure before the OOM killer fires (the in-process `infer` does no streaming and there is no other knob to cap heap growth).
+
 ## Development
 
 ```sh

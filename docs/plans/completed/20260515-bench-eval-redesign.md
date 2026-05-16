@@ -582,9 +582,9 @@ Scope: confirm everything builds and unit tests pass on the dev box. Full chain 
 
 - Move: this plan file → `/home/butvinm/Dev/ppiav/docs/plans/completed/20260515-bench-eval-redesign.md`
 
-- [ ] `mkdir -p /home/butvinm/Dev/ppiav/docs/plans/completed`
-- [ ] `git mv docs/plans/20260515-bench-eval-redesign.md docs/plans/completed/`
-- [ ] commit with message like `docs(plans): complete bench-eval-redesign`
+- [x] `mkdir -p /home/butvinm/Dev/ppiav/docs/plans/completed`
+- [x] `git mv docs/plans/20260515-bench-eval-redesign.md docs/plans/completed/`
+- [x] commit with message like `docs(plans): complete bench-eval-redesign`
 
 ## Post-Completion
 

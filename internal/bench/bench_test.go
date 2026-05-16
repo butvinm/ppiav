@@ -209,14 +209,23 @@ func TestMeasurePreVmHWM(t *testing.T) {
 		t.Skip("PreVmHWM is only populated on Linux")
 	}
 
+	// Allocate a sizable buffer INSIDE fn so VmHWM grows during the call.
+	// PreVmHWM must capture the pre-allocation high-water-mark; the strict
+	// inequality below catches a regression that moved the snapshot to
+	// after fn (in which case PreVmHWM == VmHWM and the test fails).
+	const bufBytes = 64 << 20 // 64 MiB
 	s, err := Measure("stage", func() error {
-		// Allocate a small slice to ensure the process has measurable RSS.
-		buf := make([]byte, 1<<20)
-		buf[0] = 1
-		_ = buf
+		buf := make([]byte, bufBytes)
+		// Touch every 4 KiB page to force the kernel to back the
+		// allocation with RSS; an untouched mmap'd region doesn't move VmHWM.
+		for i := 0; i < bufBytes; i += 4096 {
+			buf[i] = 1
+		}
+		runtime.KeepAlive(buf)
 		return nil
 	})
 	require.NoError(t, err)
 	assert.Greater(t, s.PreVmHWM, uint64(0), "PreVmHWM must be non-zero on Linux")
-	assert.LessOrEqual(t, s.PreVmHWM, s.VmHWM, "PreVmHWM must not exceed VmHWM (HWM is monotonic)")
+	assert.Less(t, s.PreVmHWM, s.VmHWM,
+		"PreVmHWM must be strictly less than VmHWM after a 64 MiB allocation inside fn (regression: snapshot moved to after fn)")
 }

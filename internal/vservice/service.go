@@ -30,9 +30,16 @@ const sidEntropyBytes = 16
 // `*ckks.Evaluator` is concurrency-safe (Lattigo v6.2.0). The Orion
 // `*evaluator.Evaluator` is NOT goroutine-safe (Orion doc.go); each
 // session therefore owns its own instance.
+//
+// `rlk` and `glk` are stashed by StoreEvalKeys so ExportState can hand
+// them back to the bench `infer` subprocess. The HTTP path doesn't read
+// them — only the evaluator built from the merged key set is consulted
+// at Infer time.
 type sessionState struct {
 	eval      *ckks.Evaluator
 	orionEval *orioneval.Evaluator
+	rlk       *rlwe.RelinearizationKey
+	glk       []*rlwe.GaloisKey
 }
 
 // Service is the FHE inference engine. The evaluator for each session is
@@ -143,6 +150,8 @@ func (s *Service) StoreEvalKeys(
 		return fmt.Errorf("%w: %q", ErrUnknownSession, sid)
 	}
 	evk := rlwe.NewMemEvaluationKeySet(rlk, gks...)
+	sess.rlk = rlk
+	sess.glk = gks
 	if s.orionModel != nil {
 		// Phase-2 path: per-session Orion Evaluator. The model is shared.
 		// C3AE does not bootstrap, so btpKeys is nil.

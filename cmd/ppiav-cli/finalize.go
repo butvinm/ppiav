@@ -116,17 +116,21 @@ func runFinalize(args []string) error {
 	})
 	run.Append(sample)
 	if err != nil {
-		_ = run.WriteJSON(finalizeOutPath(*outPath, *workdir))
+		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "finalize"))
 		return fmt.Errorf("finalize: %w", err)
 	}
 
-	decoded := buildDecodedOutput(*refLogit, params.Authenticator.Lambda, macKey.S, slots, verdict)
+	decoded, err := buildDecodedOutput(*refLogit, params.Authenticator.Lambda, macKey.S, slots, verdict)
+	if err != nil {
+		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "finalize"))
+		return fmt.Errorf("finalize: %w", err)
+	}
 	if err := writeDecodedJSON(*outDecoded, decoded); err != nil {
-		_ = run.WriteJSON(finalizeOutPath(*outPath, *workdir))
+		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "finalize"))
 		return fmt.Errorf("finalize: write decoded.json: %w", err)
 	}
 
-	if err := run.WriteJSON(finalizeOutPath(*outPath, *workdir)); err != nil {
+	if err := run.WriteJSON(stepOutPath(*outPath, *workdir, "finalize")); err != nil {
 		return fmt.Errorf("finalize: write run JSON: %w", err)
 	}
 	return nil
@@ -138,7 +142,16 @@ func runFinalize(args []string) error {
 // deterministic v[i]/Δ checksum and are reported separately as slots_in_s
 // for debugging (no noise computation — the v[i] values are not centered
 // around ref_logit, so subtracting would be meaningless).
-func buildDecodedOutput(refLogit float64, lambda int, s []int, slots []float64, verdict protocol.Verdict) decodedOutput {
+//
+// Returns an error if `slots` is shorter than `lambda` — defensive against
+// future weakening of the FinalizeDecryptionVerbose contract. Today
+// FinalizeDecryptionVerbose always returns a MaxSlots-sized vector on
+// success and MaxSlots is much greater than Lambda, so this only ever fires
+// on a contract regression.
+func buildDecodedOutput(refLogit float64, lambda int, s []int, slots []float64, verdict protocol.Verdict) (decodedOutput, error) {
+	if len(slots) < lambda {
+		return decodedOutput{}, fmt.Errorf("finalize: slots length %d < lambda %d (FinalizeDecryptionVerbose contract violated)", len(slots), lambda)
+	}
 	inS := make(map[int]bool, len(s))
 	for _, i := range s {
 		inS[i] = true
@@ -157,7 +170,7 @@ func buildDecodedOutput(refLogit float64, lambda int, s []int, slots []float64, 
 		RefLogit:     refLogit,
 		SlotsInS:     slotsInS,
 		NoisePerSlot: noisePerSlot,
-	}
+	}, nil
 }
 
 // writeDecodedJSON serialises the decoded payload to path atomically via
@@ -170,9 +183,3 @@ func writeDecodedJSON(path string, decoded decodedOutput) error {
 	return writeBytesPath(path, data)
 }
 
-func finalizeOutPath(outPath, workdir string) string {
-	if outPath != "" {
-		return outPath
-	}
-	return defaultOutPath(workdir, "finalize")
-}

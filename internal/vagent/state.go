@@ -54,16 +54,17 @@ func (a *Agent) ExportState(sid protocol.SessionID) (*ExportedState, error) {
 	// slice header.
 	sCopy := make([]int, len(sess.authKey.S))
 	copy(sCopy, sess.authKey.S)
-	// gks is built on the fly by mac/finalize callers from the
-	// evaluation-key set; in tests it's surfaced by AggregateGaloisShares.
-	// We deliberately do not stash a copy here — the test passes the gks
-	// slice it received from AggregateGaloisShares directly.
+	// Share the gks slice by reference: GaloisKeys are large (tens of MB
+	// each) and the bench caller serialises them to disk immediately. Tests
+	// and the HTTP path do not mutate the per-element entries; the shared
+	// slice header is safe.
 	return &ExportedState{
 		SID:     sid,
 		SkShare: sess.skShare,
 		MacKey:  authenticator.Key{S: sCopy, SeedF: sess.authKey.SeedF},
 		PkAgg:   sess.pkAgg,
 		Rlk:     sess.rlkAgg,
+		Gks:     sess.gks,
 	}, nil
 }
 

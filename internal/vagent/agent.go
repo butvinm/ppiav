@@ -49,8 +49,11 @@ type sessionState struct {
 	encryptor *rlwe.Encryptor
 
 	// Populated by AggregateGaloisShares — VAgent needs the eval to run
-	// Auth's rotation+sum.
+	// Auth's rotation+sum. `gks` is stashed so ExportState can hand the
+	// full galois set to the bench `mac` / `finalize` subprocesses; the
+	// in-process HTTP path doesn't read it back (the evaluator is enough).
 	rlkAgg *rlwe.RelinearizationKey
+	gks    []*rlwe.GaloisKey
 	eval   *ckks.Evaluator
 
 	// PK protocol stash (between GenPKShare and AggregatePK).
