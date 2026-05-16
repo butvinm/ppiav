@@ -85,6 +85,23 @@ class KeyEntry:
     bytes_source: BytesSource
 
 
+# Ordered chronological list of per-image step Sample names emitted by the
+# per-image subcommands. Drives the per-party table iteration order in
+# bench.eval and the Gantt lane ordering in bench.plots_eval.
+PER_IMAGE_STEPS: tuple[str, ...] = (
+    "encrypt",
+    "infer.load_keys",
+    "infer.load_input_ct",
+    "infer.exec",
+    "infer.serialize_result",
+    "mac.derive_auth_keys",
+    "mac.compute_ct",
+    "partial-decrypt",
+    "finalize.final_decrypt",
+    "finalize.verdict_compute",
+)
+
+
 # Authoritative message catalog (drawn from docs/protocol.puml). Order is
 # chronological by phase: session init -> keygen -> input -> inference ->
 # verifiable decryption.

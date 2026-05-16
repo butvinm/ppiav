@@ -256,14 +256,9 @@ def run_pipeline(
     return batch_dir
 
 
-# Protocol step order for the e2e per-image chain.
-_PER_IMAGE_STEPS: tuple[str, ...] = (
-    "encrypt",
-    "infer",
-    "mac",
-    "partial-decrypt",
-    "finalize",
-)
+# Protocol step order for the e2e per-image chain. Sourced from the message
+# catalog so the bench and the protocol-message catalog stay in sync.
+_PER_IMAGE_STEPS: tuple[str, ...] = _messages.PER_IMAGE_STEPS
 
 # Keygen sub-step labels emitted by `ppiav-cli keygen` (see cmd/ppiav-cli/keygen.go).
 _KEYGEN_SUBSTEPS: tuple[str, ...] = (
@@ -341,16 +336,27 @@ def _image_dirs(batch_dir: Path) -> list[tuple[int, Path]]:
 def _load_step_runs(
     img_dirs: Sequence[tuple[int, Path]],
 ) -> dict[str, list[Sample]]:
-    """For each per-image step, collect one bench Sample per image."""
+    """Collect per-image Samples bucketed by Sample.name across every image.
+
+    The per-image JSON files are named by stage (``encrypt.json``, ``infer.json``,
+    ``mac.json``, ``partial-decrypt.json``, ``finalize.json``), and each file
+    contains one or more Samples whose ``name`` is the sub-step key (e.g.
+    ``infer.exec``, ``mac.derive_auth_keys``). The bucket is keyed by Sample
+    name so the per-party table can render one row per sub-step.
+    """
+    stage_files: tuple[str, ...] = (
+        "encrypt",
+        "infer",
+        "mac",
+        "partial-decrypt",
+        "finalize",
+    )
     bucket: dict[str, list[Sample]] = {step: [] for step in _PER_IMAGE_STEPS}
     for _, img_dir in img_dirs:
-        for step in _PER_IMAGE_STEPS:
-            run = load_run(img_dir / f"{step}.json")
-            # Each per-step JSON contains exactly one Sample for that step.
-            # If the producer ever appends multiple iterations we still
-            # aggregate them flat — that's the correct behaviour for a
-            # re-run with iter>0.
-            bucket[step].extend(run.samples)
+        for stage in stage_files:
+            run = load_run(img_dir / f"{stage}.json")
+            for sample in run.samples:
+                bucket.setdefault(sample.name, []).append(sample)
     return bucket
 
 

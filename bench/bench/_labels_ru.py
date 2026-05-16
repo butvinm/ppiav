@@ -70,6 +70,15 @@ STEP_NAMES: dict[str, str] = {
     "mac": "аутентификация шифротекста",
     "partial-decrypt": "частичная расшифровка",
     "finalize": "окончательная расшифровка",
+    # Per-image sub-steps emitted by the instrumented per-image subcommands.
+    "infer.load_keys": "инференс: загрузка rlk + gks_infer",
+    "infer.load_input_ct": "инференс: загрузка шифротекста входа",
+    "infer.exec": "инференс: вычисление",
+    "infer.serialize_result": "инференс: сериализация результата",
+    "mac.derive_auth_keys": "mac: вывод gks_auth",
+    "mac.compute_ct": "mac: вычисление аутентифицированного ct",
+    "finalize.final_decrypt": "финализация: расшифровка + Auth",
+    "finalize.verdict_compute": "финализация: вычисление вердикта",
 }
 
 # Round → ordered list of per-party sub-step keys, used by the aggregator
@@ -247,6 +256,15 @@ PARTY_BY_STEP: dict[str, str] = {
     "mac": "agent",
     "partial-decrypt": "client",
     "finalize": "agent",
+    # Per-image sub-steps.
+    "infer.load_keys": "service",
+    "infer.load_input_ct": "service",
+    "infer.exec": "service",
+    "infer.serialize_result": "service",
+    "mac.derive_auth_keys": "agent",
+    "mac.compute_ct": "agent",
+    "finalize.final_decrypt": "agent",
+    "finalize.verdict_compute": "agent",
 }
 
 # Producer → consumer mapping for the per-image transfer arrows in the

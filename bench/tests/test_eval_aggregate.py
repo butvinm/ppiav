@@ -105,6 +105,43 @@ def test_aggregate_writes_bytes_cache(batch_dir: Path) -> None:
     assert "name" not in data[0]
 
 
+def test_party_step_table_lists_each_substep_with_party(batch_dir: Path) -> None:
+    """Every per-image sub-step renders as its own row with its assigned party tag."""
+    from bench._labels_ru import PARTY_BY_STEP, PARTY_NAMES, STEP_NAMES
+    from bench._messages import PER_IMAGE_STEPS
+    from bench.eval import (
+        _load_keygen_run,
+        _load_step_runs,
+        _party_step_table_md,
+    )
+
+    img_dirs = sorted(
+        (
+            (int(p.name.removeprefix("img_")), p)
+            for p in batch_dir.iterdir()
+            if p.is_dir() and p.name.startswith("img_")
+        ),
+        key=lambda t: t[0],
+    )
+    keygen_run = _load_keygen_run(batch_dir)
+    per_image = _load_step_runs(img_dirs)
+
+    table = _party_step_table_md(keygen_run, per_image)
+    for step in PER_IMAGE_STEPS:
+        assert per_image.get(step), f"fixture is missing samples for sub-step {step!r}"
+        label = STEP_NAMES[step]
+        party = PARTY_NAMES[PARTY_BY_STEP[step]]
+        assert label in table, f"sub-step label {label!r} missing from per-party table"
+        # Confirm the label appears on a row alongside its party tag — guards
+        # against the label leaking onto the wrong row.
+        for line in table.splitlines():
+            if label in line:
+                assert party in line, (
+                    f"sub-step {step!r} row does not carry its party tag {party!r}: {line!r}"
+                )
+                break
+
+
 def test_aggregate_drops_old_shape_cache(batch_dir: Path) -> None:
     """An existing bytes.json with the old {name, bytes} shape must be deleted.
 

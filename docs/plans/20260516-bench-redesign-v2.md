@@ -291,11 +291,11 @@ All three subcommands follow the same refactor pattern: take the single `bench.M
 - Modify: `bench/bench/eval.py`
 - Modify: `bench/bench/_labels_ru.py`
 
-- [ ] in `_labels_ru.py`, add `STEP_NAMES` entries for the new per-image sub-steps: `infer.load_keys`, `infer.load_input_ct`, `infer.exec`, `infer.serialize_result`, `mac.derive_auth_keys`, `mac.compute_ct`, `finalize.final_decrypt`, `finalize.verdict_compute` (with concise Russian labels). `partial-decrypt` keeps its single step name. `encrypt` keeps its single step name.
-- [ ] add the same keys to `PARTY_BY_STEP` (`infer.*` → service, `mac.*` → agent, `finalize.*` → agent, `partial-decrypt` stays client, `encrypt` stays client)
-- [ ] in `eval.py`, replace the hardcoded `_PER_IMAGE_STEPS` constant with `PER_IMAGE_STEPS = tuple(_messages.PER_IMAGE_STEPS)` populated from the catalog (the catalog declares: encrypt → infer.load_keys → infer.load_input_ct → infer.exec → infer.serialize_result → mac.derive_auth_keys → mac.compute_ct → partial-decrypt → finalize.final_decrypt → finalize.verdict_compute)
-- [ ] no legacy single-sample fallback: prior bench runs lived in `results/phase2/eval-*` and are archived. New runs always emit the sub-step shape. If reaggregating a legacy dir fails, the operator regenerates the data — simpler than carrying dead-code fallback paths.
-- [ ] add a test asserting `_party_step_table_md` rendered against the Task 4 fixture lists each sub-step on its own row with the correct party tag
+- [x] in `_labels_ru.py`, add `STEP_NAMES` entries for the new per-image sub-steps: `infer.load_keys`, `infer.load_input_ct`, `infer.exec`, `infer.serialize_result`, `mac.derive_auth_keys`, `mac.compute_ct`, `finalize.final_decrypt`, `finalize.verdict_compute` (with concise Russian labels). `partial-decrypt` keeps its single step name. `encrypt` keeps its single step name.
+- [x] add the same keys to `PARTY_BY_STEP` (`infer.*` → service, `mac.*` → agent, `finalize.*` → agent, `partial-decrypt` stays client, `encrypt` stays client)
+- [x] in `eval.py`, replace the hardcoded `_PER_IMAGE_STEPS` constant with `PER_IMAGE_STEPS = tuple(_messages.PER_IMAGE_STEPS)` populated from the catalog (the catalog declares: encrypt → infer.load_keys → infer.load_input_ct → infer.exec → infer.serialize_result → mac.derive_auth_keys → mac.compute_ct → partial-decrypt → finalize.final_decrypt → finalize.verdict_compute)
+- [x] no legacy single-sample fallback: prior bench runs lived in `results/phase2/eval-*` and are archived. New runs always emit the sub-step shape. If reaggregating a legacy dir fails, the operator regenerates the data — simpler than carrying dead-code fallback paths.
+- [x] add a test asserting `_party_step_table_md` rendered against the Task 4 fixture lists each sub-step on its own row with the correct party tag
 
 ### Task 8: Plot updates — message-named bytes, plain-vs-FHE accuracy, Gantt sub-step lanes
 
