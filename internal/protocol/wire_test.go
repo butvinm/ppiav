@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	hierkeys "github.com/butvinm/lattigo-hierkeys"
+	"github.com/butvinm/lattigo-hierkeys/llkn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
@@ -30,6 +32,17 @@ func smallCKKS(t *testing.T) ckks.Parameters {
 	return params
 }
 
+// smallLLKN returns a 2-level LLKN hierarchy on top of `smallCKKS`,
+// matching the shape `Defaults()` builds at production sizes. A single
+// 40-bit master P-prime is enough to exercise the top-level CRP/share
+// machinery without ballooning test runtime.
+func smallLLKN(t *testing.T, eval ckks.Parameters) llkn.Parameters {
+	t.Helper()
+	p, err := llkn.NewParameters(eval.Parameters, [][]int{{40}})
+	require.NoError(t, err)
+	return p
+}
+
 // testCRS returns a fresh KeyedPRNG with a deterministic seed for CRP
 // sampling. The exact seed does not matter — round-trip tests just need
 // any reproducible CRS source.
@@ -40,17 +53,38 @@ func testCRS(t *testing.T) *sampling.KeyedPRNG {
 	return prng
 }
 
+// dualPKShares returns a freshly generated (ShareEval, ShareTop) pair
+// drawn from independent eval-level and top-level multiparty PK protocols
+// against the same `smallCKKS` / `smallLLKN` pair. Used by both the
+// VClient and VAgent PK-share round-trip tests below.
+func dualPKShares(t *testing.T) (multiparty.PublicKeyGenShare, multiparty.PublicKeyGenShare) {
+	t.Helper()
+	eval := smallCKKS(t)
+	top := smallLLKN(t, eval)
+
+	crs := testCRS(t)
+
+	// Eval-level share.
+	skEval := rlwe.NewKeyGenerator(eval).GenSecretKeyNew()
+	pkgEval := multiparty.NewPublicKeyGenProtocol(eval)
+	crpEval := pkgEval.SampleCRP(crs)
+	shareEval := pkgEval.AllocateShare()
+	pkgEval.GenShare(skEval, crpEval, &shareEval)
+
+	// Top-level share.
+	skTop := rlwe.NewKeyGenerator(top.Top()).GenSecretKeyNew()
+	pkgTop := multiparty.NewPublicKeyGenProtocol(top.Top())
+	crpTop := pkgTop.SampleCRP(crs)
+	shareTop := pkgTop.AllocateShare()
+	pkgTop.GenShare(skTop, crpTop, &shareTop)
+
+	return shareEval, shareTop
+}
+
 func TestVClientPKShareBinaryRoundTrip(t *testing.T) {
-	params := smallCKKS(t)
-	kgen := rlwe.NewKeyGenerator(params)
-	sk := kgen.GenSecretKeyNew()
+	shareEval, shareTop := dualPKShares(t)
 
-	pkg := multiparty.NewPublicKeyGenProtocol(params)
-	crp := pkg.SampleCRP(testCRS(t))
-	share := pkg.AllocateShare()
-	pkg.GenShare(sk, crp, &share)
-
-	original := VClientPKShare{Share: share}
+	original := VClientPKShare{ShareEval: shareEval, ShareTop: shareTop}
 	data, err := original.MarshalBinary()
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
@@ -64,16 +98,9 @@ func TestVClientPKShareBinaryRoundTrip(t *testing.T) {
 }
 
 func TestVAgentPKShareBinaryRoundTrip(t *testing.T) {
-	params := smallCKKS(t)
-	kgen := rlwe.NewKeyGenerator(params)
-	sk := kgen.GenSecretKeyNew()
+	shareEval, shareTop := dualPKShares(t)
 
-	pkg := multiparty.NewPublicKeyGenProtocol(params)
-	crp := pkg.SampleCRP(testCRS(t))
-	share := pkg.AllocateShare()
-	pkg.GenShare(sk, crp, &share)
-
-	original := VAgentPKShare{Share: share}
+	original := VAgentPKShare{ShareEval: shareEval, ShareTop: shareTop}
 	data, err := original.MarshalBinary()
 	require.NoError(t, err)
 
@@ -82,6 +109,27 @@ func TestVAgentPKShareBinaryRoundTrip(t *testing.T) {
 	again, err := got.MarshalBinary()
 	require.NoError(t, err)
 	assert.Equal(t, data, again)
+}
+
+// A truncated dual-PK payload (only the eval section, no top length
+// prefix) must error out rather than silently leaving `ShareTop` zeroed.
+func TestVClientPKShareUnmarshalShortTop(t *testing.T) {
+	shareEval, _ := dualPKShares(t)
+	evalBytes, err := shareEval.MarshalBinary()
+	require.NoError(t, err)
+
+	// Header + eval body, missing the top length prefix.
+	buf := make([]byte, 0, 4+len(evalBytes))
+	buf = append(buf, 0, 0, 0, 0)
+	// Patch the 4-byte length to len(evalBytes).
+	buf[0] = byte(len(evalBytes) >> 24)
+	buf[1] = byte(len(evalBytes) >> 16)
+	buf[2] = byte(len(evalBytes) >> 8)
+	buf[3] = byte(len(evalBytes))
+	buf = append(buf, evalBytes...)
+
+	var got VClientPKShare
+	require.Error(t, got.UnmarshalBinary(buf))
 }
 
 func TestVClientRLKRound1BinaryRoundTrip(t *testing.T) {
@@ -152,85 +200,117 @@ func TestVClientRLKRound2BinaryRoundTrip(t *testing.T) {
 	assert.Equal(t, data, again)
 }
 
-func TestVClientGaloisKeyShareBinaryRoundTrip(t *testing.T) {
-	params := smallCKKS(t)
-	kgen := rlwe.NewKeyGenerator(params)
-	sk := kgen.GenSecretKeyNew()
-
+// galoisSharesForAtoms returns one `GaloisKeyGenShare` per atom, drawn
+// against `params` for `GaloisElement(sign * atom)`. The shares are
+// produced from a single secret-key share (single-party handshake);
+// the wire-format tests only need well-formed share bodies, not a
+// multi-party aggregation.
+func galoisSharesForAtoms(t *testing.T, params rlwe.Parameters, atoms []int, sign int) []multiparty.GaloisKeyGenShare {
+	t.Helper()
+	sk := rlwe.NewKeyGenerator(params).GenSecretKeyNew()
 	proto := multiparty.NewGaloisKeyGenProtocol(params)
 	crs := testCRS(t)
-	labels := []int{-1, -2, -3}
-	shares := make([]multiparty.GaloisKeyGenShare, len(labels))
-	for i, j := range labels {
+	shares := make([]multiparty.GaloisKeyGenShare, len(atoms))
+	for i, a := range atoms {
 		crp := proto.SampleCRP(crs)
 		s := proto.AllocateShare()
-		require.NoError(t, proto.GenShare(sk, params.GaloisElement(j), crp, &s))
+		require.NoError(t, proto.GenShare(sk, params.GaloisElement(sign*a), crp, &s))
 		shares[i] = s
 	}
+	return shares
+}
 
-	original := VClientGaloisKeyShare{Shares: shares}
+func TestVClientGaloisSharesBinaryRoundTrip(t *testing.T) {
+	eval := smallCKKS(t)
+	top := smallLLKN(t, eval)
+
+	auth := galoisSharesForAtoms(t, eval.Parameters, []int{1, 2, 4}, -1)
+	infer := galoisSharesForAtoms(t, top.Top(), []int{1, 4, 16}, +1)
+
+	original := VClientGaloisShares{AuthAtomShares: auth, InferAtomShares: infer}
 	data, err := original.MarshalBinary()
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
 
-	var got VClientGaloisKeyShare
+	var got VClientGaloisShares
 	require.NoError(t, got.UnmarshalBinary(data))
-	require.Len(t, got.Shares, len(labels))
+	require.Len(t, got.AuthAtomShares, len(auth))
+	require.Len(t, got.InferAtomShares, len(infer))
 
 	again, err := got.MarshalBinary()
 	require.NoError(t, err)
-	assert.Equal(t, data, again, "VClientGaloisKeyShare.MarshalBinary must be deterministic across round-trips")
+	assert.Equal(t, data, again, "VClientGaloisShares.MarshalBinary must be deterministic across round-trips")
 }
 
-func TestVClientGaloisKeyShareUnmarshalShortHeader(t *testing.T) {
-	var got VClientGaloisKeyShare
+func TestVClientGaloisSharesUnmarshalShortHeader(t *testing.T) {
+	var got VClientGaloisShares
 	require.Error(t, got.UnmarshalBinary([]byte{0x00, 0x01}))
 }
 
-func TestVClientGaloisKeyShareUnmarshalEmpty(t *testing.T) {
-	original := VClientGaloisKeyShare{Shares: nil}
+// Both share lists may be empty: marshal/unmarshal must round-trip the
+// "no atoms" boundary cleanly (8 zero bytes — auth count 0, infer count 0).
+func TestVClientGaloisSharesUnmarshalEmpty(t *testing.T) {
+	original := VClientGaloisShares{}
 	data, err := original.MarshalBinary()
 	require.NoError(t, err)
+	require.Equal(t, []byte{0, 0, 0, 0, 0, 0, 0, 0}, data)
 
-	var got VClientGaloisKeyShare
+	var got VClientGaloisShares
 	require.NoError(t, got.UnmarshalBinary(data))
-	assert.Empty(t, got.Shares)
+	assert.Empty(t, got.AuthAtomShares)
+	assert.Empty(t, got.InferAtomShares)
 }
 
 // A malicious header that claims many more shares than the remaining
 // payload can possibly contain must be rejected before the
-// `make([]GaloisKeyGenShare, count)` allocation runs. Without the
-// upper-bound guard a 5-byte body could request a multi-GiB slice.
-func TestVClientGaloisKeyShareUnmarshalCountExceedsPayload(t *testing.T) {
-	// count = 0xFFFFFFFF, no further bytes → 1 byte after the header.
+// `make([]GaloisKeyGenShare, count)` allocation runs.
+func TestVClientGaloisSharesUnmarshalCountExceedsPayload(t *testing.T) {
+	// auth count = 0xFFFFFFFF, no further bytes → 1 byte after the header.
 	data := []byte{0xff, 0xff, 0xff, 0xff, 0x00}
-	var got VClientGaloisKeyShare
+	var got VClientGaloisShares
 	require.Error(t, got.UnmarshalBinary(data))
 }
 
-func TestInferEvalKeysBinaryRoundTrip(t *testing.T) {
-	// LogN=10 keeps the test fast; the marshaling code is the same for
-	// production LogN=16. Two small rotation indices are enough to exercise
-	// the GKS slice path.
-	lit := ckks.ParametersLiteral{
-		LogN:            10,
-		LogQ:            []int{40, 40},
-		LogP:            []int{40},
-		LogDefaultScale: 30,
-		RingType:        ring.Standard,
+// buildInferEvalKeysFixture builds a complete `InferEvalKeys` payload
+// using single-party multiparty handshakes — RLK at eval level, PKTop at
+// top level, plus one `*hierkeys.MasterKey` per supplied infer atom drawn
+// against the top-level params with the standard `+atom` convention. The
+// returned eval/top params are kept around for tests that want to assert
+// shape (e.g. checking that the round-tripped Galois elements match the
+// freshly-generated atoms).
+func buildInferEvalKeysFixture(t *testing.T, atoms []int) (InferEvalKeys, ckks.Parameters, llkn.Parameters) {
+	t.Helper()
+	eval := smallCKKS(t)
+	top := smallLLKN(t, eval)
+
+	// RLK at eval level (single-party shortcut; the wire format only
+	// requires a marshal-able relinearization key, not a multi-party one).
+	skEval := rlwe.NewKeyGenerator(eval).GenSecretKeyNew()
+	rlk := rlwe.NewKeyGenerator(eval).GenRelinearizationKeyNew(skEval)
+
+	// PKTop at top level (also single-party here).
+	skTop := rlwe.NewKeyGenerator(top.Top()).GenSecretKeyNew()
+	pkTop := rlwe.NewKeyGenerator(top.Top()).GenPublicKeyNew(skTop)
+
+	// One MasterKey per atom — derive a raw Galois key at top level and
+	// convert via `GaloisKeyToMasterKey`.
+	masterKeys := make(map[int]*hierkeys.MasterKey, len(atoms))
+	topKgen := rlwe.NewKeyGenerator(top.Top())
+	for _, a := range atoms {
+		galEl := top.Top().GaloisElement(a)
+		gk := topKgen.GenGaloisKeyNew(galEl, skTop)
+		mk, err := hierkeys.GaloisKeyToMasterKey(top.Top(), gk)
+		require.NoError(t, err)
+		masterKeys[a] = mk
 	}
-	params, err := ckks.NewParametersFromLiteral(lit)
-	require.NoError(t, err)
 
-	kgen := rlwe.NewKeyGenerator(params)
-	sk := kgen.GenSecretKeyNew()
-	rlk := kgen.GenRelinearizationKeyNew(sk)
+	return InferEvalKeys{RLK: rlk, PKTop: pkTop, GKSMasterInfer: masterKeys}, eval, top
+}
 
-	galEls := params.GaloisElements([]int{-1, -2})
-	gks := kgen.GenGaloisKeysNew(galEls, sk)
-	require.Len(t, gks, 2)
+func TestInferEvalKeysBinaryRoundTrip(t *testing.T) {
+	atoms := []int{1, 4, 16}
+	original, _, top := buildInferEvalKeysFixture(t, atoms)
 
-	original := InferEvalKeys{RLK: rlk, GKS: gks}
 	data, err := original.MarshalBinary()
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
@@ -238,20 +318,21 @@ func TestInferEvalKeysBinaryRoundTrip(t *testing.T) {
 	var got InferEvalKeys
 	require.NoError(t, got.UnmarshalBinary(data))
 	require.NotNil(t, got.RLK)
-	require.Len(t, got.GKS, 2)
+	require.NotNil(t, got.PKTop)
+	require.Len(t, got.GKSMasterInfer, len(atoms))
 
-	// Galois elements survive the round trip; order is ascending after
-	// unmarshal regardless of input order.
-	wantElements := map[uint64]bool{}
-	for _, gk := range gks {
-		wantElements[gk.GaloisElement] = true
-	}
-	for _, gk := range got.GKS {
-		assert.True(t, wantElements[gk.GaloisElement], "Galois element %d should round-trip", gk.GaloisElement)
-		assert.Equal(t, gks[0].NthRoot, gk.NthRoot)
+	// Each atom survives round-trip, keyed identically, and its underlying
+	// Galois element matches `top.GaloisElement(+atom)`.
+	for _, a := range atoms {
+		mk, ok := got.GKSMasterInfer[a]
+		require.Truef(t, ok, "atom %d missing after round-trip", a)
+		require.NotNil(t, mk)
+		assert.Equalf(t, top.Top().GaloisElement(a), mk.GaloisElement(),
+			"MasterKey for atom %d has wrong Galois element", a)
 	}
 
-	// Re-marshal: deterministic order means the bytes match a second pass.
+	// Deterministic: re-marshaling produces the same bytes (atoms are
+	// sorted on the wire so the iteration order is stable).
 	again, err := got.MarshalBinary()
 	require.NoError(t, err)
 	assert.Equal(t, data, again, "InferEvalKeys.MarshalBinary must be deterministic across round-trips")
@@ -262,29 +343,37 @@ func TestInferEvalKeysUnmarshalTruncated(t *testing.T) {
 	require.Error(t, got.UnmarshalBinary([]byte{0x00}))
 }
 
-func TestInferEvalKeysEmptyGKS(t *testing.T) {
-	lit := ckks.ParametersLiteral{
-		LogN:            10,
-		LogQ:            []int{40, 40},
-		LogP:            []int{40},
-		LogDefaultScale: 30,
-		RingType:        ring.Standard,
-	}
-	params, err := ckks.NewParametersFromLiteral(lit)
-	require.NoError(t, err)
+func TestInferEvalKeysMarshalRejectsNilRLK(t *testing.T) {
+	_, _, top := buildInferEvalKeysFixture(t, nil)
+	skTop := rlwe.NewKeyGenerator(top.Top()).GenSecretKeyNew()
+	pkTop := rlwe.NewKeyGenerator(top.Top()).GenPublicKeyNew(skTop)
 
-	kgen := rlwe.NewKeyGenerator(params)
-	sk := kgen.GenSecretKeyNew()
-	rlk := kgen.GenRelinearizationKeyNew(sk)
+	k := InferEvalKeys{RLK: nil, PKTop: pkTop, GKSMasterInfer: map[int]*hierkeys.MasterKey{}}
+	_, err := k.MarshalBinary()
+	require.Error(t, err)
+}
 
-	original := InferEvalKeys{RLK: rlk, GKS: nil}
+func TestInferEvalKeysMarshalRejectsNilPKTop(t *testing.T) {
+	eval := smallCKKS(t)
+	sk := rlwe.NewKeyGenerator(eval).GenSecretKeyNew()
+	rlk := rlwe.NewKeyGenerator(eval).GenRelinearizationKeyNew(sk)
+
+	k := InferEvalKeys{RLK: rlk, PKTop: nil, GKSMasterInfer: map[int]*hierkeys.MasterKey{}}
+	_, err := k.MarshalBinary()
+	require.Error(t, err)
+}
+
+func TestInferEvalKeysEmptyMasterMap(t *testing.T) {
+	original, _, _ := buildInferEvalKeysFixture(t, nil)
+
 	data, err := original.MarshalBinary()
 	require.NoError(t, err)
 
 	var got InferEvalKeys
 	require.NoError(t, got.UnmarshalBinary(data))
 	assert.NotNil(t, got.RLK)
-	assert.Empty(t, got.GKS)
+	assert.NotNil(t, got.PKTop)
+	assert.Empty(t, got.GKSMasterInfer)
 }
 
 // EncryptedImage and AuthenticatedResult marshal as the bare
