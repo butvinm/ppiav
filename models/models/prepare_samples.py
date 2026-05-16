@@ -229,11 +229,17 @@ def write_manifest(
     ref_logits: Sequence[float] | None,
 ) -> None:
     """Write ``eval_inputs.json`` consumed by ``bench.eval``."""
+    manifest_dir = manifest_path.resolve().parent
+    out_dir_abs = out_dir.resolve()
+    try:
+        rel_dir = out_dir_abs.relative_to(manifest_dir)
+    except ValueError:
+        rel_dir = out_dir_abs
     images: list[dict[str, object]] = []
     for i, idx in enumerate(indices):
         entry: dict[str, object] = {
             "idx": int(idx),
-            "path": str(out_dir / f"sample_{idx}.bin"),
+            "path": str(rel_dir / f"sample_{idx}.bin"),
             "age": int(ages[i]),
             "label": int(labels[i]),
         }

@@ -86,11 +86,11 @@ def _load_manifest(path: Path) -> dict[str, Any]:
     return data
 
 
-def _resolve_image_path(repo: Path, raw: str) -> Path:
-    """Resolve a manifest image path against the repo root if it's relative."""
+def _resolve_image_path(manifest_dir: Path, raw: str) -> Path:
+    """Resolve a manifest image path relative to the manifest's directory."""
     p = Path(raw)
     if not p.is_absolute():
-        p = (repo / raw).resolve()
+        p = (manifest_dir / raw).resolve()
     return p
 
 
@@ -133,12 +133,13 @@ def run_pipeline(
         cwd=repo,
     )
 
+    manifest_dir = inputs.resolve().parent
     images: list[dict[str, Any]] = manifest["images"]
     for entry in images:
         idx = int(entry["idx"])
         img_dir = batch_dir / f"img_{idx}"
         img_dir.mkdir(parents=True, exist_ok=True)
-        image_path = _resolve_image_path(repo, str(entry["path"]))
+        image_path = _resolve_image_path(manifest_dir, str(entry["path"]))
         ref_logit = float(entry.get("ref_logit", 0.0))
 
         input_ct = img_dir / "input_ct.bin"
