@@ -620,11 +620,11 @@ The `gks_master.bin` filename from the original draft is REMOVED — replaced by
 
 The bridge function name rename already landed in Task 5, so this task is the cross-compile and binary-size gate.
 
-- [ ] verify lattigo-hierkeys is pure-Go (no cgo): `grep -rn 'import "C"' ~/Dev/lattigo-hierkeys/` → empty. Also confirm against `~/Dev/lattigo-hierkeys/README.md:6`.
-- [ ] cross-compile check: `GOOS=js GOARCH=wasm go build ./web/ppiav/bridge/` succeeds with the new lattigo-hierkeys dep.
-- [ ] rebuild `web/ppiav/ppiav.wasm` via the existing `make wasm` step.
-- [ ] confirm the resulting `ppiav.wasm` size is within ~10% of the Phase 3 baseline (sanity check — lattigo-hierkeys is small). If it isn't, identify whether a stray heavy package got pulled in.
-- [ ] run the existing `web/ppiav/bridge/ppiav/core_test.go` round-trip on `linux/amd64` (it covers the renamed-to-`GenAuthAndInferShares` function path, updated in Task 5); the wasm-specific failure mode is build-only, caught by `make wasm`. No new test required since the existing test suite was updated in Task 5.
+- [x] verify lattigo-hierkeys is pure-Go (no cgo): `grep -rn 'import "C"' ~/Dev/lattigo-hierkeys/` → empty. Also confirm against `~/Dev/lattigo-hierkeys/README.md:6`.
+- [x] cross-compile check: `GOOS=js GOARCH=wasm go build ./web/ppiav/bridge/` succeeds with the new lattigo-hierkeys dep.
+- [x] rebuild `web/ppiav/ppiav.wasm` via the existing `make wasm` step.
+- [x] confirm the resulting `ppiav.wasm` size is within ~10% of the Phase 3 baseline (sanity check — lattigo-hierkeys is small). If it isn't, identify whether a stray heavy package got pulled in. (12,943,610 B vs 12,878,914 B baseline; +0.5%.)
+- [x] run the existing `web/ppiav/bridge/ppiav/core_test.go` round-trip on `linux/amd64` (it covers the renamed-to-`GenAuthAndInferShares` function path, updated in Task 5); the wasm-specific failure mode is build-only, caught by `make wasm`. No new test required since the existing test suite was updated in Task 5.
 
 ### Task 12: SPA wire — confirm payload-shape compatibility
 
@@ -709,3 +709,4 @@ _Items requiring manual intervention or external systems — no checkboxes, info
 **KG+ as a follow-up**:
 
 - If the thesis review feedback wants the smaller (1.5%) wire size, swap LLKN for KG+ — scheme is encapsulated in `protocol.Params.LLKN`, so the swap is mostly a parameter and import change plus ring-switching glue at VService.
+  [2026-05-16 10:57:48] Task 10 done — CLI artifact pipeline rewired to Phase 4 dual-PK + hierkeys split. Renamed constants (artifactPKEval/PKTop, artifactGKSAuth/MasterInfer/Infer), added writeMasterKeys/readMasterKeys, exported protocol.BuildLLKNParams so loadParams re-stamps LLKN against the persisted CKKS. keygen.go now persists pk_eval/pk_top/gks_auth/gks_master_infer/gks_infer + records gks_auth_bytes, gks_master_infer_bytes, derive_gks_infer_seconds. mac.go reads gks_auth.bin directly and records authchain_construct_seconds + read_gks_auth_seconds. infer.go reads pre-derived gks_infer.bin (new vservice.ExportedState.GksInfer skips re-derivation when supplied). encrypt/partial-decrypt/finalize rewired to SkTop. Added artifacts_test.go + pipeline_test.go covering full keygen->mac->infer at LogN=14. go build ./... GREEN, go test ./... GREEN (first green-tree gate since Task 4).
