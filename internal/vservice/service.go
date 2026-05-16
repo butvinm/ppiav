@@ -35,10 +35,10 @@ const sidEntropyBytes = 16
 // `*evaluator.Evaluator` is NOT goroutine-safe (Orion doc.go); each
 // session therefore owns its own instance.
 //
-// `rlk` and `glk` are stashed by StoreEvalKeys so ExportState can hand
-// them back to the bench `infer` subprocess. The HTTP path doesn't read
-// them — only the evaluator built from the merged key set is consulted
-// at Infer time.
+// `rlk` and `gksInfer` are stashed by StoreEvalKeys so ExportState can
+// hand them back to the bench `infer` subprocess. The HTTP path doesn't
+// read them — only the evaluator built from the merged key set is
+// consulted at Infer time.
 //
 // `deriveGksInferSeconds` records the wall-clock time spent inside
 // `StoreEvalKeys` running `LevelExpansion.Derive + FinalizeKey` across
@@ -51,7 +51,7 @@ type sessionState struct {
 	eval                  *ckks.Evaluator
 	orionEval             *orioneval.Evaluator
 	rlk                   *rlwe.RelinearizationKey
-	glk                   []*rlwe.GaloisKey
+	gksInfer              []*rlwe.GaloisKey
 	pkTop                 *rlwe.PublicKey
 	gksMasterInfer        map[int]*hierkeys.MasterKey
 	deriveGksInferSeconds float64
@@ -202,7 +202,7 @@ func (s *Service) StoreEvalKeys(
 	}
 	evk := rlwe.NewMemEvaluationKeySet(rlk, gks...)
 	sess.rlk = rlk
-	sess.glk = gks
+	sess.gksInfer = gks
 	sess.pkTop = pkTop
 	sess.gksMasterInfer = gksMasterInfer
 	sess.deriveGksInferSeconds = derive

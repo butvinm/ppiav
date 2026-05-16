@@ -326,9 +326,9 @@ func runKeygen(args []string) error {
 	}
 
 	// Record on-disk sizes for the bench cross-phase wire-size comparison.
-	// gks_auth.bin + gks_master_infer.bin together replace Phase 1-3's
-	// single glk_full.bin / glk_master.bin pair; gks_infer.bin is a local
-	// cache of the derived rotation set and not part of the wire payload.
+	// gks_auth.bin + gks_master_infer.bin together carry the agent-side
+	// rotation-key payload; gks_infer.bin is a local cache of the derived
+	// rotation set and not part of the wire payload.
 	if size, e := fileSize(*workdir, artifactGKSAuth); e == nil {
 		run.Metadata["gks_auth_bytes"] = size
 	}
@@ -343,9 +343,8 @@ func runKeygen(args []string) error {
 }
 
 // writeKeygenArtifacts persists every file the downstream subcommands
-// load. The Phase 4 split is `pk_eval.bin` + `pk_top.bin` +
-// `gks_auth.bin` + `gks_master_infer.bin` + `gks_infer.bin`, replacing
-// Phase 1-3's `pk.bin` + duplicated `glk_master.bin` / `glk_full.bin`.
+// load: `pk_eval.bin` + `pk_top.bin` + `gks_auth.bin` +
+// `gks_master_infer.bin` + `gks_infer.bin`.
 //
 // `gks_auth.bin` is the auth-side raw multi-party Galois keys (eval level,
 // negative galEls) — VAgent uses it directly to drive authchain.Evaluator.

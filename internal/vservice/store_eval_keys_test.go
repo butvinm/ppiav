@@ -142,7 +142,7 @@ func TestStoreEvalKeysFunctionalEquivalence(t *testing.T) {
 	svc.mu.Unlock()
 	require.NotNil(t, sess)
 	require.NotNil(t, sess.eval, "session must hold a *ckks.Evaluator after StoreEvalKeys")
-	require.Len(t, sess.glk, len(params.ExtraRotationIndices),
+	require.Len(t, sess.gksInfer, len(params.ExtraRotationIndices),
 		"derived gks_infer must have one entry per ExtraRotationIndices")
 
 	// Encrypt fresh values under the joint skEval and rotate via the

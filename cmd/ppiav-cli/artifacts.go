@@ -86,7 +86,7 @@ func readSID(workdir string) (protocol.SessionID, error) {
 // binary-marshalled CKKS parameters plus the InputLevel. The Authenticator
 // config and FloodSigma are reconstructed from `protocol.Defaults()` at
 // load time — they're not session-dependent — while ExtraRotationIndices
-// is recoverable from the persisted glk_full.bin. InputLevel IS persisted
+// is recoverable from the persisted gks_infer.bin. InputLevel IS persisted
 // because EncryptImage uses it to pick the plaintext level; Orion manifests
 // can set it below CKKS.MaxLevel() and silently using MaxLevel would
 // desync Orion's level accounting.

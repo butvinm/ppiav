@@ -56,7 +56,7 @@ func (s *Service) ExportState(sid protocol.SessionID) (*ExportedState, error) {
 		Rlk:            sess.rlk,
 		PKTop:          sess.pkTop,
 		GksMasterInfer: sess.gksMasterInfer,
-		GksInfer:       sess.glk,
+		GksInfer:       sess.gksInfer,
 	}, nil
 }
 
@@ -133,7 +133,7 @@ func NewWithState(params protocol.Params, orionDir string, state *ExportedState)
 	// GksMasterInfer, not the multi-GB derived slice).
 	sess := &sessionState{
 		rlk:                   state.Rlk,
-		glk:                   gks,
+		gksInfer:              gks,
 		pkTop:                 state.PKTop,
 		gksMasterInfer:        state.GksMasterInfer,
 		deriveGksInferSeconds: deriveSecs,
