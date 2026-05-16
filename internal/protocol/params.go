@@ -6,6 +6,9 @@ import (
 	"sort"
 
 	"github.com/butvinm/ppiav/internal/authenticator"
+	hierkeys "github.com/butvinm/lattigo-hierkeys"
+	"github.com/butvinm/lattigo-hierkeys/llkn"
+	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 	"github.com/tuneinsight/lattigo/v6/ring"
 	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
 )
@@ -15,6 +18,17 @@ import (
 // both stamp into Params.FloodSigma). See docs/DESIGN.md
 // §`internal/vclient` and `internal/vclient/partial_decrypt.go`.
 var DefaultFloodSigma = math.Exp2(16)
+
+// DefaultLLKNLogPHK is the master-level auxiliary prime bit-size schedule
+// for the LLKN 2-level scheme used by the inference-side hierarchical key
+// derivation. Eleven 55-bit primes match the `LogN16_D15_P6` scenario in
+// lattigo-hierkeys (`~/Dev/lattigo-hierkeys/internal/testutil/scenarios.go`).
+var DefaultLLKNLogPHK = []int{55, 55, 55, 55, 55, 55, 55, 55, 55, 55, 55}
+
+// DefaultLLKNBase is the radix used to decompose target rotations into the
+// master atom set. Base-4 keeps the atom count at 8 across the LogN=16
+// half-slot range (= `{1,4,16,...,16384}`).
+const DefaultLLKNBase = 4
 
 // Params bundles the CKKS parameters, MPD-Auth configuration, and the
 // VClient flooding sigma used during partial decryption.
@@ -44,6 +58,8 @@ var DefaultFloodSigma = math.Exp2(16)
 // inference circuit runs at the level it was compiled for.
 type Params struct {
 	CKKS                 ckks.Parameters
+	LLKN                 llkn.Parameters
+	LLKNBase             int
 	Authenticator        authenticator.Config
 	FloodSigma           float64
 	ExtraRotationIndices []int
@@ -76,11 +92,80 @@ func Defaults() (Params, error) {
 	if err != nil {
 		return Params{}, fmt.Errorf("protocol: build CKKS parameters: %w", err)
 	}
+	llknParams, err := buildLLKNParams(params)
+	if err != nil {
+		return Params{}, err
+	}
 	return Params{
 		CKKS:          params,
+		LLKN:          llknParams,
+		LLKNBase:      DefaultLLKNBase,
 		Authenticator: authenticator.DefaultConfig(),
 		FloodSigma:    DefaultFloodSigma,
 	}, nil
+}
+
+// buildLLKNParams constructs the LLKN 2-level hierarchy on top of the
+// supplied eval-level CKKS parameters using `DefaultLLKNLogPHK`. The
+// hierarchy is hierarchy-only (it does not change the eval-level circuit),
+// so both `Defaults()` and `LoadOrionParams()` stamp the same schedule.
+func buildLLKNParams(p ckks.Parameters) (llkn.Parameters, error) {
+	out, err := llkn.NewParameters(p.Parameters, [][]int{DefaultLLKNLogPHK})
+	if err != nil {
+		return llkn.Parameters{}, fmt.Errorf("protocol: build LLKN parameters: %w", err)
+	}
+	return out, nil
+}
+
+// AuthAtoms returns the ascending base-2 atom set used by VAgent's
+// authenticator chain-rotation. For `Authenticator.Lambda = 128` the set
+// is `{1, 2, 4, 8, 16, 32, 64}` — i.e. powers of two strictly less than
+// `Lambda`. Auth rotates by `-j` for `j ∈ [1, Lambda)`; each `j` is
+// decomposed via `popcount` and the chain calls
+// `GaloisElement(-atom)` per bit set. The set is **eval-level** and lives
+// outside the lattigo-hierkeys hierarchy — the keys minted from these
+// atoms are raw `*rlwe.GaloisKey`s, used directly by `*ckks.Evaluator`.
+func (p Params) AuthAtoms() []int {
+	if p.Authenticator.Lambda <= 1 {
+		return nil
+	}
+	max := p.Authenticator.Lambda - 1
+	out := make([]int, 0, 8)
+	for a := 1; a <= max; a <<= 1 {
+		out = append(out, a)
+	}
+	return out
+}
+
+// InferAtoms returns the ascending base-`LLKNBase` master atom set used
+// by VService's inference-side hierarchical key derivation. At LogN=16
+// with `LLKNBase=4` the set is `{1, 4, 16, 64, 256, 1024, 4096, 16384}`
+// (8 atoms across the half-slot range). These atoms are emitted with
+// **positive** Galois elements per the hierkeys convention and live at
+// the **top** level of the LLKN hierarchy. VService runs
+// `hierkeys.LevelExpansion` over this set to derive the full per-target
+// inference key bundle locally.
+func (p Params) InferAtoms() []int {
+	base := p.LLKNBase
+	if base < 2 {
+		base = DefaultLLKNBase
+	}
+	return hierkeys.MasterRotationsForBase(base, p.CKKS.MaxSlots())
+}
+
+// ProjectSKToEval projects the multi-party top-level secret-key share
+// down to eval level. The projection is linear, so each party can derive
+// `sk_eval = project(sk_top)` from their own `sk_top` without
+// coordination, and the collective eval-level secret is unchanged.
+// Eval-level protocol calls (RLK gen, KeySwitch / partial-decrypt, and
+// the eval-level branch of the dual PK gen + auth-atom Galois gen) all
+// consume the projected key.
+func (p Params) ProjectSKToEval(skTop *rlwe.SecretKey) (*rlwe.SecretKey, error) {
+	out, err := p.LLKN.ProjectToEvalKey(skTop)
+	if err != nil {
+		return nil, fmt.Errorf("protocol: project sk_top to sk_eval: %w", err)
+	}
+	return out, nil
 }
 
 // RotationIndices returns the sorted-ascending union of the canonical

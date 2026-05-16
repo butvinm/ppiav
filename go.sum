@@ -1,5 +1,7 @@
 github.com/ALTree/bigfloat v0.2.0 h1:AwNzawrpFuw55/YDVlcPw0F0cmmXrmngBHhVrvdXPvM=
 github.com/ALTree/bigfloat v0.2.0/go.mod h1:+NaH2gLeY6RPBPPQf4aRotPPStg+eXc8f9ZaE4vRfD4=
+github.com/butvinm/lattigo-hierkeys v0.0.0-20260418043512-d2be85d55189 h1:gVZns5tiaDPK70ENEWAfDbA4UrTwXNEwQNFk8e5U2FY=
+github.com/butvinm/lattigo-hierkeys v0.0.0-20260418043512-d2be85d55189/go.mod h1:5+Yc8DSiQQ4j7sb6Jfe07BRocJkftbxUiE7TyqD4mM0=
 github.com/butvinm/orion/v2 v2.1.4 h1:14XfGdFtK7EjUfP0AjaSAJzVYdSwOn0nhIJ6DTHAoZU=
 github.com/butvinm/orion/v2 v2.1.4/go.mod h1:Oq0LqTISSczz0/cy3LEQqMgXE/yAtpp8wRyNy0Q+U3Y=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=

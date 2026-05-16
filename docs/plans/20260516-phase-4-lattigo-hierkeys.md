@@ -352,16 +352,16 @@ Per-file wire sizes are auto-discovered by `_per_message_bytes` via `os.stat()` 
 >
 > Drop the broken `Params.AuthRotationIndices() []int` from this task — the original framing assumed full `[1, λ)` derivation. Auth's `validateGaloisKeys` (Task 6) now validates auth-atom coverage instead.
 
-- [ ] add `LLKN llkn.Parameters` field (or a `LLKNConfig{ LogPHK []int; Base int }` if zero-value `llkn.Parameters` is awkward — pick whichever round-trips through `LoadOrionParams` cleanly).
-- [ ] populate `Defaults()` with `LogPHK = []int{55, 55, 55, 55, 55, 55, 55, 55, 55, 55, 55}` (11×55) and `Base = 4`, building `llkn.NewParameters(p.CKKS.Parameters, [][]int{LogPHK})`.
-- [ ] update `LoadOrionParams` to stamp the same LLKN defaults — the manifest itself doesn't constrain LLKN params (they're hierarchy-only, not circuit-affecting).
-- [ ] add `Params.AuthAtoms() []int` returning the base-2 powers up to `λ−1`: `{1, 2, 4, ..., 2^⌈log₂(λ−1)⌉}` (= `{1,2,4,8,16,32,64}` for `λ=128`). Used at **eval level** with `GaloisElement(-atom)` by VAgent's Auth chain rotation. Independent of LLKN.
-- [ ] add `Params.InferAtoms() []int` returning `hierkeys.MasterRotationsForBase(Base, p.CKKS.MaxSlots())` (sorted ascending; = `{1,4,16,...,16384}` at LogN=16, Base=4). Used at **top level** with `GaloisElement(+atom)` by VService's hierkeys derivation.
-- [ ] keep `RotationIndices()` for any callers that still want the union; do not delete it as a "bugfix" — it isn't. (No callers in Phase 4 should use it for Galois keygen, but it may remain useful for diagnostic enumeration.)
-- [ ] add helper `Params.ProjectSKToEval(skTop *rlwe.SecretKey) (*rlwe.SecretKey, error)` that wraps `params.LLKN.ProjectToEvalKey`. Used by `vclient` / `vagent` to derive `sk_eval` from `sk_top` for eval-level protocol calls (RLK, KeySwitch).
-- [ ] note: `llkn.NewParameters(eval rlwe.Parameters, ...)` takes the embedded `rlwe.Parameters` value, not the `ckks.Parameters` wrapper. In Go that's `p.CKKS.Parameters` (the anonymous-field-promotion form) — same idiom as `~/Dev/lattigo-hierkeys/example/llkn/multiparty/main.go:43`. Confirm the resolution in your editor before plumbing it through.
-- [ ] write tests: `Defaults().AuthAtoms()` returns `{1, 2, 4, 8, 16, 32, 64}` for `Lambda=128` (= `{1, 2, 4, ..., 2^⌈log₂(λ−1)⌉}`); `Defaults().InferAtoms()` returns `{1, 4, 16, 64, 256, 1024, 4096, 16384}`; `LoadOrionParams` populates LLKN identically to `Defaults()`; `ProjectSKToEval` of a fresh `sk_top` produces a key with the correct number of Q/P primes (16 + 6 for eval).
-- [ ] run `go test ./internal/protocol/...`.
+- [x] add `LLKN llkn.Parameters` field (or a `LLKNConfig{ LogPHK []int; Base int }` if zero-value `llkn.Parameters` is awkward — pick whichever round-trips through `LoadOrionParams` cleanly).
+- [x] populate `Defaults()` with `LogPHK = []int{55, 55, 55, 55, 55, 55, 55, 55, 55, 55, 55}` (11×55) and `Base = 4`, building `llkn.NewParameters(p.CKKS.Parameters, [][]int{LogPHK})`.
+- [x] update `LoadOrionParams` to stamp the same LLKN defaults — the manifest itself doesn't constrain LLKN params (they're hierarchy-only, not circuit-affecting).
+- [x] add `Params.AuthAtoms() []int` returning the base-2 powers up to `λ−1`: `{1, 2, 4, ..., 2^⌈log₂(λ−1)⌉}` (= `{1,2,4,8,16,32,64}` for `λ=128`). Used at **eval level** with `GaloisElement(-atom)` by VAgent's Auth chain rotation. Independent of LLKN.
+- [x] add `Params.InferAtoms() []int` returning `hierkeys.MasterRotationsForBase(Base, p.CKKS.MaxSlots())` (sorted ascending; = `{1,4,16,...,16384}` at LogN=16, Base=4). Used at **top level** with `GaloisElement(+atom)` by VService's hierkeys derivation.
+- [x] keep `RotationIndices()` for any callers that still want the union; do not delete it as a "bugfix" — it isn't. (No callers in Phase 4 should use it for Galois keygen, but it may remain useful for diagnostic enumeration.)
+- [x] add helper `Params.ProjectSKToEval(skTop *rlwe.SecretKey) (*rlwe.SecretKey, error)` that wraps `params.LLKN.ProjectToEvalKey`. Used by `vclient` / `vagent` to derive `sk_eval` from `sk_top` for eval-level protocol calls (RLK, KeySwitch).
+- [x] note: `llkn.NewParameters(eval rlwe.Parameters, ...)` takes the embedded `rlwe.Parameters` value, not the `ckks.Parameters` wrapper. In Go that's `p.CKKS.Parameters` (the anonymous-field-promotion form) — same idiom as `~/Dev/lattigo-hierkeys/example/llkn/multiparty/main.go:43`. Confirm the resolution in your editor before plumbing it through.
+- [x] write tests: `Defaults().AuthAtoms()` returns `{1, 2, 4, 8, 16, 32, 64}` for `Lambda=128` (= `{1, 2, 4, ..., 2^⌈log₂(λ−1)⌉}`); `Defaults().InferAtoms()` returns `{1, 4, 16, 64, 256, 1024, 4096, 16384}`; `LoadOrionParams` populates LLKN identically to `Defaults()`; `ProjectSKToEval` of a fresh `sk_top` produces a key with the correct number of Q/P primes (16 + 6 for eval).
+- [x] run `go test ./internal/protocol/...`.
 
 ### Task 3: Update CRS canonical draw order to include pk_top + master atoms
 

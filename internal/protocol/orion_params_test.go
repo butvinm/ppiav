@@ -34,6 +34,17 @@ func TestLoadOrionParams(t *testing.T) {
 	// stores raw Orion k_orion values; LoadOrionParams negates them on
 	// ingest (signed-label convention — see protocol.Params doc).
 	assert.Equal(t, []int{-1, -4, -16, -64, -128, -256, -512, -1024}, params.ExtraRotationIndices)
+
+	// LLKN hierarchy is stamped identically to Defaults(). The manifest
+	// itself does not constrain LLKN params (they're hierarchy-only).
+	defaults, err := Defaults()
+	require.NoError(t, err)
+	assert.Equal(t, defaults.LLKNBase, params.LLKNBase)
+	require.Equal(t, defaults.LLKN.NumLevels(), params.LLKN.NumLevels())
+	assert.Equal(t, defaults.LLKN.Top().QCount(), params.LLKN.Top().QCount())
+	assert.Equal(t, defaults.LLKN.Top().PCount(), params.LLKN.Top().PCount())
+	assert.Equal(t, defaults.AuthAtoms(), params.AuthAtoms())
+	assert.Equal(t, defaults.InferAtoms(), params.InferAtoms())
 }
 
 func TestLoadOrionParams_MissingFile(t *testing.T) {
