@@ -2,11 +2,11 @@ package orchestrator
 
 import (
 	"math"
-	"os"
 	"testing"
 
 	"github.com/butvinm/ppiav/internal/authenticator"
 	"github.com/butvinm/ppiav/internal/protocol"
+	"github.com/butvinm/ppiav/internal/testutil"
 	"github.com/butvinm/ppiav/internal/vclient"
 	"github.com/butvinm/ppiav/internal/vservice"
 	"github.com/stretchr/testify/assert"
@@ -15,19 +15,6 @@ import (
 	"github.com/tuneinsight/lattigo/v6/ring"
 	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
 )
-
-// requireHeavy skips the test unless PPIAV_RUN_HEAVY=1 is set. The
-// orchestrator runner tests all use testParams (LogN=15) because
-// vclient.EncryptImage hard-fails on len(image) != 12288 and LogN=14 only
-// provides 8192 slots. LogN=15 OOMs on modest dev boxes; gating keeps
-// `go test ./...` runnable locally while preserving full coverage on the
-// VPS / CI where PPIAV_RUN_HEAVY=1 is set.
-func requireHeavy(t *testing.T) {
-	t.Helper()
-	if os.Getenv("PPIAV_RUN_HEAVY") != "1" {
-		t.Skip("skipping LogN=15 heavy test; set PPIAV_RUN_HEAVY=1 to enable")
-	}
-}
 
 // testParams builds the orchestrator's unit-test profile.
 //
@@ -67,7 +54,7 @@ func sampleImage(v float64) []float64 {
 }
 
 func TestRunnerHappyPathAccept(t *testing.T) {
-	requireHeavy(t)
+	testutil.RequireHeavy(t, "LogN=15 orchestrator runner")
 	params := testParams(t)
 	r, err := NewRunner(params)
 	require.NoError(t, err)
@@ -137,7 +124,7 @@ func (n *negatingInferrer) Infer(sid protocol.SessionID, in *rlwe.Ciphertext) (*
 }
 
 func TestRunnerRejectsNegativeLogit(t *testing.T) {
-	requireHeavy(t)
+	testutil.RequireHeavy(t, "LogN=15 orchestrator runner")
 	params := testParams(t)
 	// LogN=15 with LogQ=[55,40,40] gives only 3 modulus levels — x²
 	// consumes 1 level and the negation consumes another. The
@@ -184,7 +171,7 @@ func TestRunnerF4bDenyByDefault(t *testing.T) {
 	// session that never reached a verdict callback must return
 	// VerdictUnknown, which the resource layer renders as 403. We pin the
 	// contract here by opening + setting up but skipping Infer/Verify.
-	requireHeavy(t)
+	testutil.RequireHeavy(t, "LogN=15 orchestrator runner")
 	params := testParams(t)
 	r, err := NewRunner(params)
 	require.NoError(t, err)
@@ -198,7 +185,7 @@ func TestRunnerF4bDenyByDefault(t *testing.T) {
 }
 
 func TestRunnerEnforcesStageOrdering(t *testing.T) {
-	requireHeavy(t)
+	testutil.RequireHeavy(t, "LogN=15 orchestrator runner")
 	params := testParams(t)
 	r, err := NewRunner(params)
 	require.NoError(t, err)

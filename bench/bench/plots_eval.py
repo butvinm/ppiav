@@ -35,6 +35,7 @@ matplotlib.use("Agg")  # headless backend; must be set before importing pyplot.
 import matplotlib.pyplot as plt
 import numpy as np
 
+from bench.eval import _KEYGEN_SUBSTEPS, _PER_IMAGE_STEPS
 from bench.load import Run, Sample
 
 # Macro-phase color palette. Setup = blue, inference = orange, verify = green.
@@ -42,22 +43,6 @@ from bench.load import Run, Sample
 _COLOR_SETUP = "#1f77b4"
 _COLOR_INFER = "#ff7f0e"
 _COLOR_VERIFY = "#2ca02c"
-
-# Compute-step ordering for the e2e timeline (matches protocol order).
-_KEYGEN_SUBSTEPS: tuple[str, ...] = (
-    "keygen.open",
-    "keygen.pk",
-    "keygen.rlk-r1",
-    "keygen.rlk-r2",
-    "keygen.galois",
-)
-_PER_IMAGE_STEPS: tuple[str, ...] = (
-    "encrypt",
-    "infer",
-    "mac",
-    "partial-decrypt",
-    "finalize",
-)
 
 # Phase grouping: which macro-phase each step belongs to.
 _PHASE_SETUP: frozenset[str] = frozenset(_KEYGEN_SUBSTEPS)

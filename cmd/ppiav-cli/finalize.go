@@ -93,7 +93,7 @@ func runFinalize(args []string) error {
 		return fmt.Errorf("finalize: build VAgent: %w", err)
 	}
 
-	run := bench.NewRun("finalize", "phase2")
+	run := bench.NewRun("finalize", benchPhase)
 	run.Metadata["workdir"] = *workdir
 	run.Metadata["in_ct"] = *inCt
 	run.Metadata["in_share"] = *inShare

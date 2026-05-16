@@ -26,7 +26,6 @@ import importlib
 import json
 import logging
 import shutil
-import statistics
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -438,7 +437,7 @@ def _snr_per_image(
         noise = d.get("noise_per_slot") or []
         if not noise:
             continue
-        std = statistics.pstdev([float(x) for x in noise]) if len(noise) > 1 else 0.0
+        std = float(np.std(np.asarray(noise, dtype=np.float64), ddof=0)) if len(noise) > 1 else 0.0
         ref_abs = abs(ref)
         snr = ref_abs / std if std > 0 else float("inf")
         out.append((idx, snr, ref_abs))
@@ -446,13 +445,20 @@ def _snr_per_image(
 
 
 def _format_seconds(seconds: float) -> str:
-    """Compact human-readable wall-time for the network table."""
+    """Compact human-readable wall-time for the network table.
+
+    Reports up to days because glk_full.bin transfers at 1 Mbps land in the
+    tens-of-hours range; formatting it as minutes hides the scale.
+    """
     if seconds < 1.0:
         return f"{seconds * 1000:.1f} ms"
     if seconds < 60.0:
         return f"{seconds:.2f} s"
-    minutes = seconds / 60.0
-    return f"{minutes:.2f} min"
+    if seconds < 3600.0:
+        return f"{seconds / 60.0:.2f} min"
+    if seconds < 86400.0:
+        return f"{seconds / 3600.0:.2f} h"
+    return f"{seconds / 86400.0:.2f} d"
 
 
 def _timing_table_md(

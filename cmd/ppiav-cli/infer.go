@@ -73,7 +73,7 @@ func runInfer(args []string) error {
 		return fmt.Errorf("infer: build VService: %w", err)
 	}
 
-	run := bench.NewRun("infer", "phase2")
+	run := bench.NewRun("infer", benchPhase)
 	run.Metadata["workdir"] = *workdir
 	if *orionDir != "" {
 		run.Metadata["orion_dir"] = *orionDir

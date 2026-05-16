@@ -43,7 +43,7 @@ func runKeygen(args []string) error {
 		return fmt.Errorf("keygen: build default params: %w", err)
 	}
 
-	run := bench.NewRun("keygen", "phase2")
+	run := bench.NewRun("keygen", benchPhase)
 	run.Metadata["workdir"] = *workdir
 	if *orionDir != "" {
 		run.Metadata["orion_dir"] = *orionDir

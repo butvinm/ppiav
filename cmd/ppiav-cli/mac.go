@@ -82,7 +82,7 @@ func runMAC(args []string) error {
 		return fmt.Errorf("mac: build VAgent: %w", err)
 	}
 
-	run := bench.NewRun("mac", "phase2")
+	run := bench.NewRun("mac", benchPhase)
 	run.Metadata["workdir"] = *workdir
 	run.Metadata["in_ct"] = *inCt
 	run.Metadata["out_ct"] = *outCt

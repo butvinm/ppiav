@@ -2,10 +2,10 @@ package vagent
 
 import (
 	"math"
-	"os"
 	"testing"
 
 	"github.com/butvinm/ppiav/internal/protocol"
+	"github.com/butvinm/ppiav/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
@@ -13,19 +13,6 @@ import (
 	"github.com/tuneinsight/lattigo/v6/ring"
 	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
 )
-
-// requireHeavy skips the test unless PPIAV_RUN_HEAVY=1 is set. Used here to
-// gate flaky cases that depend on CKKS noise distribution (e.g. m=0 strict-
-// boundary checks) — they pass deterministically on the VPS profile but
-// drift across the Accept/Reject boundary under the LogN=14 smallParams
-// noise budget on the dev box. Root-cause analysis is out of scope for the
-// bench-eval-redesign plan.
-func requireHeavy(t *testing.T) {
-	t.Helper()
-	if os.Getenv("PPIAV_RUN_HEAVY") != "1" {
-		t.Skip("skipping flaky LogN=14 noise-boundary test; set PPIAV_RUN_HEAVY=1 to enable")
-	}
-}
 
 // runFinalizeWith drives the full §4a path against the Agent for a given
 // slot-0 message m: full keygen → encrypt m → BuildAuthenticatedCt →
@@ -93,7 +80,7 @@ func TestFinalizeRejectsNegativeLogit(t *testing.T) {
 // fixture seeding or LogN=15+ noise budget) is out of scope for the bench-
 // eval-redesign plan.
 func TestFinalizeRejectsZeroLogit(t *testing.T) {
-	requireHeavy(t)
+	testutil.RequireHeavy(t, "flaky LogN=14 m=0 noise-boundary test")
 	verdict, err := runFinalizeWith(t, 0.0)
 	require.NoError(t, err)
 	assert.Equal(t, protocol.VerdictReject, verdict)

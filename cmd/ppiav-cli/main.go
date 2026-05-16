@@ -21,6 +21,8 @@ package main
 
 import (
 	"encoding/binary"
+	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -28,6 +30,12 @@ import (
 
 	"github.com/butvinm/ppiav/internal/vclient"
 )
+
+// benchPhase tags every bench.Run JSON emitted by the per-step subcommands.
+// We use "phase2" uniformly: the bench loader/aggregator key off it for the
+// per-phase table grouping, and the Phase-1 (--orion="") path still belongs
+// to the Phase-2 evaluation effort (it just swaps the inference circuit).
+const benchPhase = "phase2"
 
 // usage prints the top-level help and exits with status 2 (flag convention).
 func usage() {
@@ -86,6 +94,12 @@ func main() {
 		os.Exit(2)
 	}
 	if err != nil {
+		// `-h` / `--help` on a subcommand surfaces as flag.ErrHelp from
+		// flag.NewFlagSet's Parse; treat it as success so `ppiav-cli foo -h`
+		// exits 0 like every well-behaved CLI.
+		if errors.Is(err, flag.ErrHelp) {
+			return
+		}
 		fmt.Fprintf(os.Stderr, "ppiav-cli: %v\n", err)
 		os.Exit(1)
 	}

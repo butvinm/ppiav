@@ -64,7 +64,7 @@ func runEncrypt(args []string) error {
 		return fmt.Errorf("encrypt: build VClient: %w", err)
 	}
 
-	run := bench.NewRun("encrypt", "phase2")
+	run := bench.NewRun("encrypt", benchPhase)
 	run.Metadata["workdir"] = *workdir
 	run.Metadata["image"] = *imagePath
 	run.Metadata["out_ct"] = *outCt

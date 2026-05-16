@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/butvinm/ppiav/internal/protocol"
+	"github.com/butvinm/ppiav/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
@@ -22,7 +23,7 @@ import (
 // ciphertexts are NOT bit-for-bit identical; plaintext equivalence under
 // the joint sk is the strongest guarantee.
 func TestExportStateRoundTripEncrypt(t *testing.T) {
-	requireHeavy(t)
+	testutil.RequireHeavy(t, "LogN=15 image round-trip")
 	params := imageParams(t)
 	sid := protocol.SessionID("export-encrypt-sid")
 	a, err := New(params, sid)

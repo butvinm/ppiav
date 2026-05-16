@@ -62,7 +62,7 @@ func runPartialDecrypt(args []string) error {
 		return fmt.Errorf("partial-decrypt: build VClient: %w", err)
 	}
 
-	run := bench.NewRun("partial-decrypt", "phase2")
+	run := bench.NewRun("partial-decrypt", benchPhase)
 	run.Metadata["workdir"] = *workdir
 	run.Metadata["in_ct"] = *inCt
 	run.Metadata["out_share"] = *outShare
