@@ -30,6 +30,7 @@ import numpy as np
 
 from bench._labels_ru import (
     AXIS,
+    KEYGEN_ROUND_SUBSTEPS,
     LEGEND,
     PARTY_BY_STEP,
     PARTY_NAMES,
@@ -235,9 +236,19 @@ def _set_macro_phase_legend(ax: Any, *, transfer: bool) -> None:
     ax.legend(handles=handles, loc="upper right", fontsize=8, framealpha=0.9)
 
 
-# Lane order for the swim-lane Gantt: top (y=3) = joint keygen, then
-# client / service / agent below it. Keys match `PARTY_BY_STEP` values.
-_LANE_ORDER: tuple[str, ...] = ("joint", "client", "service", "agent")
+# Lane order for the swim-lane Gantt: client / service / agent.
+# Joint rounds (legacy keygen.json) are drawn as multi-lane spanning blocks.
+_LANE_ORDER: tuple[str, ...] = ("client", "service", "agent")
+
+# For each keygen round, the set of party lanes the round's compute spans
+# when only round-level (not per-party) samples are available.
+_KEYGEN_ROUND_LANES: dict[str, tuple[str, ...]] = {
+    "keygen.open": ("client", "service", "agent"),
+    "keygen.pk": ("client", "agent"),
+    "keygen.rlk-r1": ("client", "agent"),
+    "keygen.rlk-r2": ("client", "agent"),
+    "keygen.galois": ("client", "service", "agent"),
+}
 
 
 def _bytes_for_per_image_artifact(
@@ -267,19 +278,45 @@ def _plot_session_timeline_swimlane(
     # Map step → ms for quick lookup.
     step_ms: dict[str, float] = dict(ordered)
 
-    # Build the list of (lane_party, kind, t_start, t_end, label, color, hatch)
-    # events. `kind` = "compute" or "transfer". Compute stays in one lane;
-    # transfer spans (sender, receiver).
+    # Build the list of (lanes, kind, t_start, t_end, label, color) events.
+    # `kind` = "compute" or "transfer". `lanes` is a tuple — single-element
+    # for a single-lane compute, multi-element for a spanning rect.
     events: list[dict[str, Any]] = []
     t = 0.0
 
-    # 1. Keygen substeps in the joint lane.
-    for sub in _KEYGEN_SUBSTEPS:
-        ms = step_ms.get(sub, 0.0)
-        if ms > 0:
+    # 1. Keygen: per-party sub-substeps if available (instrumented driver),
+    # else round-level spanning blocks across the involved party lanes.
+    sub_party_names: list[str] = [
+        sub for substeps in KEYGEN_ROUND_SUBSTEPS.values() for sub in substeps
+    ]
+    has_per_party = any(step_ms.get(sub, 0.0) > 0 for sub in sub_party_names)
+
+    if has_per_party:
+        for substeps in KEYGEN_ROUND_SUBSTEPS.values():
+            for sub in substeps:
+                ms = step_ms.get(sub, 0.0)
+                if ms <= 0:
+                    continue
+                party = PARTY_BY_STEP.get(sub, "client")
+                events.append(
+                    {
+                        "lanes": (party,),
+                        "kind": "compute",
+                        "t_start": t,
+                        "t_end": t + ms,
+                        "label": _step_label(sub),
+                        "color": _phase_color(sub),
+                    }
+                )
+                t += ms
+    else:
+        for sub in _KEYGEN_SUBSTEPS:
+            ms = step_ms.get(sub, 0.0)
+            if ms <= 0:
+                continue
             events.append(
                 {
-                    "lanes": ("joint",),
+                    "lanes": _KEYGEN_ROUND_LANES.get(sub, ("client", "agent")),
                     "kind": "compute",
                     "t_start": t,
                     "t_end": t + ms,
@@ -353,8 +390,9 @@ def _plot_session_timeline_swimlane(
     for ev in events:
         t_start = ev["t_start"] / scale
         width = (ev["t_end"] - ev["t_start"]) / scale
-        if ev["kind"] == "compute":
-            party = ev["lanes"][0]
+        lanes = ev["lanes"]
+        if ev["kind"] == "compute" and len(lanes) == 1:
+            party = lanes[0]
             y = _LANE_ORDER.index(party)
             ax.barh(
                 y,
@@ -375,9 +413,36 @@ def _plot_session_timeline_swimlane(
                     fontsize=7,
                     color="white",
                 )
+        elif ev["kind"] == "compute":
+            # Multi-lane spanning compute: legacy joint keygen round drawn
+            # across the involved party lanes as one tall hatched rect.
+            ys = sorted(_LANE_ORDER.index(p) for p in lanes)
+            y_mid = (ys[0] + ys[-1]) / 2.0
+            tall_height = (ys[-1] - ys[0]) + bar_height
+            ax.barh(
+                y_mid,
+                width,
+                left=t_start,
+                height=tall_height,
+                color=ev["color"],
+                alpha=0.55,
+                hatch="\\\\",
+                edgecolor="white",
+                linewidth=0.4,
+            )
+            if width > total_ms / scale * 0.02:
+                ax.text(
+                    t_start + width / 2,
+                    y_mid,
+                    ev["label"],
+                    ha="center",
+                    va="center",
+                    fontsize=7,
+                    color="white",
+                )
         else:
-            # Transfer spans sender + receiver lanes as one tall hatched rect.
-            sender, receiver = ev["lanes"]
+            # Transfer: hatched rect spanning sender + receiver lanes.
+            sender, receiver = lanes
             y_top = _LANE_ORDER.index(sender)
             y_bot = _LANE_ORDER.index(receiver)
             y_mid = (y_top + y_bot) / 2.0
@@ -399,7 +464,7 @@ def _plot_session_timeline_swimlane(
     ax.set_ylabel(AXIS["party_lane"])
     ax.set_xlabel(AXIS[x_label_key])
     ax.set_xlim(0, total_ms / scale * 1.02)
-    ax.invert_yaxis()  # joint at top
+    ax.invert_yaxis()
     _set_macro_phase_legend(ax, transfer=True)
     fig.tight_layout()
     fig.savefig(path, dpi=120)
@@ -425,8 +490,9 @@ def write_plots(batch_dir: Path, agg_data: dict[str, Any]) -> None:
 
     ordered = _ordered_steps_and_means(keygen_run, per_image)
 
-    _plot_rss_per_step(plots_dir / "rss_per_step.png", keygen_run, per_image)
-    _plot_bytes_per_message(plots_dir / "bytes_per_message.png", bytes_rows)
+    # rss_per_step.png + bytes_per_message.png are intentionally not emitted:
+    # the per-party time+memory table and the per-message bytes table in
+    # summary.md cover the same information more precisely.
     _plot_noise_histogram(plots_dir / "noise_histogram.png", all_noise)
     _plot_snr_per_image(plots_dir / "snr_per_image.png", snr)
     _plot_bandwidth_per_message(

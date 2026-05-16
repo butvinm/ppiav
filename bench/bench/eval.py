@@ -36,7 +36,12 @@ from typing import Any
 
 import numpy as np
 
-from bench._labels_ru import PARTY_BY_STEP, PARTY_NAMES, STEP_NAMES
+from bench._labels_ru import (
+    KEYGEN_ROUND_SUBSTEPS,
+    PARTY_BY_STEP,
+    PARTY_NAMES,
+    STEP_NAMES,
+)
 from bench.load import Run, Sample, load_run
 
 logger = logging.getLogger(__name__)
@@ -468,6 +473,25 @@ def _snr_per_image(
     return out
 
 
+def _format_with_prettier(path: Path) -> None:
+    """Run prettier on a markdown file in place; no-op if prettier is absent."""
+    if shutil.which("prettier") is None:
+        logger.info("prettier not on PATH; summary.md left un-formatted")
+        return
+    proc = subprocess.run(
+        ["prettier", "--write", "--prose-wrap", "preserve", str(path)],
+        check=False,
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        logger.warning(
+            "prettier exited %d on %s; stderr=%s",
+            proc.returncode,
+            path,
+            proc.stderr.decode("utf-8", errors="replace"),
+        )
+
+
 def _format_seconds(seconds: float) -> str:
     """Compact human-readable wall-time for the network table.
 
@@ -485,50 +509,57 @@ def _format_seconds(seconds: float) -> str:
     return f"{seconds / 86400.0:.2f} d"
 
 
+def _has_per_party_keygen(keygen_run: Run) -> bool:
+    """True if keygen.json was produced by the instrumented driver."""
+    return any(
+        s.name in PARTY_BY_STEP and PARTY_BY_STEP[s.name] != "joint"
+        for s in keygen_run.samples
+    )
+
+
 def _party_step_table_md(
     keygen_run: Run,
     per_image: dict[str, list[Sample]],
 ) -> str:
-    """Single combined table: party | step | n | wall ms | ΔRSS MiB | peak VM HWM MiB.
+    """Per-party table — every row attributes to exactly one party.
 
-    Keygen sub-rounds run inside one bilateral process, so they're labelled
-    "joint". The per-image steps each run as a fresh subprocess on exactly
-    one party (see PARTY_BY_STEP in bench/_labels_ru.py).
+    Rows: per-party keygen sub-steps (when the instrumented driver produced
+    them) followed by per-image protocol steps. Joint round-level samples
+    are NOT placed here — see ``_keygen_by_round_table_md``.
     """
     lines: list[str] = []
     header = (
-        "| party | step | n | mean wall ms | p95 wall ms | mean delta RSS MiB | peak VM HWM MiB |"
+        "| party | step | n | mean wall ms | p95 wall ms "
+        "| mean delta RSS MiB | peak VM HWM MiB |"
     )
     lines.append(header)
     lines.append("|---|---|---:|---:|---:|---:|---:|")
 
-    keygen_total_ms = sum(s.wall_ms for s in keygen_run.samples)
-    joint = PARTY_NAMES["joint"]
-    total_label = f"{STEP_NAMES['keygen']} (всего)"
-    total_row = (
-        f"| {joint} | {total_label} | 1 | "
-        f"{_format_ms(keygen_total_ms)} | - | - | - |"
-    )
-    lines.append(total_row)
-    for substep in _KEYGEN_SUBSTEPS:
-        matching = [s for s in keygen_run.samples if s.name == substep]
-        mean, _p50, p95 = _wall_ms(matching)
-        delta, hwm = _rss_stats(matching)
-        n = len(matching)
-        party = PARTY_NAMES[PARTY_BY_STEP.get(substep, "joint")]
-        label = STEP_NAMES.get(substep, substep)
-        lines.append(
-            f"| {party} | &nbsp;&nbsp;{label} | {n} | "
-            f"{_format_ms(mean)} | {_format_ms(p95)} | "
-            f"{_format_mib(delta)} | {_format_mib(hwm)} |"
-        )
+    if _has_per_party_keygen(keygen_run):
+        for substeps in KEYGEN_ROUND_SUBSTEPS.values():
+            for substep in substeps:
+                matching = [s for s in keygen_run.samples if s.name == substep]
+                if not matching:
+                    continue
+                mean, _p50, p95 = _wall_ms(matching)
+                delta, hwm = _rss_stats(matching)
+                n = len(matching)
+                party = PARTY_NAMES[PARTY_BY_STEP[substep]]
+                label = STEP_NAMES.get(substep, substep)
+                lines.append(
+                    f"| {party} | {label} | {n} | "
+                    f"{_format_ms(mean)} | {_format_ms(p95)} | "
+                    f"{_format_mib(delta)} | {_format_mib(hwm)} |"
+                )
 
     for step in _PER_IMAGE_STEPS:
         samples = per_image.get(step, [])
+        if not samples:
+            continue
         mean, _p50, p95 = _wall_ms(samples)
         delta, hwm = _rss_stats(samples)
         n = len(samples)
-        party = PARTY_NAMES[PARTY_BY_STEP.get(step, "joint")]
+        party = PARTY_NAMES[PARTY_BY_STEP.get(step, "client")]
         label = STEP_NAMES.get(step, step)
         lines.append(
             f"| {party} | {label} | {n} | "
@@ -537,13 +568,54 @@ def _party_step_table_md(
         )
     lines.append("")
     lines.append(
-        "_delta RSS = vm_hwm - pre_vm_hwm = the step's incremental memory "
+        "_delta RSS = vm_hwm - pre_vm_hwm = step's incremental memory "
         "growth. Peak VM HWM = high-water mark of the resident set at step "
-        "exit. Keygen sub-rounds share one process, so each row's "
-        "pre_vm_hwm is the previous row's vm_hwm; the delta for "
-        "`keygen.galois` is the marginal cost of the Galois-key round on "
-        "top of the prior PK + RLK state. Per-image steps each spawn a "
+        "exit. Keygen sub-steps share one process when run via "
+        "`ppiav-cli keygen`, so each sub-step's pre_vm_hwm is the previous "
+        "sub-step's vm_hwm; the delta is the marginal cost of that sub-step "
+        "on top of the prior session state. Per-image steps each spawn a "
         "fresh process, so their delta RSS is the true per-call peak._"
+    )
+    return "\n".join(lines)
+
+
+def _keygen_by_round_table_md(keygen_run: Run) -> str:
+    """Round-level keygen table — joint rounds, no party column.
+
+    Each row's wall = sum of its sub-step walls (or the round-level
+    sample's wall if no per-party data is present). VM HWM = max
+    across the round's samples (peak resident set at any point during
+    the round).
+    """
+    lines: list[str] = []
+    lines.append("| round | n | total wall ms | peak VM HWM MiB |")
+    lines.append("|---|---:|---:|---:|")
+    for round_name, substeps in KEYGEN_ROUND_SUBSTEPS.items():
+        round_label = STEP_NAMES.get(round_name, round_name)
+        sub_samples = [s for s in keygen_run.samples if s.name in substeps]
+        if sub_samples:
+            wall = sum(s.wall_ms for s in sub_samples)
+            hwm = max(s.vm_hwm for s in sub_samples) / (1024.0 * 1024.0)
+            n_each = [sum(1 for s in sub_samples if s.name == sub) for sub in substeps]
+            n = max([x for x in n_each if x > 0], default=1)
+            lines.append(
+                f"| {round_label} | {n} | {_format_ms(wall)} | {_format_mib(hwm)} |"
+            )
+            continue
+        legacy = [s for s in keygen_run.samples if s.name == round_name]
+        if legacy:
+            wall = sum(s.wall_ms for s in legacy)
+            hwm = max(s.vm_hwm for s in legacy) / (1024.0 * 1024.0)
+            lines.append(
+                f"| {round_label} | {len(legacy)} | {_format_ms(wall)} | "
+                f"{_format_mib(hwm)} |"
+            )
+    lines.append("")
+    lines.append(
+        "_Rounds execute bilaterally inside one `ppiav-cli keygen` process. "
+        "The per-party breakdown is in the table above when the bench run "
+        "captured per-party sub-step samples; legacy round-level runs report "
+        "joint round totals only._"
     )
     return "\n".join(lines)
 
@@ -676,6 +748,10 @@ def aggregate(batch_dir: Path) -> None:
     sections.append("")
     sections.append(_party_step_table_md(keygen_run, per_image_samples))
     sections.append("")
+    sections.append("## Keygen by round (joint)")
+    sections.append("")
+    sections.append(_keygen_by_round_table_md(keygen_run))
+    sections.append("")
     sections.append("## Per-message bytes")
     sections.append("")
     sections.append(_bytes_table_md(bytes_rows))
@@ -695,6 +771,7 @@ def aggregate(batch_dir: Path) -> None:
 
     summary_path = batch_dir / "summary.md"
     summary_path.write_text("\n".join(sections), encoding="utf-8")
+    _format_with_prettier(summary_path)
 
     agg_data: dict[str, Any] = {
         "batch_dir": str(batch_dir),

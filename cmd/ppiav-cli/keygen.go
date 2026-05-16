@@ -10,6 +10,7 @@ import (
 	"github.com/butvinm/ppiav/internal/vclient"
 	"github.com/butvinm/ppiav/internal/vservice"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
+	"github.com/tuneinsight/lattigo/v6/multiparty"
 )
 
 // runKeygen drives the bilateral collaborative keygen in-process and writes
@@ -82,126 +83,186 @@ func runKeygen(args []string) error {
 		sid    protocol.SessionID
 		client *vclient.Client
 	)
-	openSample, err := bench.Measure("keygen.open", func() error {
-		s, openErr := svc.OpenSession()
-		if openErr != nil {
-			return fmt.Errorf("VService.OpenSession: %w", openErr)
-		}
-		if openErr := agent.OpenSession(s); openErr != nil {
-			return fmt.Errorf("VAgent.OpenSession: %w", openErr)
-		}
-		c, openErr := vclient.New(params, s)
-		if openErr != nil {
-			return fmt.Errorf("vclient.New: %w", openErr)
+	// Helper: time a single per-party call and append the sample. Returns
+	// the inner function's error so the caller short-circuits cleanly.
+	measureStep := func(name string, fn func() error) error {
+		sample, mErr := bench.Measure(name, fn)
+		run.Append(sample)
+		return mErr
+	}
+
+	// keygen.open — per-party session-state writes (sub-millisecond each).
+	if err := measureStep("keygen.open.service", func() error {
+		s, e := svc.OpenSession()
+		if e != nil {
+			return fmt.Errorf("VService.OpenSession: %w", e)
 		}
 		sid = s
+		return nil
+	}); err != nil {
+		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+		return fmt.Errorf("keygen: open.service: %w", err)
+	}
+	if err := measureStep("keygen.open.agent", func() error {
+		return agent.OpenSession(sid)
+	}); err != nil {
+		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+		return fmt.Errorf("keygen: open.agent: %w", err)
+	}
+	if err := measureStep("keygen.open.client", func() error {
+		c, e := vclient.New(params, sid)
+		if e != nil {
+			return e
+		}
 		client = c
 		return nil
-	})
-	run.Append(openSample)
-	if err != nil {
+	}); err != nil {
 		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
-		return fmt.Errorf("keygen: open: %w", err)
+		return fmt.Errorf("keygen: open.client: %w", err)
 	}
 
-	// keygen.pk: bilateral PK share exchange + aggregation on both sides.
-	pkSample, err := bench.Measure("keygen.pk", func() error {
-		clientShare, perr := client.GenPKShare()
-		if perr != nil {
-			return fmt.Errorf("VClient.GenPKShare: %w", perr)
+	// keygen.pk — Generate-on-client, generate-on-agent, aggregate-on-agent,
+	// aggregate-on-client. Mirrors protocol.puml § "Генерация открытого ключа".
+	{
+		var clientShare, agentShare any
+		if err := measureStep("keygen.pk.client_gen", func() error {
+			cs, e := client.GenPKShare()
+			clientShare = cs
+			return e
+		}); err != nil {
+			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			return fmt.Errorf("keygen: pk.client_gen: %w", err)
 		}
-		agentShare, perr := agent.GenPKShare(sid)
-		if perr != nil {
-			return fmt.Errorf("VAgent.GenPKShare: %w", perr)
+		if err := measureStep("keygen.pk.agent_gen", func() error {
+			as, e := agent.GenPKShare(sid)
+			agentShare = as
+			return e
+		}); err != nil {
+			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			return fmt.Errorf("keygen: pk.agent_gen: %w", err)
 		}
-		if perr := client.AggregatePK(agentShare); perr != nil {
-			return fmt.Errorf("VClient.AggregatePK: %w", perr)
+		if err := measureStep("keygen.pk.agent_agg", func() error {
+			return agent.AggregatePK(sid, clientShare.(multiparty.PublicKeyGenShare))
+		}); err != nil {
+			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			return fmt.Errorf("keygen: pk.agent_agg: %w", err)
 		}
-		if perr := agent.AggregatePK(sid, clientShare); perr != nil {
-			return fmt.Errorf("VAgent.AggregatePK: %w", perr)
+		if err := measureStep("keygen.pk.client_agg", func() error {
+			return client.AggregatePK(agentShare.(multiparty.PublicKeyGenShare))
+		}); err != nil {
+			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			return fmt.Errorf("keygen: pk.client_agg: %w", err)
 		}
-		return nil
-	})
-	run.Append(pkSample)
-	if err != nil {
-		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
-		return fmt.Errorf("keygen: pk: %w", err)
 	}
 
-	// keygen.rlk-r1.
-	rlk1Sample, err := bench.Measure("keygen.rlk-r1", func() error {
-		clientR1, perr := client.GenRLKShareRound1()
-		if perr != nil {
-			return fmt.Errorf("VClient.GenRLKShareRound1: %w", perr)
+	// keygen.rlk-r1 — same shape as pk: client_gen → agent_gen → agent_agg → client_agg.
+	{
+		var clientR1, agentR1 any
+		if err := measureStep("keygen.rlk-r1.client_gen", func() error {
+			cs, e := client.GenRLKShareRound1()
+			clientR1 = cs
+			return e
+		}); err != nil {
+			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			return fmt.Errorf("keygen: rlk-r1.client_gen: %w", err)
 		}
-		agentR1, perr := agent.GenRLKShareRound1(sid)
-		if perr != nil {
-			return fmt.Errorf("VAgent.GenRLKShareRound1: %w", perr)
+		if err := measureStep("keygen.rlk-r1.agent_gen", func() error {
+			as, e := agent.GenRLKShareRound1(sid)
+			agentR1 = as
+			return e
+		}); err != nil {
+			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			return fmt.Errorf("keygen: rlk-r1.agent_gen: %w", err)
 		}
-		if perr := client.AggregateRLKRound1(agentR1); perr != nil {
-			return fmt.Errorf("VClient.AggregateRLKRound1: %w", perr)
+		if err := measureStep("keygen.rlk-r1.agent_agg", func() error {
+			return agent.AggregateRLKRound1(sid, clientR1.(multiparty.RelinearizationKeyGenShare))
+		}); err != nil {
+			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			return fmt.Errorf("keygen: rlk-r1.agent_agg: %w", err)
 		}
-		if perr := agent.AggregateRLKRound1(sid, clientR1); perr != nil {
-			return fmt.Errorf("VAgent.AggregateRLKRound1: %w", perr)
+		if err := measureStep("keygen.rlk-r1.client_agg", func() error {
+			return client.AggregateRLKRound1(agentR1.(multiparty.RelinearizationKeyGenShare))
+		}); err != nil {
+			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			return fmt.Errorf("keygen: rlk-r1.client_agg: %w", err)
 		}
-		return nil
-	})
-	run.Append(rlk1Sample)
-	if err != nil {
-		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
-		return fmt.Errorf("keygen: rlk-r1: %w", err)
 	}
 
-	// keygen.rlk-r2.
-	rlk2Sample, err := bench.Measure("keygen.rlk-r2", func() error {
-		clientR2, perr := client.GenRLKShareRound2()
-		if perr != nil {
-			return fmt.Errorf("VClient.GenRLKShareRound2: %w", perr)
+	// keygen.rlk-r2 — final rlk lives on the agent; no client_agg.
+	{
+		var clientR2 any
+		if err := measureStep("keygen.rlk-r2.client_gen", func() error {
+			cs, e := client.GenRLKShareRound2()
+			clientR2 = cs
+			return e
+		}); err != nil {
+			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			return fmt.Errorf("keygen: rlk-r2.client_gen: %w", err)
 		}
-		if _, perr := agent.GenRLKShareRound2(sid); perr != nil {
-			return fmt.Errorf("VAgent.GenRLKShareRound2: %w", perr)
+		if err := measureStep("keygen.rlk-r2.agent_gen", func() error {
+			_, e := agent.GenRLKShareRound2(sid)
+			return e
+		}); err != nil {
+			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			return fmt.Errorf("keygen: rlk-r2.agent_gen: %w", err)
 		}
-		if perr := agent.AggregateRLKRound2(sid, clientR2); perr != nil {
-			return fmt.Errorf("VAgent.AggregateRLKRound2: %w", perr)
+		if err := measureStep("keygen.rlk-r2.agent_agg", func() error {
+			return agent.AggregateRLKRound2(sid, clientR2.(multiparty.RelinearizationKeyGenShare))
+		}); err != nil {
+			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			return fmt.Errorf("keygen: rlk-r2.agent_agg: %w", err)
 		}
-		return nil
-	})
-	run.Append(rlk2Sample)
-	if err != nil {
-		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
-		return fmt.Errorf("keygen: rlk-r2: %w", err)
 	}
 
-	// keygen.galois: VClient emits per-rotation shares, VAgent aggregates
-	// them with its own shares to produce the rlk + gks pair the rest of
-	// the pipeline needs.
+	// keygen.galois — VClient emits per-rotation shares, VAgent aggregates,
+	// VService stores the finalized evaluator keys.
 	var (
 		rlk *rlwe.RelinearizationKey
 		gks []*rlwe.GaloisKey
 	)
-	galSample, err := bench.Measure("keygen.galois", func() error {
-		clientGalShares, clientLabels, perr := client.GenGaloisShares()
-		if perr != nil {
-			return fmt.Errorf("VClient.GenGaloisShares: %w", perr)
+	{
+		var (
+			clientGalShares any
+			clientLabels    any
+		)
+		if err := measureStep("keygen.galois.client_gen", func() error {
+			cs, cl, e := client.GenGaloisShares()
+			clientGalShares = cs
+			clientLabels = cl
+			return e
+		}); err != nil {
+			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			return fmt.Errorf("keygen: galois.client_gen: %w", err)
 		}
-		if _, _, perr := agent.GenGaloisShares(sid); perr != nil {
-			return fmt.Errorf("VAgent.GenGaloisShares: %w", perr)
+		if err := measureStep("keygen.galois.agent_gen", func() error {
+			_, _, e := agent.GenGaloisShares(sid)
+			return e
+		}); err != nil {
+			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			return fmt.Errorf("keygen: galois.agent_gen: %w", err)
 		}
-		aggRlk, aggGks, perr := agent.AggregateGaloisShares(sid, clientGalShares, clientLabels)
-		if perr != nil {
-			return fmt.Errorf("VAgent.AggregateGaloisShares: %w", perr)
+		if err := measureStep("keygen.galois.agent_agg", func() error {
+			aggRlk, aggGks, e := agent.AggregateGaloisShares(
+				sid,
+				clientGalShares.([]multiparty.GaloisKeyGenShare),
+				clientLabels.([]int),
+			)
+			if e != nil {
+				return e
+			}
+			rlk = aggRlk
+			gks = aggGks
+			return nil
+		}); err != nil {
+			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			return fmt.Errorf("keygen: galois.agent_agg: %w", err)
 		}
-		if perr := svc.StoreEvalKeys(sid, aggRlk, aggGks); perr != nil {
-			return fmt.Errorf("VService.StoreEvalKeys: %w", perr)
+		if err := measureStep("keygen.galois.service_store", func() error {
+			return svc.StoreEvalKeys(sid, rlk, gks)
+		}); err != nil {
+			_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
+			return fmt.Errorf("keygen: galois.service_store: %w", err)
 		}
-		rlk = aggRlk
-		gks = aggGks
-		return nil
-	})
-	run.Append(galSample)
-	if err != nil {
-		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen"))
-		return fmt.Errorf("keygen: galois: %w", err)
 	}
 
 	// Snapshot per-peer state so we can write the artifacts. ExportState on

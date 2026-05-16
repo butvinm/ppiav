@@ -34,17 +34,76 @@ from __future__ import annotations
 # protocol.puml section headers. Plot bars are tight on space, so each
 # value is kept to ~3 words max.
 STEP_NAMES: dict[str, str] = {
+    # Round-level keygen labels (legacy bench runs emit these directly).
     "keygen": "генерация ключей",
     "keygen.open": "инициализация сессии",
     "keygen.pk": "генерация pk",
     "keygen.rlk-r1": "генерация rlk, раунд 1",
     "keygen.rlk-r2": "генерация rlk, раунд 2",
     "keygen.galois": "генерация ключей вращения",
+    # Per-party keygen sub-steps emitted by the instrumented driver
+    # (ppiav-cli keygen). Each round splits into per-party Gen + Agg
+    # phases. Future bench runs surface these in the per-party table
+    # and Gantt; legacy round-level samples are aggregated into the
+    # round totals shown in the "Keygen by round" table.
+    "keygen.open.service": "инициализация сессии (сервис)",
+    "keygen.open.agent": "инициализация сессии (агент)",
+    "keygen.open.client": "инициализация сессии (клиент)",
+    "keygen.pk.client_gen": "pk: генерация sk_c, pk_c",
+    "keygen.pk.agent_gen": "pk: генерация sk_a, pk_a",
+    "keygen.pk.agent_agg": "pk: агрегация (агент)",
+    "keygen.pk.client_agg": "pk: агрегация (клиент)",
+    "keygen.rlk-r1.client_gen": "rlk р1: генерация ephSk_c, rlk_c",
+    "keygen.rlk-r1.agent_gen": "rlk р1: генерация ephSk_a, rlk_a",
+    "keygen.rlk-r1.agent_agg": "rlk р1: агрегация (агент)",
+    "keygen.rlk-r1.client_agg": "rlk р1: агрегация (клиент)",
+    "keygen.rlk-r2.client_gen": "rlk р2: генерация rlk_c",
+    "keygen.rlk-r2.agent_gen": "rlk р2: генерация rlk_a",
+    "keygen.rlk-r2.agent_agg": "rlk р2: агрегация rlk (агент)",
+    "keygen.galois.client_gen": "gks: генерация gks_master_c",
+    "keygen.galois.agent_gen": "gks: генерация gks_master_a",
+    "keygen.galois.agent_agg": "gks: агрегация + иерархический вывод (агент)",
+    "keygen.galois.service_store": "gks: иерархический вывод (сервис)",
+    # Per-image protocol steps.
     "encrypt": "шифрование изображения",
     "infer": "инференс",
     "mac": "аутентификация шифротекста",
     "partial-decrypt": "частичная расшифровка",
     "finalize": "окончательная расшифровка",
+}
+
+# Round → ordered list of per-party sub-step keys, used by the aggregator
+# to render the "Keygen by round" table and to drive Gantt rendering when
+# the per-party samples are present in keygen.json.
+KEYGEN_ROUND_SUBSTEPS: dict[str, tuple[str, ...]] = {
+    "keygen.open": (
+        "keygen.open.service",
+        "keygen.open.agent",
+        "keygen.open.client",
+    ),
+    "keygen.pk": (
+        "keygen.pk.client_gen",
+        "keygen.pk.agent_gen",
+        "keygen.pk.agent_agg",
+        "keygen.pk.client_agg",
+    ),
+    "keygen.rlk-r1": (
+        "keygen.rlk-r1.client_gen",
+        "keygen.rlk-r1.agent_gen",
+        "keygen.rlk-r1.agent_agg",
+        "keygen.rlk-r1.client_agg",
+    ),
+    "keygen.rlk-r2": (
+        "keygen.rlk-r2.client_gen",
+        "keygen.rlk-r2.agent_gen",
+        "keygen.rlk-r2.agent_agg",
+    ),
+    "keygen.galois": (
+        "keygen.galois.client_gen",
+        "keygen.galois.agent_gen",
+        "keygen.galois.agent_agg",
+        "keygen.galois.service_store",
+    ),
 }
 
 # Party display names — derived from protocol.puml actor declarations
@@ -87,15 +146,38 @@ LEGEND: dict[str, str] = {
     "macro_verify": "проверка результата",
 }
 
-# Per-step → party mapping (used for the swim-lane Gantt row assignment
-# and the per-party memory table). Keep keys aligned with ``STEP_NAMES``.
+# Per-step → party mapping. Per-party keygen sub-steps map to their
+# specific party (no "joint" anywhere). Legacy round-level keys keep a
+# "joint" tag but are NOT placed on any Gantt lane; the aggregator
+# renders them in the "Keygen by round" no-party table.
 PARTY_BY_STEP: dict[str, str] = {
+    # Legacy round-level keys: aggregator handles separately.
     "keygen": "joint",
     "keygen.open": "joint",
     "keygen.pk": "joint",
     "keygen.rlk-r1": "joint",
     "keygen.rlk-r2": "joint",
     "keygen.galois": "joint",
+    # Per-party keygen sub-steps.
+    "keygen.open.service": "service",
+    "keygen.open.agent": "agent",
+    "keygen.open.client": "client",
+    "keygen.pk.client_gen": "client",
+    "keygen.pk.agent_gen": "agent",
+    "keygen.pk.agent_agg": "agent",
+    "keygen.pk.client_agg": "client",
+    "keygen.rlk-r1.client_gen": "client",
+    "keygen.rlk-r1.agent_gen": "agent",
+    "keygen.rlk-r1.agent_agg": "agent",
+    "keygen.rlk-r1.client_agg": "client",
+    "keygen.rlk-r2.client_gen": "client",
+    "keygen.rlk-r2.agent_gen": "agent",
+    "keygen.rlk-r2.agent_agg": "agent",
+    "keygen.galois.client_gen": "client",
+    "keygen.galois.agent_gen": "agent",
+    "keygen.galois.agent_agg": "agent",
+    "keygen.galois.service_store": "service",
+    # Per-image steps.
     "encrypt": "client",
     "infer": "service",
     "mac": "agent",

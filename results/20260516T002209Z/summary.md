@@ -6,21 +6,27 @@
 
 ## Per-step time + memory by party
 
-| party              | step                                  |   n | mean wall ms | p95 wall ms | mean delta RSS MiB | peak VM HWM MiB |
-| ------------------ | ------------------------------------- | --: | -----------: | ----------: | -----------------: | --------------: |
-| совместно          | генерация ключей (всего)              |   1 |    172729.64 |           - |                  - |               - |
-| совместно          | &nbsp;&nbsp;инициализация сессии      |   1 |        41.17 |       41.17 |                0.0 |          1996.5 |
-| совместно          | &nbsp;&nbsp;генерация pk              |   1 |       152.28 |      152.28 |                0.0 |          1996.7 |
-| совместно          | &nbsp;&nbsp;генерация rlk, раунд 1    |   1 |       715.59 |      715.59 |              273.6 |          2270.3 |
-| совместно          | &nbsp;&nbsp;генерация rlk, раунд 2    |   1 |       280.73 |      280.73 |              308.4 |          2578.7 |
-| совместно          | &nbsp;&nbsp;генерация ключей вращения |   1 |    171539.87 |   171539.87 |            63489.5 |         66068.3 |
-| клиент верификации | шифрование изображения                |  10 |       116.38 |      123.72 |               26.4 |           121.5 |
-| сервис верификации | инференс                              |  10 |    247538.24 |   253777.96 |            73570.5 |        117946.9 |
-| агент верификации  | аутентификация шифротекста            |  10 |      1298.91 |     1331.45 |                0.6 |         42817.3 |
-| клиент верификации | частичная расшифровка                 |  10 |         4.16 |        4.28 |                0.4 |            77.8 |
-| агент верификации  | окончательная расшифровка             |  10 |         7.34 |        7.86 |                0.7 |            77.8 |
+| party              | step                       |   n | mean wall ms | p95 wall ms | mean delta RSS MiB | peak VM HWM MiB |
+| ------------------ | -------------------------- | --: | -----------: | ----------: | -----------------: | --------------: |
+| клиент верификации | шифрование изображения     |  10 |       116.38 |      123.72 |               26.4 |           121.5 |
+| сервис верификации | инференс                   |  10 |    247538.24 |   253777.96 |            73570.5 |        117946.9 |
+| агент верификации  | аутентификация шифротекста |  10 |      1298.91 |     1331.45 |                0.6 |         42817.3 |
+| клиент верификации | частичная расшифровка      |  10 |         4.16 |        4.28 |                0.4 |            77.8 |
+| агент верификации  | окончательная расшифровка  |  10 |         7.34 |        7.86 |                0.7 |            77.8 |
 
-_delta RSS = vm_hwm - pre_vm_hwm = the step's incremental memory growth. Peak VM HWM = high-water mark of the resident set at step exit. Keygen sub-rounds share one process, so each row's pre_vm_hwm is the previous row's vm_hwm; the delta for `keygen.galois` is the marginal cost of the Galois-key round on top of the prior PK + RLK state. Per-image steps each spawn a fresh process, so their delta RSS is the true per-call peak._
+_delta RSS = vm_hwm - pre_vm_hwm = step's incremental memory growth. Peak VM HWM = high-water mark of the resident set at step exit. Keygen sub-steps share one process when run via `ppiav-cli keygen`, so each sub-step's pre_vm_hwm is the previous sub-step's vm_hwm; the delta is the marginal cost of that sub-step on top of the prior session state. Per-image steps each spawn a fresh process, so their delta RSS is the true per-call peak._
+
+## Keygen by round (joint)
+
+| round                     |   n | total wall ms | peak VM HWM MiB |
+| ------------------------- | --: | ------------: | --------------: |
+| инициализация сессии      |   1 |         41.17 |          1996.5 |
+| генерация pk              |   1 |        152.28 |          1996.7 |
+| генерация rlk, раунд 1    |   1 |        715.59 |          2270.3 |
+| генерация rlk, раунд 2    |   1 |        280.73 |          2578.7 |
+| генерация ключей вращения |   1 |     171539.87 |         66068.3 |
+
+_Rounds execute bilaterally inside one `ppiav-cli keygen` process. The per-party breakdown is in the table above when the bench run captured per-party sub-step samples; legacy round-level runs report joint round totals only._
 
 ## Per-message bytes
 
