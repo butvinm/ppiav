@@ -49,7 +49,7 @@ def test_sample_wall_ms_and_heap_mib_derived() -> None:
 
 
 def test_sample_pre_vm_hwm_defaults_zero_when_absent() -> None:
-    """Old phase1 JSONs without `pre_vm_hwm` must still parse with default 0."""
+    """Older JSONs without `pre_vm_hwm` must still parse with default 0."""
     run = load_run(FIXTURE)
     s0 = run.samples[0]
     assert s0.pre_vm_hwm == 0

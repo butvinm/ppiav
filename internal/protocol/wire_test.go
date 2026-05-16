@@ -13,7 +13,7 @@ import (
 	"github.com/tuneinsight/lattigo/v6/utils/sampling"
 )
 
-// smallCKKS returns the smallest CKKS parameter set used by the Phase-3
+// smallCKKS returns the smallest CKKS parameter set used by the
 // wire-format unit tests. LogN=10 keeps each round-trip fast while still
 // exercising the same code paths as production LogN=16.
 func smallCKKS(t *testing.T) ckks.Parameters {

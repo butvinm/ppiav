@@ -79,7 +79,7 @@ func NewRunner(params protocol.Params) (*Runner, error) {
 	return NewRunnerWithInferrer(params, vservice.New(params))
 }
 
-// NewRunnerWithOrion is the Phase-2 constructor: it loads the compiled
+// NewRunnerWithOrion is the Orion-mode constructor: it loads the compiled
 // Orion circuit at `<orionDir>/model.orion`, derives the canonical
 // `protocol.Params` from the model's `ClientParams()` (CKKS knobs +
 // input level + circuit rotation indices), and wires VClient/VAgent
@@ -235,7 +235,7 @@ func (r *Runner) Setup() error {
 }
 
 // Infer runs Stage 3: VClient encrypts the preprocessed image, VService
-// runs the inference circuit (Phase 1: `x²`), and the result ciphertext
+// runs the inference circuit (synthetic mode: `x²`), and the result ciphertext
 // is returned for downstream verification.
 func (r *Runner) Infer(image []float64) (*rlwe.Ciphertext, error) {
 	if r.cursor != stageSetup {

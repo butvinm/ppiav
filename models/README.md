@@ -34,7 +34,7 @@ uv --project bench run python -m bench.eval \
     --orion  ./models/out/logn16
 ```
 
-`bench.eval` writes per-batch outputs to `results/phase2/eval-<UTC-ts>/` — see
+`bench.eval` writes per-batch outputs to `results/<UTC-ts>/` — see
 `bench/README.md` for the directory layout and aggregated tables / plots.
 
 The legacy single-sample mode is preserved (omit the batch flags) for quick

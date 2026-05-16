@@ -20,8 +20,8 @@ const ImageLen = 3 * 64 * 64
 // garbage inference output. See docs/DESIGN.md §`internal/vclient`.
 //
 // Encryption level: when `params.InputLevel == 0` the plaintext is built
-// at `MaxLevel` (Phase-1 default — no compiled circuit constrains the
-// budget). When `InputLevel > 0` we encrypt at exactly that level so
+// at `MaxLevel` (synthetic-x² default — no compiled circuit constrains
+// the budget). When `InputLevel > 0` we encrypt at exactly that level so
 // Orion's compiled circuit sees the input at the level it was compiled
 // for; encrypting higher would desync Orion's level accounting.
 func (c *Client) EncryptImage(image []float64) (*rlwe.Ciphertext, error) {

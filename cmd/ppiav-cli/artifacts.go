@@ -18,7 +18,7 @@ import (
 // Canonical artifact filenames written into a workdir. The bench Python
 // aggregator pulls byte sizes from os.Stat against these names — single
 // source of truth lives here. glk_master.bin and glk_full.bin currently
-// hold identical bytes; Phase-4 lattigo-hierkeys will diverge them.
+// hold identical bytes; lattigo-hierkeys integration will diverge them.
 const (
 	artifactSID         = "sid.txt"
 	artifactParams      = "params.json"
@@ -66,13 +66,13 @@ func readSID(workdir string) (protocol.SessionID, error) {
 }
 
 // paramsFile is the on-disk JSON envelope written by writeParams: the
-// binary-marshalled CKKS parameters plus the (Phase-2) InputLevel. The
-// Authenticator config and FloodSigma are reconstructed from
-// `protocol.Defaults()` at load time — they're not session-dependent —
-// while ExtraRotationIndices is recoverable from the persisted glk_full.bin.
-// InputLevel IS persisted because EncryptImage uses it to pick the
-// plaintext level; Phase-2 manifests can set it below CKKS.MaxLevel() and
-// silently using MaxLevel would desync Orion's level accounting.
+// binary-marshalled CKKS parameters plus the InputLevel. The Authenticator
+// config and FloodSigma are reconstructed from `protocol.Defaults()` at
+// load time — they're not session-dependent — while ExtraRotationIndices
+// is recoverable from the persisted glk_full.bin. InputLevel IS persisted
+// because EncryptImage uses it to pick the plaintext level; Orion manifests
+// can set it below CKKS.MaxLevel() and silently using MaxLevel would
+// desync Orion's level accounting.
 type paramsFile struct {
 	CKKS       []byte `json:"ckks"`
 	InputLevel int    `json:"input_level"`
@@ -81,7 +81,7 @@ type paramsFile struct {
 // writeParams persists the CKKS parameters + InputLevel as a JSON envelope.
 // The Authenticator config, FloodSigma, and ExtraRotationIndices are NOT
 // persisted here: the per-step CLI rebuilds them from `protocol.Defaults`
-// (Phase-1) or `protocol.LoadOrionParams` (Phase-2 via --orion).
+// (no --orion) or `protocol.LoadOrionParams` (--orion).
 func writeParams(workdir string, params protocol.Params) error {
 	ckksBytes, err := params.CKKS.MarshalBinary()
 	if err != nil {
@@ -195,7 +195,7 @@ func readRelinearizationKey(workdir string) (*rlwe.RelinearizationKey, error) {
 // stays well-formed without bloating the GLK files with relin material.
 //
 // glk_master.bin and glk_full.bin both currently receive the same payload;
-// Phase-4 lattigo-hierkeys will produce a smaller master that
+// lattigo-hierkeys integration will produce a smaller master that
 // reconstructs the full set on the VService side.
 func writeGaloisKeys(workdir, name string, gks []*rlwe.GaloisKey) error {
 	galois := structs.Map[uint64, rlwe.GaloisKey]{}
@@ -348,10 +348,10 @@ func writeBytesPath(path string, data []byte) error {
 // loadParams reconstructs a full protocol.Params from the workdir's
 // params.json + protocol.Defaults() for non-CKKS fields (Authenticator,
 // FloodSigma). InputLevel comes from the persisted envelope so EncryptImage
-// honours Phase-2 manifests where InputLevel < MaxLevel.
+// honours Orion manifests where InputLevel < MaxLevel.
 // ExtraRotationIndices is left empty because the rotation set is encoded in
 // the persisted glk_full.bin via Galois elements and no caller of loadParams
-// runs the keygen handshake. Phase-2 callers that need Orion's full rotation
+// runs the keygen handshake. Orion callers that need the full rotation
 // label set additionally pass --orion <dir>.
 func loadParams(workdir string) (protocol.Params, error) {
 	ckksParams, inputLevel, err := readParamsFile(workdir)

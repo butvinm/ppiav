@@ -22,8 +22,8 @@ func NewSessionCRS(sid SessionID) (*sampling.KeyedPRNG, error) {
 
 // CanonicalRotationIndices returns the rotation indices the MPD-Auth
 // `Auth` step may need to rotate by: [1, lambda). j=0 is identity and
-// requires no Galois key. Phase 2 unions this with the inference-circuit
-// rotation set.
+// requires no Galois key. The Orion path unions this with the
+// inference-circuit rotation set.
 func CanonicalRotationIndices(lambda int) []int {
 	if lambda <= 1 {
 		return nil

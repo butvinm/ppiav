@@ -12,7 +12,7 @@ import (
 
 // TestExportStateRoundTripInfer verifies that a Service rebuilt via
 // NewWithState can run Infer end-to-end on the synthetic x² circuit. We
-// stay on the Phase-1 path (orionDir="") because the plan calls for state
+// stay on the synthetic-x² path (orionDir="") because the plan calls for state
 // seeding verification against a trivial keyset — loading the real
 // compiled Orion model would require a 1.75 GB artifact that does not live
 // in this repo.
@@ -105,10 +105,10 @@ func TestNewWithStateRejectsInvalidInputs(t *testing.T) {
 	require.Error(t, err, "missing Rlk must fail")
 }
 
-// NewWithState in Phase-1 mode (orionDir="") with valid Rlk must seed the
-// session map and produce a Service whose Infer works without any further
-// setup — pinning the contract the bench `infer` subcommand relies on.
-func TestNewWithStatePhase1SeedsSession(t *testing.T) {
+// NewWithState in synthetic-x² mode (orionDir="") with valid Rlk must seed
+// the session map and produce a Service whose Infer works without any
+// further setup — pinning the contract the bench `infer` subcommand relies on.
+func TestNewWithStateSyntheticSeedsSession(t *testing.T) {
 	params := smallParams(t)
 	sid := protocol.SessionID("seed-sid")
 

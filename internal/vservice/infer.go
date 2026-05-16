@@ -14,22 +14,22 @@ import (
 // Sentinel errors surfaced by Infer / evaluatorFor / orionEvaluatorFor.
 // The HTTP layer maps both to 404 (caller error: unknown sid, or
 // Stage-2d not yet completed). Use `errors.Is` rather than substring
-// matches — the Phase-1 ("no evaluator") and Phase-2 ("no Orion
+// matches — the synthetic-x² ("no evaluator") and Orion ("no Orion
 // evaluator") messages differ.
 var (
 	ErrUnknownSession = errors.New("vservice: unknown session id")
 	ErrNoEvaluator    = errors.New("vservice: session has no evaluator; call StoreEvalKeys first")
 )
 
-// Infer runs the session's inference circuit. Phase 1 (Service built via
-// `New`) evaluates the synthetic `x²` over a single ciphertext, consuming
-// exactly one level — see docs/DESIGN.md §`Level budget — Phase 1`.
-// Phase 2 (Service built via `NewWithOrion`) walks the compiled Orion
-// graph via `orioneval.Evaluator.Forward` and returns the model's single
-// output ciphertext; C3AE has one logit output, so we hard-assert the
-// `[]*rlwe.Ciphertext` slice has length 1.
+// Infer runs the session's inference circuit. The synthetic-x² mode
+// (Service built via `New`) evaluates `x²` over a single ciphertext,
+// consuming exactly one level — see docs/DESIGN.md §`Level budget — Phase 1`.
+// The Orion mode (Service built via `NewWithOrion`) walks the compiled
+// Orion graph via `orioneval.Evaluator.Forward` and returns the model's
+// single output ciphertext; C3AE has one logit output, so we hard-assert
+// the `[]*rlwe.Ciphertext` slice has length 1.
 //
-// Concurrency note: in Phase 1 the underlying `*ckks.Evaluator` is
+// Concurrency note: in synthetic-x² mode the underlying `*ckks.Evaluator` is
 // concurrency-safe (Lattigo v6.2.0), so we look up the session pointer
 // under s.mu and release before the homomorphic work. The Orion
 // `*evaluator.Evaluator` is NOT goroutine-safe; in this in-process,

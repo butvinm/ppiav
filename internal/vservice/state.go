@@ -50,8 +50,7 @@ func (s *Service) ExportState(sid protocol.SessionID) (*ExportedState, error) {
 // NewWithOrion loads it, and `params.CKKS`, `params.InputLevel` are
 // overridden by the model's ClientParams (caller-side params for those
 // fields are ignored — mirroring NewWithOrion). When `orionDir` is empty
-// the Service runs in Phase-1 mode (synthetic x²) and `params` is used
-// as-is.
+// the Service runs in synthetic-x² mode and `params` is used as-is.
 //
 // The session map is seeded directly: `state.SID → {evaluator}` with the
 // evaluator built from `state.Rlk + state.Glk`. The random sid mint in

@@ -25,7 +25,7 @@ import (
 func runKeygen(args []string) error {
 	fs := flag.NewFlagSet("keygen", flag.ContinueOnError)
 	workdir := fs.String("workdir", "", "per-batch directory to hold keygen artifacts (required)")
-	orionDir := fs.String("orion", "", "Orion compiled-model directory (empty => Phase-1 x² params)")
+	orionDir := fs.String("orion", "", "Orion compiled-model directory (empty => synthetic x² params)")
 	outPath := fs.String("out", "", "timing JSON output path (default <workdir>/keygen.json)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -34,10 +34,10 @@ func runKeygen(args []string) error {
 		return fmt.Errorf("keygen: --workdir is required")
 	}
 
-	// Phase-1 (no --orion) uses Defaults() directly; Phase-2 (--orion <dir>)
-	// also starts at Defaults() so VAgent has a parameter set to construct
-	// against before vservice.NewWithOrion produces the authoritative
-	// manifest-derived params (see the rebuild below).
+	// The synthetic-x² path (no --orion) uses Defaults() directly; the Orion
+	// path (--orion <dir>) also starts at Defaults() so VAgent has a parameter
+	// set to construct against before vservice.NewWithOrion produces the
+	// authoritative manifest-derived params (see the rebuild below).
 	params, err := protocol.Defaults()
 	if err != nil {
 		return fmt.Errorf("keygen: build default params: %w", err)
@@ -231,8 +231,8 @@ func runKeygen(args []string) error {
 
 // writeKeygenArtifacts persists every file the downstream subcommands
 // load. Aggregated GLK is emitted twice (glk_master.bin + glk_full.bin)
-// per docs/plans: identical bytes today, divergent under Phase-4
-// lattigo-hierkeys. The aggregator gets per-artifact byte sizes via
+// per docs/plans: identical bytes today, divergent after lattigo-hierkeys
+// integration. The aggregator gets per-artifact byte sizes via
 // os.Stat on these filenames — there is no need to record them in the
 // bench JSON.
 func writeKeygenArtifacts(

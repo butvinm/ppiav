@@ -12,9 +12,9 @@ import (
 
 // Wire messages exchanged by VClient, VAgent, VService and RService.
 // Payload names are nouns; direction is documented on each message via
-// its stage label. Phase 1–2 pass these types in-process (no marshaling);
-// Phase 3 will serialise them across HTTP routes — at that point the
-// route name will carry direction explicitly.
+// its stage label. The in-process orchestrator passes these types without
+// marshaling; the HTTP services serialise them across routes — there the
+// route name carries direction explicitly.
 // See docs/DESIGN.md §`internal/protocol`.
 
 // Stage 1: session open.
@@ -63,8 +63,8 @@ func (s VClientRLKRound2) MarshalBinary() ([]byte, error)     { return s.Share.M
 func (s *VClientRLKRound2) UnmarshalBinary(data []byte) error { return s.Share.UnmarshalBinary(data) }
 
 // Stage 2d: Galois-key share exchange (VClient → VAgent) and forward to
-// VService. Phase 1–3 emits one share per rotation; Phase 4 collapses
-// these into a single gks_master share via lattigo-hierkeys.
+// VService. Currently emits one share per rotation; lattigo-hierkeys
+// integration will collapse these into a single gks_master share.
 //
 // The wire layout is: 4-byte big-endian count, then for each share a
 // 4-byte big-endian length prefix followed by the share's MarshalBinary
@@ -129,8 +129,8 @@ func (s *VClientGaloisKeyShare) UnmarshalBinary(data []byte) error {
 // InferEvalKeys carries the aggregated relinearization key and the full
 // per-rotation Galois key set from VAgent to VService. Lattigo v6.2.0
 // does not expose a `GaloisKeySet` type — we ship the slice directly,
-// which is what `rlwe.NewMemEvaluationKeySet` consumes. Phase 4 replaces
-// `GKS` with `GKSMaster` (lattigo-hierkeys).
+// which is what `rlwe.NewMemEvaluationKeySet` consumes. lattigo-hierkeys
+// integration will replace `GKS` with `GKSMaster`.
 type InferEvalKeys struct {
 	RLK *rlwe.RelinearizationKey
 	GKS []*rlwe.GaloisKey
@@ -138,7 +138,7 @@ type InferEvalKeys struct {
 
 // MarshalBinary serialises InferEvalKeys by delegating to Lattigo's
 // MemEvaluationKeySet, which already knows how to write a RelinearizationKey
-// and a Galois key set. Phase 4 will replace this with a hierkeys master.
+// and a Galois key set. lattigo-hierkeys integration will replace this with a hierkeys master.
 func (k InferEvalKeys) MarshalBinary() ([]byte, error) {
 	galois := structs.Map[uint64, rlwe.GaloisKey]{}
 	for _, gk := range k.GKS {

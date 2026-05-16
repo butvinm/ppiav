@@ -26,7 +26,7 @@ class Sample:
     pause_ns: int
     vm_hwm: int
     bytes: int
-    pre_vm_hwm: int = 0  # default 0 for backward-compat with old phase1 JSONs
+    pre_vm_hwm: int = 0  # default 0 for backward-compat with older JSONs
 
     @property
     def wall_ms(self) -> float:
@@ -46,7 +46,7 @@ class Sample:
     def delta_rss_mib(self) -> float:
         """RSS attributable to this op vs. startup baseline, in MiB.
 
-        Old phase1 JSONs without `pre_vm_hwm` default to 0; clamped at 0 to
+        Older JSONs without `pre_vm_hwm` default to 0; clamped at 0 to
         avoid negative values when vm_hwm < pre_vm_hwm is somehow recorded.
         """
         return max(0, self.vm_hwm - self.pre_vm_hwm) / (1024.0 * 1024.0)

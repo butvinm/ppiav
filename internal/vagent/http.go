@@ -52,7 +52,7 @@ func NewServer(agent *Agent, vserviceURL, rserviceURL, rservicePublicURL string)
 		rserviceURL:       rsvcURL,
 		rservicePublicURL: rsvcPubURL,
 		// 30s is well above the longest legitimate VService /image
-		// turnaround (Phase-2 Orion inference) but bounds hung
+		// turnaround (Orion inference) but bounds hung
 		// peers so handler goroutines do not leak.
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		mux:        http.NewServeMux(),
@@ -144,12 +144,12 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.agent.OpenSession(sess.SessionID); err != nil {
-		// TODO(phase-3-followup): VService allocated `sess.SessionID` but
-		// our local OpenSession rejected it (typically a duplicate sid),
-		// so the sid leaks into VService's sessions map. Not exploitable —
-		// no key material yet — but allows unbounded growth on repeated
-		// failure. Out of scope for Phase 3; a follow-up should add a
-		// `DELETE /sessions/:sid` route on VService and invoke it here.
+		// TODO(followup): VService allocated `sess.SessionID` but our local
+		// OpenSession rejected it (typically a duplicate sid), so the sid
+		// leaks into VService's sessions map. Not exploitable — no key
+		// material yet — but allows unbounded growth on repeated failure.
+		// A follow-up should add a `DELETE /sessions/:sid` route on
+		// VService and invoke it here.
 		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("agent open session: %s", err))
 		return
 	}

@@ -11,8 +11,8 @@ import (
 )
 
 // DefaultFloodSigma is the discrete-Gaussian flooding σ applied by VClient
-// during partial decryption (and the value Phase-1 Defaults() / Phase-2
-// LoadOrionParams() both stamp into Params.FloodSigma). See docs/DESIGN.md
+// during partial decryption (and the value `Defaults()` / `LoadOrionParams()`
+// both stamp into Params.FloodSigma). See docs/DESIGN.md
 // §`internal/vclient` and `internal/vclient/partial_decrypt.go`.
 var DefaultFloodSigma = math.Exp2(16)
 
@@ -32,16 +32,16 @@ var DefaultFloodSigma = math.Exp2(16)
 //
 // `ExtraRotationIndices` carries the inference-circuit labels (already in
 // the signed-label convention above) on top of the authenticator's
-// canonical positive set. Phase-1 callers (`Defaults`) leave it nil;
-// Phase-2 callers populate it via `vservice.NewWithOrion`.
+// canonical positive set. The `Defaults()` caller leaves it nil; the
+// Orion path populates it via `vservice.NewWithOrion`.
 // `RotationIndices()` returns the sorted union; VClient/VAgent iterate
 // that union when running the collaborative GaloisKeyGen handshake.
 //
 // `InputLevel` is the ciphertext level at which `EncryptImage` produces
-// the encrypted input. Phase 1 leaves it zero, which `EncryptImage`
-// interprets as "max level" — there is no compiled model to constrain the
-// budget. Phase 2 sets it from the Orion manifest so the inference circuit
-// runs at the level it was compiled for.
+// the encrypted input. The synthetic-x² path leaves it zero, which
+// `EncryptImage` interprets as "max level" — there is no compiled model to
+// constrain the budget. The Orion path sets it from the manifest so the
+// inference circuit runs at the level it was compiled for.
 type Params struct {
 	CKKS                 ckks.Parameters
 	Authenticator        authenticator.Config
@@ -50,7 +50,7 @@ type Params struct {
 	InputLevel           int
 }
 
-// Defaults returns the Phase-1 parameter set from docs/DESIGN.md
+// Defaults returns the synthetic-x² parameter set from docs/DESIGN.md
 // §`Implementation/Layout`. LogN=16, LogQ=[55]+[40]×15, LogP=[55]×6,
 // LogDefaultScale=40, RingType=Standard. FloodSigma=2^16. No extra
 // rotation indices; `RotationIndices()` returns the canonical

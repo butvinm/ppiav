@@ -80,7 +80,7 @@ func TestEncryptImageRoundTripsUnderJointSk(t *testing.T) {
 	}
 	ct, err := c.EncryptImage(input)
 	require.NoError(t, err)
-	// Phase-1 contract: encrypt at MaxLevel.
+	// Synthetic-x² contract: encrypt at MaxLevel.
 	assert.Equal(t, params.CKKS.MaxLevel(), ct.Level())
 
 	dec := rlwe.NewDecryptor(params.CKKS, joint)

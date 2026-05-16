@@ -1,4 +1,4 @@
-// 6-step image preprocessing pipeline (Phase 3 browser side).
+// 6-step image preprocessing pipeline (browser side).
 // Mirrors models/prepare_samples.py: decode → resize 64x64 → RGB → normalize
 // to [-1, 1] → HWC→CHW → Float64Array of length 3*64*64 = 12288.
 //

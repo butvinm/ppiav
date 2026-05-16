@@ -19,11 +19,11 @@ import (
 // the CKKS / InputLevel / ExtraRotationIndices fields from the manifest. The
 // params persisted to params.json are also Orion-derived (keygen runs
 // vservice.NewWithOrion), so the loadParams + NewWithState merge is
-// idempotent in the Phase-2 (Orion) path.
+// idempotent in the Orion path.
 func runInfer(args []string) error {
 	fs := flag.NewFlagSet("infer", flag.ContinueOnError)
 	workdir := fs.String("workdir", "", "per-batch keygen artifact directory (required)")
-	orionDir := fs.String("orion", "", "Orion compiled-model directory (required for Phase-2; empty => Phase-1 x²)")
+	orionDir := fs.String("orion", "", "Orion compiled-model directory (required for Orion mode; empty => synthetic x²)")
 	inCt := fs.String("in-ct", "", "input ciphertext path (required)")
 	outCt := fs.String("out-ct", "", "output ciphertext path (required)")
 	outPath := fs.String("out", "", "timing JSON output path (default <workdir>/infer.json)")
@@ -52,9 +52,9 @@ func runInfer(args []string) error {
 	if err != nil {
 		return fmt.Errorf("infer: load rlk: %w", err)
 	}
-	// VService consumes the full GLK set (Phase-4 lattigo-hierkeys will swap
-	// glk_master in, but until then glk_full.bin is the canonical evaluator
-	// key set).
+	// VService consumes the full GLK set. After lattigo-hierkeys integration
+	// glk_master will swap in, but until then glk_full.bin is the canonical
+	// evaluator key set.
 	gks, err := readGaloisKeys(*workdir, artifactGLKFull)
 	if err != nil {
 		return fmt.Errorf("infer: load glk_full: %w", err)

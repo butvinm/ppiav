@@ -44,8 +44,8 @@ func WriteError(w http.ResponseWriter, status int, msg string) {
 // encrypted image, and the aggregated Galois shares payload at LogN=16
 // × Lambda=128). DESIGN.md says rate limiting is out of scope, but
 // per-route caps cost nothing and keep the worst-case allocation bounded
-// to what the protocol actually demands. Phase-4 hierkeys cuts the GKS
-// down to a single master and will let us tighten the largest cap.
+// to what the protocol actually demands. lattigo-hierkeys integration
+// will cut the GKS down to a single master and let us tighten the largest cap.
 const (
 	// MaxJSONBody is the cap for JSON control endpoints (sessions,
 	// params, callback, redirect-reply).

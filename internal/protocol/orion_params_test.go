@@ -22,7 +22,7 @@ func TestLoadOrionParams(t *testing.T) {
 	assert.Equal(t, 15, params.CKKS.MaxLevel())
 	assert.InDelta(t, math.Exp2(40), params.CKKS.DefaultScale().Float64(), 1e-3)
 
-	// Phase-1 authenticator + flooding defaults carry over unchanged.
+	// Default authenticator + flooding settings carry over unchanged.
 	assert.Equal(t, 128, params.Authenticator.Lambda)
 	assert.InDelta(t, math.Exp2(20), params.Authenticator.Epsilon, 1e-9)
 	assert.InDelta(t, math.Exp2(16), params.FloodSigma, 1e-9)
@@ -53,7 +53,7 @@ func TestParams_RotationIndices_DefaultsCanonicalOnly(t *testing.T) {
 	require.NoError(t, err)
 	got := params.RotationIndices()
 
-	// Phase-1 defaults have no extras: RotationIndices() = canonical [1, λ).
+	// Defaults have no extras: RotationIndices() = canonical [1, λ).
 	want := CanonicalRotationIndices(params.Authenticator.Lambda)
 	assert.Equal(t, want, got)
 	assert.Len(t, got, 127)

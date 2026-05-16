@@ -18,7 +18,7 @@ type Config struct {
 	Epsilon float64
 }
 
-// DefaultConfig returns the Phase-1 authenticator defaults: Lambda=128,
+// DefaultConfig returns the authenticator defaults: Lambda=128,
 // Epsilon=2^20.
 func DefaultConfig() Config {
 	return Config{

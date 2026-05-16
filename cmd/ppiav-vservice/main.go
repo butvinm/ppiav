@@ -1,10 +1,10 @@
 // Command ppiav-vservice runs the VService HTTP server. It exposes the
 // `/params`, `/sessions`, and `/sessions/:sid/eval-keys` routes consumed
-// by VAgent — see docs/DESIGN.md §`Protocol` and the Phase-3 plan.
+// by VAgent — see docs/DESIGN.md §`Protocol`.
 //
 // Flags mirror `cmd/ppiav-cli`'s --orion semantics: when `--orion` is
 // set, the service runs the compiled Orion circuit; otherwise it runs the
-// Phase-1 synthetic `x²` path.
+// synthetic `x²` path.
 package main
 
 import (
@@ -19,7 +19,7 @@ import (
 
 func main() {
 	addr := flag.String("addr", ":8080", "HTTP listen address")
-	orionDir := flag.String("orion", "", "directory holding a compiled Orion model.orion (Phase 2)")
+	orionDir := flag.String("orion", "", "directory holding a compiled Orion model.orion")
 	flag.Parse()
 
 	params, err := protocol.Defaults()

@@ -135,8 +135,8 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, sid protoco
 	}
 	out, err := s.svc.Infer(sid, ct)
 	if err != nil {
-		// errors.Is (not strings.Contains) because Phase-1 and Phase-2
-		// wrap ErrNoEvaluator with different messages.
+		// errors.Is (not strings.Contains) because the synthetic-x² and Orion
+		// paths wrap ErrNoEvaluator with different messages.
 		if errors.Is(err, ErrUnknownSession) || errors.Is(err, ErrNoEvaluator) {
 			httputil.WriteError(w, http.StatusNotFound, err.Error())
 			return

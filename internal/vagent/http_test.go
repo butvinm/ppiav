@@ -185,7 +185,7 @@ func TestHTTPVAgent_GetParams_ProxiesToVService(t *testing.T) {
 	_, vagentSrv, _, _, _, params := newHTTPFixture(t)
 
 	// sid in the URL is required by the route shape but unused by the
-	// current proxy — phase 4 may make params session-dependent.
+	// current proxy — params may become session-dependent later.
 	resp, err := http.Get(vagentSrv.URL + "/sessions/sid-x/params")
 	require.NoError(t, err)
 	defer resp.Body.Close()

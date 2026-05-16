@@ -251,7 +251,7 @@ func deriveV(seed [32]byte, lambda int, s []int, q0Half *big.Int, delta float64)
 			return nil, fmt.Errorf("authenticator: sample v[%d]: %w", i, err)
 		}
 		// Convert signed big.Int to float64 (q0HalfF64 bounds the magnitude
-		// at < 2^54 for typical Phase-1 LogQ[0]=55, so float64 has just
+		// at < 2^54 for typical LogQ[0]=55, so float64 has just
 		// enough precision; the design accepts the rounding because Ver's
 		// ε≈2^20 dominates the encoder's discretisation error).
 		vF, _ := new(big.Float).SetInt(v).Float64()

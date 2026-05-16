@@ -20,7 +20,7 @@ func main() {
 	vserviceURL := flag.String("vservice-url", "http://localhost:8080", "VService base URL (e.g., http://localhost:8080)")
 	rserviceURL := flag.String("rservice-url", "http://localhost:8082", "RService base URL for server-to-server verdict callback (e.g. http://rservice:8082 inside Docker)")
 	rservicePublicURL := flag.String("rservice-public-url", "", "Browser-visible RService URL returned in Stage-4b redirect JSON (defaults to --rservice-url; set to host-reachable URL when --rservice-url is internal-only, e.g. http://localhost:8082 with Docker)")
-	orionDir := flag.String("orion", "", "directory holding a compiled Orion model.orion (Phase 2)")
+	orionDir := flag.String("orion", "", "directory holding a compiled Orion model.orion")
 	flag.Parse()
 
 	if *vserviceURL == "" {
