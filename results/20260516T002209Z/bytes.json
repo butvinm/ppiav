@@ -1,0 +1,15 @@
+[
+  {"name": "keys/glk_full.bin",     "bytes": 22284736438},
+  {"name": "keys/glk_master.bin",   "bytes": 22284736438},
+  {"name": "keys/mac_key.bin",      "bytes": 302},
+  {"name": "keys/params.json",      "bytes": 508},
+  {"name": "keys/pk.bin",           "bytes": 23069064},
+  {"name": "keys/rlk.bin",          "bytes": 69207232},
+  {"name": "keys/sid.txt",          "bytes": 32},
+  {"name": "keys/sk_a.bin",         "bytes": 11534528},
+  {"name": "keys/sk_c.bin",         "bytes": 11534528},
+  {"name": "img/auth_ct.bin",       "bytes": 1048894},
+  {"name": "img/client_share.bin",  "bytes": 524304},
+  {"name": "img/input_ct.bin",      "bytes": 16777774},
+  {"name": "img/result_ct.bin",     "bytes": 1048894}
+]

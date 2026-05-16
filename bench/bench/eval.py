@@ -3,19 +3,21 @@
 Reads ``eval_inputs.json`` produced by ``models.prepare_samples``, runs one
 keygen + per-image (encrypt -> infer -> mac -> partial-decrypt -> finalize)
 sequence as subprocesses, and writes per-step bench JSONs + ciphertext
-artifacts into ``results/phase2/eval-<UTC-timestamp>/``.
+artifacts into ``results/<UTC-timestamp>/``.
 
 Usage::
 
     python -m bench.eval --inputs models/out/eval_inputs.json \\
-        --orion models/out/logn16 [--batch-dir results/phase2/eval-custom]
+        --orion models/out/logn16 [--batch-dir results/custom]
+    python -m bench.eval --aggregate-only results/<existing-batch>/
 
 The `ppiav-cli` binary is resolved in order: ``./bin/ppiav-cli`` (built by
 ``make``), ``PATH`` lookup, ``go run ./cmd/ppiav-cli`` fallback. The driver
 copies the manifest into ``<batch>/eval_inputs.json`` so the aggregator
 needs only one path to reconstruct ground-truth labels + reference logits.
 ``aggregate`` post-processes the batch directory into ``summary.md`` +
-``plots/*.png``.
+``plots/*.png``; ``--aggregate-only`` skips the protocol run and just
+re-renders the summary + plots from existing JSONs.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ from typing import Any
 
 import numpy as np
 
+from bench._labels_ru import PARTY_BY_STEP, PARTY_NAMES
 from bench.load import Run, Sample, load_run
 
 logger = logging.getLogger(__name__)
@@ -113,7 +116,7 @@ def run_pipeline(
 
     if batch_dir is None:
         ts = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ")
-        batch_dir = repo / "results" / "phase2" / f"eval-{ts}"
+        batch_dir = repo / "results" / ts
     batch_dir = batch_dir.resolve()
     keys_dir = batch_dir / "keys"
     keys_dir.mkdir(parents=True, exist_ok=True)
@@ -345,27 +348,48 @@ def _load_keygen_run(batch_dir: Path) -> Run:
 
 
 def _per_message_bytes(batch_dir: Path) -> list[tuple[str, int]]:
-    """Walk keys/ + img_0/ and stat every artifact. Returns (name, bytes)."""
+    """Per-message wire sizes for the bytes / bandwidth tables and Gantt.
+
+    Tries the on-disk `.bin` artifacts first (canonical source: stat the
+    files in `keys/` and `img_0/`). When those have been pruned (e.g. the
+    batch was rsynced with `--exclude '*.bin'` to strip secret material
+    before commit), falls back to the persisted `bytes.json` written by
+    a prior aggregate call. If neither is available the table is empty.
+    """
+    bytes_json = batch_dir / "bytes.json"
     rows: list[tuple[str, int]] = []
+    has_bin = False
     keys_dir = batch_dir / "keys"
     if keys_dir.is_dir():
         for path in sorted(keys_dir.iterdir()):
-            if path.is_file():
-                rows.append((f"keys/{path.name}", path.stat().st_size))
-    # First image dir is the canonical per-image sample (sizes stable across
-    # images for fixed CKKS params). Falling back to the lowest-idx dir
-    # available so the table is non-empty if img_0 is missing.
+            if not path.is_file():
+                continue
+            rows.append((f"keys/{path.name}", path.stat().st_size))
+            if path.name.endswith(".bin"):
+                has_bin = True
     img_dirs = _image_dirs(batch_dir)
     if img_dirs:
         _, first = img_dirs[0]
         for path in sorted(first.iterdir()):
-            if not path.is_file():
-                continue
-            # decoded.json + per-step bench JSONs are not protocol wire
-            # messages — exclude from the per-message byte table.
-            if path.name.endswith(".json"):
+            if not path.is_file() or path.name.endswith(".json"):
                 continue
             rows.append((f"img/{path.name}", path.stat().st_size))
+            if path.name.endswith(".bin"):
+                has_bin = True
+
+    # Persist the cache only when the on-disk picture is "full" (at least
+    # one .bin observed). This keeps replot-from-bin-stripped working
+    # against an authoritative cache from the original VPS run.
+    if has_bin:
+        with bytes_json.open("w", encoding="utf-8") as f:
+            json.dump([{"name": n, "bytes": b} for n, b in rows], f, indent=2)
+        return rows
+
+    # Cache wins over partial on-disk view (no .bin present).
+    if bytes_json.is_file():
+        with bytes_json.open("r", encoding="utf-8") as f:
+            cached: list[dict[str, Any]] = json.load(f)
+        return [(str(e["name"]), int(e["bytes"])) for e in cached]
     return rows
 
 
@@ -461,52 +485,60 @@ def _format_seconds(seconds: float) -> str:
     return f"{seconds / 86400.0:.2f} d"
 
 
-def _timing_table_md(
+def _party_step_table_md(
     keygen_run: Run,
     per_image: dict[str, list[Sample]],
-    n_images: int,
 ) -> str:
-    """Per-step wall-time table — keygen single row + per-round sub-rows, then non-keygen."""
-    lines: list[str] = []
-    lines.append("| step | n | mean ms | p50 ms | p95 ms |")
-    lines.append("|---|---:|---:|---:|---:|")
+    """Single combined table: party | step | n | wall ms | ΔRSS MiB | peak VM HWM MiB.
 
-    # Aggregate keygen: total = sum across the five sub-steps for one run.
+    Keygen sub-rounds run inside one bilateral process, so they're labelled
+    "joint". The per-image steps each run as a fresh subprocess on exactly
+    one party (see PARTY_BY_STEP in bench/_labels_ru.py).
+    """
+    lines: list[str] = []
+    header = (
+        "| party | step | n | mean wall ms | p95 wall ms | mean delta RSS MiB | peak VM HWM MiB |"
+    )
+    lines.append(header)
+    lines.append("|---|---|---:|---:|---:|---:|---:|")
+
     keygen_total_ms = sum(s.wall_ms for s in keygen_run.samples)
-    lines.append(f"| keygen (total) | 1 | {_format_ms(keygen_total_ms)} | — | — |")
+    joint = PARTY_NAMES["joint"]
+    total_row = f"| {joint} | keygen (total) | 1 | {_format_ms(keygen_total_ms)} | - | - | - |"
+    lines.append(total_row)
     for substep in _KEYGEN_SUBSTEPS:
         matching = [s for s in keygen_run.samples if s.name == substep]
-        mean, p50, p95 = _wall_ms(matching)
-        n = len(matching)
-        lines.append(
-            f"|   {substep} | {n} | {_format_ms(mean)} | {_format_ms(p50)} | {_format_ms(p95)} |"
-        )
-
-    for step in _PER_IMAGE_STEPS:
-        samples = per_image.get(step, [])
-        mean, p50, p95 = _wall_ms(samples)
-        n = len(samples)
-        lines.append(
-            f"| {step} | {n} | {_format_ms(mean)} | {_format_ms(p50)} | {_format_ms(p95)} |"
-        )
-    _ = n_images  # currently unused — table column "n" already conveys this
-    return "\n".join(lines)
-
-
-def _rss_table_md(keygen_run: Run, per_image: dict[str, list[Sample]]) -> str:
-    lines: list[str] = []
-    lines.append("| step | mean delta RSS MiB | mean VM HWM MiB |")
-    lines.append("|---|---:|---:|")
-    # Keygen rolls each sub-step into its own row — peak RSS during, e.g.,
-    # `keygen.galois` is the meaningful number, not a sum across rounds.
-    for substep in _KEYGEN_SUBSTEPS:
-        matching = [s for s in keygen_run.samples if s.name == substep]
+        mean, _p50, p95 = _wall_ms(matching)
         delta, hwm = _rss_stats(matching)
-        lines.append(f"| {substep} | {_format_mib(delta)} | {_format_mib(hwm)} |")
+        n = len(matching)
+        party = PARTY_NAMES[PARTY_BY_STEP.get(substep, "joint")]
+        lines.append(
+            f"| {party} | &nbsp;&nbsp;{substep} | {n} | "
+            f"{_format_ms(mean)} | {_format_ms(p95)} | "
+            f"{_format_mib(delta)} | {_format_mib(hwm)} |"
+        )
+
     for step in _PER_IMAGE_STEPS:
         samples = per_image.get(step, [])
+        mean, _p50, p95 = _wall_ms(samples)
         delta, hwm = _rss_stats(samples)
-        lines.append(f"| {step} | {_format_mib(delta)} | {_format_mib(hwm)} |")
+        n = len(samples)
+        party = PARTY_NAMES[PARTY_BY_STEP.get(step, "joint")]
+        lines.append(
+            f"| {party} | {step} | {n} | "
+            f"{_format_ms(mean)} | {_format_ms(p95)} | "
+            f"{_format_mib(delta)} | {_format_mib(hwm)} |"
+        )
+    lines.append("")
+    lines.append(
+        "_delta RSS = vm_hwm - pre_vm_hwm = the step's incremental memory "
+        "growth. Peak VM HWM = high-water mark of the resident set at step "
+        "exit. Keygen sub-rounds share one process, so each row's "
+        "pre_vm_hwm is the previous row's vm_hwm; the delta for "
+        "`keygen.galois` is the marginal cost of the Galois-key round on "
+        "top of the prior PK + RLK state. Per-image steps each spawn a "
+        "fresh process, so their delta RSS is the true per-call peak._"
+    )
     return "\n".join(lines)
 
 
@@ -521,7 +553,7 @@ def _bytes_table_md(rows: Sequence[tuple[str, int]]) -> str:
     lines.append("")
     lines.append(
         "_Note: `glk_master.bin` and `glk_full.bin` are byte-identical today; "
-        "they diverge under Phase-4 lattigo-hierkeys (master = compressed seed, "
+        "they diverge after lattigo-hierkeys integration (master = compressed seed, "
         "full = expanded set)._"
     )
     return "\n".join(lines)
@@ -634,13 +666,9 @@ def aggregate(batch_dir: Path) -> None:
     sections.append(f"- images: {len(img_dirs)}")
     sections.append(f"- keygen samples: {len(keygen_run.samples)}")
     sections.append("")
-    sections.append("## Per-step wall time")
+    sections.append("## Per-step time + memory by party")
     sections.append("")
-    sections.append(_timing_table_md(keygen_run, per_image_samples, len(img_dirs)))
-    sections.append("")
-    sections.append("## Per-step RSS")
-    sections.append("")
-    sections.append(_rss_table_md(keygen_run, per_image_samples))
+    sections.append(_party_step_table_md(keygen_run, per_image_samples))
     sections.append("")
     sections.append("## Per-message bytes")
     sections.append("")
@@ -699,22 +727,44 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--inputs",
         type=Path,
-        required=True,
-        help="Path to eval_inputs.json produced by models.prepare_samples.",
+        default=None,
+        help=(
+            "Path to eval_inputs.json produced by models.prepare_samples "
+            "(required unless --aggregate-only)."
+        ),
     )
     parser.add_argument(
         "--orion",
         type=Path,
-        required=True,
-        help="Path to Orion compiled-model directory (consumed by keygen + infer).",
+        default=None,
+        help="Path to Orion compiled-model directory (required unless --aggregate-only).",
     )
     parser.add_argument(
         "--batch-dir",
         type=Path,
         default=None,
-        help="Override per-batch output dir (default results/phase2/eval-<UTC ts>/).",
+        help="Override per-batch output dir (default results/<UTC ts>/).",
+    )
+    parser.add_argument(
+        "--aggregate-only",
+        type=Path,
+        default=None,
+        metavar="BATCH_DIR",
+        help="Skip the protocol run; re-render summary.md + plots/ from JSONs in BATCH_DIR.",
     )
     args = parser.parse_args(argv[1:])
+
+    if args.aggregate_only is not None:
+        try:
+            aggregate(args.aggregate_only)
+        except (RuntimeError, FileNotFoundError, ValueError) as exc:
+            print(f"[bench.eval] aggregate error: {exc}", file=sys.stderr)
+            return 1
+        print(f"[bench.eval] aggregate complete: {args.aggregate_only}")
+        return 0
+
+    if args.inputs is None or args.orion is None:
+        parser.error("--inputs and --orion are required unless --aggregate-only is given")
 
     try:
         batch_dir = run_pipeline(args.inputs, args.orion, args.batch_dir)
