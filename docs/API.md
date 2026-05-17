@@ -1,17 +1,16 @@
 # HTTP API
 
-Карта эндпоинтов трёх сервисов протокола ppiav. **Документирует целевой
-асинхронный протокол** (см. `docs/protocol-simple.puml`, секции 3 и 4).
-Текущая имплементация частично синхронная: POST `/infer` блокируется до
-окончания инференса, а `AuthenticatedResult` доставляется через
-SSE-буфер VAgent вместо отдельного `GET /result`. Миграция к описанной
-здесь форме — в backlog.
+Карта эндпоинтов трёх сервисов протокола ppiav. См. также
+`docs/protocol-simple.puml` и `docs/DESIGN.md`. Протокол блокирующий:
+`POST /infer` (и на VAgent, и на VService) удерживает соединение до
+завершения инференса и возвращает результат в теле ответа — отдельного
+канала доставки результата (SSE/long-poll) нет.
 
 Источники истины: `internal/vservice/http.go`, `internal/vagent/http.go`,
-`internal/rservice/http.go`, типы сообщений — `internal/protocol/wire.go`,
+`internal/rservice/http.go`; типы сообщений — `internal/protocol/wire.go`;
 лимиты тел — `internal/httputil/`.
 
-Используемые лимиты тела:
+Лимиты тел:
 
 - `MaxJSONBody = 64 KiB` — JSON control-эндпоинты.
 - `MaxShareBody = 128 MiB` — одиночные доли (pk-share, RLK round1/2, partial-decryption).
@@ -22,16 +21,18 @@ SSE-буфер VAgent вместо отдельного `GET /result`. Мигр�
 
 ## VService
 
-Внутренний сервис, к которому ходит VAgent server-to-server. Браузер сюда
-не обращается.
+Внутренний сервис, к которому ходит VAgent server-to-server. Браузер
+сюда не обращается.
 
-| Точка API                        | Запрос           | Ответ                                                              |
-| -------------------------------- | ---------------- | ------------------------------------------------------------------ |
-| `GET /params`                    | —                | `Manifest`                                                         |
-| `POST /sessions`                 | —                | `VerificationSession`                                              |
-| `POST /sessions/{sid}/eval-keys` | `InferEvalKeys`  | —                                                                  |
-| `POST /sessions/{sid}/infer`     | `EncryptedImage` | — (202; инференс запускается асинхронно)                           |
-| `GET /sessions/{sid}/result`     | —                | `InferenceResult` (long-poll, блокируется до завершения инференса) |
+| Точка API                        | Запрос           | Ответ                 |
+| -------------------------------- | ---------------- | --------------------- |
+| `GET /params`                    | —                | `Manifest`            |
+| `POST /sessions`                 | —                | `VerificationSession` |
+| `POST /sessions/{sid}/eval-keys` | `InferEvalKeys`  | —                     |
+| `POST /sessions/{sid}/infer`     | `EncryptedImage` | `InferenceResult`     |
+
+`POST /infer` блокируется на время инференса и возвращает шифротекст
+результата в теле ответа.
 
 ---
 
@@ -40,11 +41,14 @@ SSE-буфер VAgent вместо отдельного `GET /result`. Мигр�
 Лицом к пользователю: отдаёт VClient SPA + WASM, принимает доли от
 браузера, проксирует в VService, шлёт callback в RService.
 
-Пер-роут дедлайны: `/eval-keys` — 10 мин, `/result` — 5 мин (long-poll на
-VService `/result`), прочие server-to-server RPC — 30 с.
+Пер-роут дедлайны при проксировании в VService: `/eval-keys` — 10 мин,
+`/infer` — 5 мин (включает инференс + MPD-Auth), прочие server-to-server
+RPC — 30 с.
 
 Любая ошибка с известным `sid` вызывает `rejectAndEvict` → callback
-`VerdictReject` в RService + eviction сессии.
+`VerdictReject` в RService + eviction сессии (см. `docs/DESIGN.md`
+§`Failure modes`, F2/F3). F1 (`Ver` вернул false) идёт через
+`postVerdict(VerdictResultAuthFailed)`.
 
 ### Статика и SPA
 
@@ -72,11 +76,10 @@ VService `/result`), прочие server-to-server RPC — 30 с.
 
 ### Stage 3 / 4 — инференс и финализация
 
-| Точка API                                 | Запрос              | Ответ                                                                                       |
-| ----------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------- |
-| `POST /sessions/{sid}/image`              | `EncryptedImage`    | — (202; форвардится в VService `/infer`)                                                    |
-| `GET /sessions/{sid}/result`              | —                   | `AuthenticatedResult` (long-poll; внутри VAgent тянет VService `GET /result` и считает MAC) |
-| `POST /sessions/{sid}/partial-decryption` | `PartialDecryption` | `FinalizeRedirect`                                                                          |
+| Точка API                                 | Запрос              | Ответ                                                                                                                          |
+| ----------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /sessions/{sid}/infer`              | `EncryptedImage`    | `AuthenticatedResult` (блокирующий: внутри VAgent проксирует в VService `/infer`, затем применяет MPD-Auth)                    |
+| `POST /sessions/{sid}/partial-decryption` | `PartialDecryption` | `FinalizeRedirect` (JSON 200; redirect-URL для перехода на RClient). Параллельно отправляется `VerdictNotification` в RService |
 
 ---
 
@@ -85,12 +88,12 @@ VService `/result`), прочие server-to-server RPC — 30 с.
 Защищаемый ресурс. Хранит cookie `sid` (`HttpOnly`), запускает Stage-1
 редирект на VAgent, принимает финальный verdict.
 
-| Точка API                        | Запрос                | Ответ                                                                                                                                                        |
-| -------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `GET /protected?sid=`            | —                     | без cookie / verdict=Unknown → **302** на `<vagent-public>/verify?sid=...` + `Set-Cookie sid`; иначе `text/html` (RClient SPA), при verdict=Reject — **403** |
-| `POST /reset`                    | —                     | **303** → `/protected`, чистит cookie `sid`                                                                                                                  |
-| `GET /dist/*`, `GET /styles.css` | —                     | ассеты RClient                                                                                                                                               |
-| `POST /api/callback/{sid}`       | `VerdictNotification` | —                                                                                                                                                            |
+| Точка API                        | Запрос                | Ответ                                                                                                                                                          |
+| -------------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /protected?sid=`            | —                     | без cookie / verdict=Unknown → **302** на `<vagent-public>/verify?sid=...` + `Set-Cookie sid`; иначе `text/html` (RClient SPA); при verdict ≠ Accept — **403** |
+| `POST /reset`                    | —                     | **303** → `/protected`, чистит cookie `sid`                                                                                                                    |
+| `GET /dist/*`, `GET /styles.css` | —                     | ассеты RClient                                                                                                                                                 |
+| `POST /api/callback/{sid}`       | `VerdictNotification` | —                                                                                                                                                              |
 
 ---
 
@@ -103,7 +106,7 @@ VService `/result`), прочие server-to-server RPC — 30 с.
 
 - `VerificationSession` — `{ "session_id": "..." }`.
 - `Manifest` — `ckks` + LLKN-расписание + параметры аутентификатора + `flood_sigma` + `extra_rotation_indices` + `input_level`; публичное декларативное описание параметров протокола, из которого каждая сторона локально пересобирает свой `protocol.Params`.
-- `VerdictNotification` — `{ "verdict": "Accept"|"Reject" }`.
+- `VerdictNotification` — `{ "verdict": <Verdict> }`, где `Verdict ∈ {Unknown(0), Accept(1), Reject(2), ResultAuthFailed(3)}` (на проводе — числовой `uint8`; `String()` см. в `internal/protocol/types.go`).
 - `FinalizeRedirect` — `{ "redirect": "..." }`.
 
 **Бинарные (`application/octet-stream`)**
