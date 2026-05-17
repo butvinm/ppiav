@@ -934,7 +934,7 @@ wheels = [
 
 [[package]]
 name = "orion-v2-compiler"
-version = "2.1.7"
+version = "2.1.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "certifi" },
@@ -946,9 +946,9 @@ dependencies = [
     { name = "torch" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3b/78/b05b8c3e493bcdf98c3e5bd768ca1c964a1de956e88bd1dfb333a089a804/orion_v2_compiler-2.1.7.tar.gz", hash = "sha256:4a12c35a6648b7a0954241d1dcdee821ad058c3a3186e3544de6508ec09ed737", size = 45637, upload-time = "2026-05-17T03:31:17.954Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7c/ce/a6d1749693194689bb4456220b67a5e03942589e3c3172e13886e04c6bd4/orion_v2_compiler-2.1.8.tar.gz", hash = "sha256:ceada4ee39f8905531012c8442eb73b3a6f502f26ef78fff0268dd342667fc93", size = 45751, upload-time = "2026-05-17T03:59:21.367Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/96/65/9cb9874a35d911e4a4b8f9717b0f520aa8886921c80ac8508a5f33c54751/orion_v2_compiler-2.1.7-py3-none-any.whl", hash = "sha256:94c9cfe37bc6dc6f79b2cf82deaebd17daf527cb3d97ffaed68888a4a017ad63", size = 55426, upload-time = "2026-05-17T03:31:10.202Z" },
+    { url = "https://files.pythonhosted.org/packages/1f/ae/608f6d7aecf5571c2606ceec365ef638009bfa805769c7de5abc05a8f47c/orion_v2_compiler-2.1.8-py3-none-any.whl", hash = "sha256:e3c4acba9208554f69957cdaab147afb192043d4919aa5f6b7c926f4104fdb1f", size = 55523, upload-time = "2026-05-17T03:59:11.191Z" },
 ]
 
 [[package]]
@@ -1071,7 +1071,7 @@ dev = [
 requires-dist = [
     { name = "kagglehub" },
     { name = "numpy", specifier = ">=2.0" },
-    { name = "orion-v2-compiler", specifier = ">=2.1.7,<3" },
+    { name = "orion-v2-compiler", specifier = ">=2.1.8,<3" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "torch", specifier = ">=2.2" },
 ]
