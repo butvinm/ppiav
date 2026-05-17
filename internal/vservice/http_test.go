@@ -36,15 +36,15 @@ func TestHTTPGetParams(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, "application/json", w.Header().Get("Content-Type"))
 
-	var wire paramsWire
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &wire))
-	assert.Equal(t, params.Authenticator.Lambda, wire.AuthenticatorLambda)
-	assert.Equal(t, params.Authenticator.Epsilon, wire.AuthenticatorEpsilon)
-	assert.Equal(t, params.FloodSigma, wire.FloodSigma)
-	assert.Equal(t, params.InputLevel, wire.InputLevel)
-	assert.NotEmpty(t, wire.CKKS, "CKKS params JSON should be embedded")
-	assert.Equal(t, params.LLKNBase, wire.LLKNBase, "LLKNBase must be serialized for bridge validation")
-	assert.Equal(t, protocol.DefaultLLKNLogPHK, wire.LLKNLogPHK, "LLKNLogPHK schedule must be serialized for bridge validation")
+	var manifest protocol.Manifest
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &manifest))
+	assert.Equal(t, params.Authenticator.Lambda, manifest.AuthenticatorLambda)
+	assert.Equal(t, params.Authenticator.Epsilon, manifest.AuthenticatorEpsilon)
+	assert.Equal(t, params.FloodSigma, manifest.FloodSigma)
+	assert.Equal(t, params.InputLevel, manifest.InputLevel)
+	assert.NotEmpty(t, manifest.CKKS, "CKKS params JSON should be embedded")
+	assert.Equal(t, params.LLKNBase, manifest.LLKNBase, "LLKNBase must be serialized for bridge validation")
+	assert.Equal(t, protocol.DefaultLLKNLogPHK, manifest.LLKNLogPHK, "LLKNLogPHK schedule must be serialized for bridge validation")
 }
 
 func TestHTTPGetParamsRejectsPost(t *testing.T) {
@@ -233,10 +233,10 @@ func TestHTTPStoreEvalKeysRejectsGet(t *testing.T) {
 	require.Equal(t, http.StatusMethodNotAllowed, w.Code)
 }
 
-// TestHTTPImageHappyPath drives POST /sessions/:sid/image end-to-end:
+// TestHTTPInferHappyPath drives POST /sessions/:sid/infer end-to-end:
 // open a session, store eval keys, encrypt 0.3 under the same pk, POST
 // the marshaled ct, parse back the result, decrypt, verify 0.3² ≈ 0.09.
-func TestHTTPImageHappyPath(t *testing.T) {
+func TestHTTPInferHappyPath(t *testing.T) {
 	svc, params := httpSvcParams(t)
 	srv := NewServer(svc)
 
@@ -261,7 +261,7 @@ func TestHTTPImageHappyPath(t *testing.T) {
 	inputBytes, err := inputCt.MarshalBinary()
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodPost, "/sessions/"+string(sid)+"/image", bytes.NewReader(inputBytes))
+	req := httptest.NewRequest(http.MethodPost, "/sessions/"+string(sid)+"/infer", bytes.NewReader(inputBytes))
 	req.Header.Set("Content-Type", "application/octet-stream")
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -279,13 +279,13 @@ func TestHTTPImageHappyPath(t *testing.T) {
 	assert.InDelta(t, 0.09, decoded[0], 1e-4, "image POST must apply x² circuit")
 }
 
-func TestHTTPImageUnknownSid(t *testing.T) {
+func TestHTTPInferUnknownSid(t *testing.T) {
 	svc, params := httpSvcParams(t)
 	srv := NewServer(svc)
 
 	// Build a syntactically valid ciphertext so the body parses; only the
 	// sid is missing. Without StoreEvalKeys, Infer surfaces "unknown session"
-	// or "no evaluator" — both map to 404 per handleImage.
+	// or "no evaluator" — both map to 404 per handleInfer.
 	kgen := rlwe.NewKeyGenerator(params.CKKS)
 	_, pk := kgen.GenKeyPairNew()
 	encoder := ckks.NewEncoder(params.CKKS)
@@ -298,7 +298,7 @@ func TestHTTPImageUnknownSid(t *testing.T) {
 	body, err := ct.MarshalBinary()
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodPost, "/sessions/does-not-exist/image", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/sessions/does-not-exist/infer", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/octet-stream")
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -309,14 +309,14 @@ func TestHTTPImageUnknownSid(t *testing.T) {
 	assert.NotEmpty(t, berr.Error)
 }
 
-func TestHTTPImageMalformedBody(t *testing.T) {
+func TestHTTPInferMalformedBody(t *testing.T) {
 	svc, _ := httpSvcParams(t)
 	srv := NewServer(svc)
 
 	sid, err := svc.OpenSession()
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodPost, "/sessions/"+string(sid)+"/image", bytes.NewReader([]byte{0xff, 0xff, 0xff}))
+	req := httptest.NewRequest(http.MethodPost, "/sessions/"+string(sid)+"/infer", bytes.NewReader([]byte{0xff, 0xff, 0xff}))
 	req.Header.Set("Content-Type", "application/octet-stream")
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -327,11 +327,11 @@ func TestHTTPImageMalformedBody(t *testing.T) {
 	assert.NotEmpty(t, body.Error)
 }
 
-func TestHTTPImageRejectsGet(t *testing.T) {
+func TestHTTPInferRejectsGet(t *testing.T) {
 	svc, _ := httpSvcParams(t)
 	srv := NewServer(svc)
 
-	req := httptest.NewRequest(http.MethodGet, "/sessions/abc/image", nil)
+	req := httptest.NewRequest(http.MethodGet, "/sessions/abc/infer", nil)
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 

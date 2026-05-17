@@ -22,39 +22,25 @@ import (
 	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
 )
 
-// paramsWire mirrors the JSON shape VService writes from
-// internal/vservice/http.go's paramsWire. Keeping a separate copy here
-// avoids pulling vservice into the WASM bridge (it imports net/http).
-type paramsWire struct {
-	CKKS                 json.RawMessage `json:"ckks"`
-	LLKNBase             int             `json:"llkn_base"`
-	LLKNLogPHK           []int           `json:"llkn_log_phk"`
-	AuthenticatorLambda  int             `json:"authenticator_lambda"`
-	AuthenticatorEpsilon float64         `json:"authenticator_epsilon"`
-	FloodSigma           float64         `json:"flood_sigma"`
-	ExtraRotationIndices []int           `json:"extra_rotation_indices,omitempty"`
-	InputLevel           int             `json:"input_level"`
-}
-
-// ParseParamsJSON decodes the JSON written by vservice.writeParams into a
-// protocol.Params. The LLKN hierarchy is reconstructed locally from the
-// decoded CKKS params using the wire LLKNLogPHK schedule, validated
-// against the bridge's own DefaultLLKNLogPHK to fail loud on any silent
-// drift between Go and WASM builds. LLKNBase is likewise validated
-// against DefaultLLKNBase. Exported for tests.
-func ParseParamsJSON(data []byte) (protocol.Params, error) {
-	var pw paramsWire
-	if err := json.Unmarshal(data, &pw); err != nil {
-		return protocol.Params{}, fmt.Errorf("ppiav: decode params: %w", err)
+// ParseManifestJSON decodes the JSON written by vservice.writeManifest
+// into a protocol.Params. The LLKN hierarchy is reconstructed locally
+// from the decoded CKKS params using the wire LLKNLogPHK schedule,
+// validated against the bridge's own DefaultLLKNLogPHK to fail loud on
+// any silent drift between Go and WASM builds. LLKNBase is likewise
+// validated against DefaultLLKNBase. Exported for tests.
+func ParseManifestJSON(data []byte) (protocol.Params, error) {
+	var m protocol.Manifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return protocol.Params{}, fmt.Errorf("ppiav: decode manifest: %w", err)
 	}
-	if pw.LLKNBase != protocol.DefaultLLKNBase {
-		return protocol.Params{}, fmt.Errorf("ppiav: LLKNBase mismatch (wire=%d, bridge expects %d)", pw.LLKNBase, protocol.DefaultLLKNBase)
+	if m.LLKNBase != protocol.DefaultLLKNBase {
+		return protocol.Params{}, fmt.Errorf("ppiav: LLKNBase mismatch (wire=%d, bridge expects %d)", m.LLKNBase, protocol.DefaultLLKNBase)
 	}
-	if !equalIntSlice(pw.LLKNLogPHK, protocol.DefaultLLKNLogPHK) {
-		return protocol.Params{}, fmt.Errorf("ppiav: LLKNLogPHK mismatch (wire=%v, bridge expects %v)", pw.LLKNLogPHK, protocol.DefaultLLKNLogPHK)
+	if !equalIntSlice(m.LLKNLogPHK, protocol.DefaultLLKNLogPHK) {
+		return protocol.Params{}, fmt.Errorf("ppiav: LLKNLogPHK mismatch (wire=%v, bridge expects %v)", m.LLKNLogPHK, protocol.DefaultLLKNLogPHK)
 	}
 	var ckksParams ckks.Parameters
-	if err := ckksParams.UnmarshalJSON(pw.CKKS); err != nil {
+	if err := ckksParams.UnmarshalJSON(m.CKKS); err != nil {
 		return protocol.Params{}, fmt.Errorf("ppiav: decode CKKS params: %w", err)
 	}
 	// LLKNLogPHK was validated above against DefaultLLKNLogPHK — route
@@ -67,14 +53,14 @@ func ParseParamsJSON(data []byte) (protocol.Params, error) {
 	return protocol.Params{
 		CKKS:     ckksParams,
 		LLKN:     llknParams,
-		LLKNBase: pw.LLKNBase,
+		LLKNBase: m.LLKNBase,
 		Authenticator: authenticator.Config{
-			Lambda:  pw.AuthenticatorLambda,
-			Epsilon: pw.AuthenticatorEpsilon,
+			Lambda:  m.AuthenticatorLambda,
+			Epsilon: m.AuthenticatorEpsilon,
 		},
-		FloodSigma:           pw.FloodSigma,
-		ExtraRotationIndices: pw.ExtraRotationIndices,
-		InputLevel:           pw.InputLevel,
+		FloodSigma:           m.FloodSigma,
+		ExtraRotationIndices: m.ExtraRotationIndices,
+		InputLevel:           m.InputLevel,
 	}, nil
 }
 
@@ -104,7 +90,7 @@ var (
 // NewClient parses the params JSON, constructs a vclient.Client with a
 // fresh sk_c, stores it under a new handle, and returns the handle.
 func NewClient(paramsJSON []byte, sid string) (uint64, error) {
-	params, err := ParseParamsJSON(paramsJSON)
+	params, err := ParseManifestJSON(paramsJSON)
 	if err != nil {
 		return 0, err
 	}

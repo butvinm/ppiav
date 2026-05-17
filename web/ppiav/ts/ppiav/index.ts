@@ -187,7 +187,7 @@ const clientRegistry = new FinalizationRegistry((handleId: number) => {
  * Construct a new vclient.Client on the Go side and return a TS wrapper.
  *
  * @param paramsJSON - JSON bytes from `GET /sessions/:sid/params` (matches
- *   internal/vservice/http.go's paramsWire shape).
+ *   the `protocol.Manifest` wire shape published by VService).
  * @param sid - Session ID assigned by VService and embedded in the
  *   `/verify?sid=` URL.
  */

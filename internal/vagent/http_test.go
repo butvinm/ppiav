@@ -192,7 +192,7 @@ func TestHTTPVAgent_GetParams_ProxiesToVService(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Contains(t, resp.Header.Get("Content-Type"), "application/json")
 
-	// Body must be a paramsWire-shaped JSON. We only check the
+	// Body must be a protocol.Manifest-shaped JSON. We only check the
 	// authenticator lambda value as a smoke test — full schema is the
 	// vservice handler's responsibility.
 	var raw map[string]any
@@ -773,9 +773,7 @@ func TestHTTPVAgent_PartialDecryption_AcceptVerdict(t *testing.T) {
 	respBody, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode, "body=%s", respBody)
-	var redirectBody struct {
-		Redirect string `json:"redirect"`
-	}
+	var redirectBody protocol.FinalizeRedirect
 	require.NoError(t, json.Unmarshal(respBody, &redirectBody))
 	assert.Equal(t, rsvcSrv.URL+"/protected", redirectBody.Redirect)
 
@@ -1190,8 +1188,8 @@ func TestHTTPVAgent_Image_VServiceFailureRejectAndEvicts(t *testing.T) {
 			_, _ = w.Write([]byte(`{"SessionID":"sid-img-` + strings.Repeat("a", int(n)) + `"}`))
 			return
 		}
-		if strings.HasSuffix(r.URL.Path, "/image") {
-			http.Error(w, "vservice image down", http.StatusInternalServerError)
+		if strings.HasSuffix(r.URL.Path, "/infer") {
+			http.Error(w, "vservice infer down", http.StatusInternalServerError)
 			return
 		}
 		http.NotFound(w, r)

@@ -372,10 +372,10 @@ func TestInferEvalKeysEmptyMasterMap(t *testing.T) {
 	assert.Empty(t, got.GKSMaster)
 }
 
-// EncryptedImage and AuthenticatedResult marshal as the bare
-// `*rlwe.Ciphertext` (no JSON envelope) per the wire convention in
-// internal/vservice/http.go's handleImage and internal/vagent/http.go's
-// SSE handler. The two messages have no `MarshalBinary` of their own —
+// EncryptedImage, InferenceResult and AuthenticatedResult marshal as the
+// bare `*rlwe.Ciphertext` (no JSON envelope) per the wire convention in
+// internal/vservice/http.go's handleInfer and internal/vagent/http.go's
+// SSE handler. The three messages have no `MarshalBinary` of their own —
 // callers serialise `.Ct` directly. Verify the ciphertext round-trips
 // here so future drift breaks the build rather than the wire.
 func TestEncryptedImageBinaryRoundTrip(t *testing.T) {
