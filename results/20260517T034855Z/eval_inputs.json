@@ -1,0 +1,77 @@
+{
+  "config": "logn16",
+  "weights": "out/weights_fhe.pth",
+  "generated_at": "2026-05-17T01:29:55+00:00",
+  "images": [
+    {
+      "idx": 0,
+      "path": "inputs/sample_0.bin",
+      "age": 22,
+      "label": 1,
+      "ref_logit": 16.56282615661621
+    },
+    {
+      "idx": 1,
+      "path": "inputs/sample_1.bin",
+      "age": 56,
+      "label": 1,
+      "ref_logit": 1216.9501953125
+    },
+    {
+      "idx": 2,
+      "path": "inputs/sample_2.bin",
+      "age": 13,
+      "label": 0,
+      "ref_logit": -20.027986526489258
+    },
+    {
+      "idx": 3,
+      "path": "inputs/sample_3.bin",
+      "age": 60,
+      "label": 1,
+      "ref_logit": 408.5040283203125
+    },
+    {
+      "idx": 4,
+      "path": "inputs/sample_4.bin",
+      "age": 30,
+      "label": 1,
+      "ref_logit": 10.684672355651855
+    },
+    {
+      "idx": 5,
+      "path": "inputs/sample_5.bin",
+      "age": 26,
+      "label": 1,
+      "ref_logit": 13.128142356872559
+    },
+    {
+      "idx": 24,
+      "path": "inputs/sample_24.bin",
+      "age": 15,
+      "label": 0,
+      "ref_logit": 33.491065979003906
+    },
+    {
+      "idx": 25,
+      "path": "inputs/sample_25.bin",
+      "age": 4,
+      "label": 0,
+      "ref_logit": -26.999000549316406
+    },
+    {
+      "idx": 35,
+      "path": "inputs/sample_35.bin",
+      "age": 16,
+      "label": 0,
+      "ref_logit": 7.776313304901123
+    },
+    {
+      "idx": 43,
+      "path": "inputs/sample_43.bin",
+      "age": 4,
+      "label": 0,
+      "ref_logit": -78.84964752197266
+    }
+  ]
+}

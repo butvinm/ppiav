@@ -1,0 +1,47 @@
+{
+  "name": "mac",
+  "phase": "phase2",
+  "started": "2026-05-17T04:07:00.054352539Z",
+  "go_version": "go1.26.1",
+  "goos": "linux",
+  "goarch": "amd64",
+  "num_cpu": 16,
+  "metadata": {
+    "derive_gks_auth_seconds": 13.225386402,
+    "in_ct": "/home/ubuntu/ppiav/results/20260517T034855Z/img_3/result_ct.bin",
+    "out_ct": "/home/ubuntu/ppiav/results/20260517T034855Z/img_3/auth_ct.bin",
+    "read_gks_master_seconds": 0.527043448,
+    "sid": "35103136addd5ba18181e977d44b4e37",
+    "workdir": "/home/ubuntu/ppiav/results/20260517T034855Z/keys"
+  },
+  "samples": [
+    {
+      "name": "mac.derive_auth_keys",
+      "iter": 0,
+      "wall": 13797023514,
+      "heap_alloc": 2548058480,
+      "heap_inuse": 2549211136,
+      "sys": 2564717416,
+      "alloc_delta": 3770140976,
+      "num_gc": 3,
+      "pause_ns": 516680,
+      "pre_vm_hwm": 325132288,
+      "vm_hwm": 2567213056,
+      "bytes": 528491600
+    },
+    {
+      "name": "mac.compute_ct",
+      "iter": 0,
+      "wall": 5179752591,
+      "heap_alloc": 2141574952,
+      "heap_inuse": 2143469568,
+      "sys": 2566118248,
+      "alloc_delta": 603935840,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "pre_vm_hwm": 2567213056,
+      "vm_hwm": 2570739712,
+      "bytes": 0
+    }
+  ]
+}
