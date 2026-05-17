@@ -26,8 +26,12 @@ func smallParams(t *testing.T) protocol.Params {
 	}
 	ckksParams, err := ckks.NewParametersFromLiteral(lit)
 	require.NoError(t, err)
+	llknParams, err := protocol.BuildLLKNParams(ckksParams)
+	require.NoError(t, err)
 	return protocol.Params{
-		CKKS: ckksParams,
+		CKKS:     ckksParams,
+		LLKN:     llknParams,
+		LLKNBase: protocol.DefaultLLKNBase,
 		Authenticator: authenticator.Config{
 			Lambda:  8,
 			Epsilon: math.Exp2(20),
@@ -77,12 +81,12 @@ func TestOpenSessionPopulatesState(t *testing.T) {
 	sess, err := a.session(protocol.SessionID("populated"))
 	require.NoError(t, err)
 	require.NotNil(t, sess.crs, "CRS must be built")
-	require.NotNil(t, sess.skShare, "sk_a must be minted")
+	require.NotNil(t, sess.skTop, "sk_a (top level) must be minted")
 	// authKey has |S| = Lambda/2 and is a *valid* MPD-Auth key.
 	assert.Len(t, sess.authKey.S, params.Authenticator.Lambda/2)
-	// pkAgg / eval must remain nil until later stages.
+	// pkAgg / authchain must remain nil until later stages.
 	assert.Nil(t, sess.pkAgg)
-	assert.Nil(t, sess.eval)
+	assert.Nil(t, sess.authchain)
 }
 
 func TestSessionLookupForUnknownSidErrors(t *testing.T) {

@@ -1,0 +1,71 @@
+@startuml protocol-simple
+skinparam responseMessageBelowArrow true
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 200
+
+actor " " as User
+participant "RClient" as ResourceClient
+participant "VClient" as VerificationClient
+participant "RService" as ResourceService
+participant "VAgent" as VerificationAgent
+participant "VService" as VerificationService
+
+activate User
+
+== 1. Начало сессии верификации ==
+User -> ResourceClient ++ : Запрос ресурса
+ResourceClient -> ResourceService ++ : Запрос ресурса
+ResourceService -> VerificationAgent ++ : SessionOpen
+VerificationAgent -> VerificationService ++ : SessionOpen
+VerificationService --> VerificationAgent -- : VerificationSession
+VerificationAgent --> ResourceService -- : VerificationSession
+ResourceService --> ResourceClient -- : Перенаправление с sid
+ResourceClient --> User -- : Перенаправление с sid
+User -> VerificationClient ++ : Запрос верификации (sid)
+VerificationClient -> VerificationAgent ++ : RequestManifest
+VerificationAgent -> VerificationService ++ : RequestManifest
+VerificationService --> VerificationAgent -- : Manifest
+VerificationAgent --> VerificationClient -- : Manifest
+
+== 2. Совместная генерация ключей ==
+VerificationClient -> VerificationAgent ++ : VClientPKShare
+VerificationAgent --> VerificationClient -- : VAgentPKShare
+VerificationClient -> VerificationAgent ++ : VClientRLKRound1
+VerificationAgent --> VerificationClient -- : VAgentRLKRound1
+VerificationClient -> VerificationAgent ++ : VClientRLKRound2
+VerificationAgent --> VerificationClient -- : Подтверждение
+VerificationClient -> VerificationAgent ++ : VClientGaloisShares
+VerificationAgent -> VerificationService ++ : InferEvalKeys
+VerificationService --> VerificationAgent -- : Подтверждение
+VerificationAgent --> VerificationClient -- : Подтверждение
+
+== 3. Передача изображения и инференс ==
+VerificationClient -> VerificationAgent : RequestResult
+User -> VerificationClient : Изображение
+VerificationClient -> VerificationAgent ++ : EncryptedImage
+VerificationAgent -> VerificationService ++ : EncryptedImage
+VerificationService --> VerificationAgent -- : InferenceResult
+
+== 4. Защищенная расшифровка результата ==
+VerificationAgent --> VerificationClient : AuthenticatedResult
+VerificationClient -> VerificationAgent ++ : PartialDecryption
+
+== 5. Завершение сессии верификации ==
+VerificationAgent -> ResourceService ++ : VerdictNotification
+ResourceService --> VerificationAgent -- : Подтверждение
+VerificationAgent --> VerificationClient -- : FinalizeRedirect
+VerificationClient --> User -- : Перенаправление на ресурс
+User -> ResourceClient ++ : Возврат на страницу ресурса
+ResourceClient -> ResourceService ++ : Запрос ресурса
+alt Положительный вердикт
+    ResourceService --> ResourceClient : Ресурс
+    ResourceClient --> User : Отображение ресурса
+else Отрицательный вердикт
+    ResourceService --> ResourceClient : Отказ в доступе
+    ResourceClient --> User : Сообщение об отказе
+end
+deactivate ResourceService
+deactivate ResourceClient
+deactivate User
+
+@enduml

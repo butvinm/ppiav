@@ -3,12 +3,12 @@ skinparam responseMessageBelowArrow true
 skinparam sequenceMessageAlign center
 skinparam maxMessageSize 200
 
-actor "Пользователь" as User
-participant "Клиент\nобъекта доступа" as ResourceClient
-participant "Клиент\nверификации" as VerificationClient
-participant "Агент сервиса\nверификации" as VerificationAgent
-participant "Сервис\nверификации" as VerificationService
-participant "Сервис\nобъекта доступа" as ResourceService
+actor " " as User
+participant "RClient" as ResourceClient
+participant "VClient" as VerificationClient
+participant "RService" as ResourceService
+participant "VAgent" as VerificationAgent
+participant "VService" as VerificationService
 
 activate User
 User -> ResourceClient ++ : Переход на страницу защищенного ресурса
@@ -28,8 +28,8 @@ ResourceClient --> User -- : Перенаправление с sid
 User -> VerificationClient ++ : Запрос на верификацию с sid
 
 == Получение параметров протокола ==
-VerificationClient -> VerificationAgent ++ : Запрос параметров протокола
-VerificationAgent -> VerificationService ++ : Запрос параметров протокола
+VerificationClient -> VerificationAgent ++ : RequestManifest
+VerificationAgent -> VerificationService ++ : RequestManifest
 VerificationService --> VerificationAgent -- : Параметры протокола
 VerificationAgent -> VerificationAgent : Сохранение параметров протокола
 VerificationAgent --> VerificationClient -- : Параметры протокола
@@ -67,6 +67,9 @@ VerificationAgent -> VerificationService ++ : Передача <latex>\mathit{rl
 VerificationService -> VerificationService : Иерархический вывод <latex>\mathit{gks}^{\mathit{infer}}</latex>
 VerificationService --> VerificationAgent -- : Подтверждение установки ключей
 VerificationAgent --> VerificationClient -- : Подтверждение генерации <latex>\mathit{gks}</latex>
+
+== Подписка на результат ==
+VerificationClient -> VerificationAgent : RequestResult
 
 == Захват и шифрование изображения ==
 User -> VerificationClient : Предоставление изображения

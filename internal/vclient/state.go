@@ -13,27 +13,33 @@ import (
 // subcommands consume it. The CRS is NOT serialized: NewWithState rebuilds
 // it deterministically from SID via protocol.NewSessionCRS (mirroring New).
 //
-// PkAgg is needed for EncryptImage (powers the per-session encryptor);
-// PartialDecrypt uses only SkShare. Carrying PkAgg unconditionally keeps
-// the bench `encrypt` subcommand viable from a single export+import.
+// SkTop is the top-level secret-key share. The eval-level projection is
+// re-derived on demand inside the rebuilt Client; persisting both would
+// duplicate state and risk drift.
+//
+// PkAgg (eval level) is needed for EncryptImage (powers the per-session
+// encryptor); PartialDecrypt uses only the projected sk. Carrying PkAgg
+// unconditionally keeps the bench `encrypt` subcommand viable from a
+// single export+import. pk_top is NOT included — VClient does not retain
+// it (VAgent owns the wire path that ships pk_top to VService).
 type ExportedState struct {
-	SID     protocol.SessionID
-	SkShare *rlwe.SecretKey
-	PkAgg   *rlwe.PublicKey
+	SID   protocol.SessionID
+	SkTop *rlwe.SecretKey
+	PkAgg *rlwe.PublicKey
 }
 
-// ExportState snapshots the per-session state. Returns an error if sk_c is
-// missing (impossible for a Client built via New, but guards against zero
-// values). PkAgg may be nil — only encrypt requires it; partial-decrypt
-// does not.
+// ExportState snapshots the per-session state. Returns an error if sk_c
+// (top level) is missing (impossible for a Client built via New, but
+// guards against zero values). PkAgg may be nil — only encrypt requires
+// it; partial-decrypt does not.
 func (c *Client) ExportState() (*ExportedState, error) {
-	if c.skShare == nil {
-		return nil, fmt.Errorf("vclient: ExportState skShare is nil")
+	if c.skTop == nil {
+		return nil, fmt.Errorf("vclient: ExportState skTop is nil")
 	}
 	return &ExportedState{
-		SID:     c.sid,
-		SkShare: c.skShare,
-		PkAgg:   c.pkAgg,
+		SID:   c.sid,
+		SkTop: c.skTop,
+		PkAgg: c.pkAgg,
 	}, nil
 }
 
@@ -45,8 +51,8 @@ func NewWithState(params protocol.Params, state *ExportedState) (*Client, error)
 	if state == nil {
 		return nil, fmt.Errorf("vclient: NewWithState state is nil")
 	}
-	if state.SkShare == nil {
-		return nil, fmt.Errorf("vclient: NewWithState SkShare is nil")
+	if state.SkTop == nil {
+		return nil, fmt.Errorf("vclient: NewWithState SkTop is nil")
 	}
 	crs, err := protocol.NewSessionCRS(state.SID)
 	if err != nil {
@@ -56,7 +62,7 @@ func NewWithState(params protocol.Params, state *ExportedState) (*Client, error)
 		params:  params,
 		sid:     state.SID,
 		crs:     crs,
-		skShare: state.SkShare,
+		skTop:   state.SkTop,
 		encoder: ckks.NewEncoder(params.CKKS),
 	}
 	if state.PkAgg != nil {

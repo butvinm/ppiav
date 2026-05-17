@@ -54,12 +54,18 @@ func (a *Agent) FinalizeDecryptionVerbose(
 
 	a.mu.Lock()
 	sess, err := a.sessionLocked(sid)
+	if err != nil {
+		a.mu.Unlock()
+		return protocol.VerdictReject, nil, err
+	}
+	// `sess.skTop` is populated by OpenSession; the projected `skEval`
+	// (computed lazily) is what the KeySwitchProtocol consumes — same
+	// eval-level secret share VClient holds.
+	skEval, err := a.sessionSkEvalLocked(sess)
 	a.mu.Unlock()
 	if err != nil {
 		return protocol.VerdictReject, nil, err
 	}
-	// `sess.skShare` is populated by OpenSession; a nil here would be an
-	// invariant violation, not a runtime error.
 
 	// authKey is single-use: drop the session now, before any work that
 	// might fail. A deferred eviction guarantees the same replay
@@ -85,7 +91,7 @@ func (a *Agent) FinalizeDecryptionVerbose(
 
 	zeroSk := rlwe.NewSecretKey(a.params.CKKS)
 	agentShare := proto.AllocateShare(authenticatedCt.Level())
-	proto.GenShare(sess.skShare, zeroSk, authenticatedCt, &agentShare)
+	proto.GenShare(skEval, zeroSk, authenticatedCt, &agentShare)
 
 	combined := proto.AllocateShare(authenticatedCt.Level())
 	if err := proto.AggregateShares(clientShare, agentShare, &combined); err != nil {

@@ -37,7 +37,7 @@ func TestStoreEvalKeysUnknownSid(t *testing.T) {
 	require.NoError(t, err)
 	svc := New(params)
 
-	err = svc.StoreEvalKeys(protocol.SessionID("does-not-exist"), nil, nil)
+	err = svc.StoreEvalKeys(protocol.SessionID("does-not-exist"), nil, nil, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown session")
 }

@@ -1,0 +1,26 @@
+{
+  "name": "encrypt",
+  "phase": "phase2",
+  "started": "2026-05-16T12:01:00Z",
+  "go_version": "go1.23.0",
+  "goos": "linux",
+  "goarch": "amd64",
+  "num_cpu": 8,
+  "metadata": {},
+  "samples": [
+    {
+      "name": "encrypt",
+      "iter": 0,
+      "wall": 100000000,
+      "heap_alloc": 500,
+      "heap_inuse": 600,
+      "sys": 700,
+      "alloc_delta": 50,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "pre_vm_hwm": 3000,
+      "vm_hwm": 3100,
+      "bytes": 0
+    }
+  ]
+}

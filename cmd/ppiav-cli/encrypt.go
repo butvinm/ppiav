@@ -46,19 +46,19 @@ func runEncrypt(args []string) error {
 	if err != nil {
 		return fmt.Errorf("encrypt: load sid: %w", err)
 	}
-	skShare, err := readSecretKey(*workdir, artifactSKClient)
+	skTop, err := readSecretKey(*workdir, artifactSKClient)
 	if err != nil {
 		return fmt.Errorf("encrypt: load sk_c: %w", err)
 	}
-	pkAgg, err := readPublicKey(*workdir)
+	pkEval, err := readPublicKey(*workdir, artifactPKEval)
 	if err != nil {
-		return fmt.Errorf("encrypt: load pk_agg: %w", err)
+		return fmt.Errorf("encrypt: load pk_eval: %w", err)
 	}
 
 	client, err := vclient.NewWithState(params, &vclient.ExportedState{
-		SID:     sid,
-		SkShare: skShare,
-		PkAgg:   pkAgg,
+		SID:   sid,
+		SkTop: skTop,
+		PkAgg: pkEval,
 	})
 	if err != nil {
 		return fmt.Errorf("encrypt: build VClient: %w", err)

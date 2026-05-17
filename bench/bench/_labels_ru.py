@@ -3,7 +3,7 @@
 The defaults below are derived from ``docs/protocol.puml`` (the canonical
 sequence diagram). Edit the right-hand strings to taste; the left-hand
 keys are stable and used by ``plots_eval`` and the ``eval`` aggregator.
-Keep English abbreviations for cryptographic artefacts (pk, rlk, glk,
+Keep English abbreviations for cryptographic artefacts (pk, rlk, gks,
 sk_c, sk_a, mac_key, sid, params) per the user convention.
 
 After editing, regenerate plots without rerunning the protocol:
@@ -34,8 +34,10 @@ from __future__ import annotations
 # protocol.puml section headers. Plot bars are tight on space, so each
 # value is kept to ~3 words max.
 STEP_NAMES: dict[str, str] = {
-    # Round-level keygen labels (legacy bench runs emit these directly).
-    "keygen": "генерация ключей",
+    # Round-level keygen labels — used by _keygen_by_round_table_md to label
+    # the joint-round rows (production never emits a Sample named "keygen.*"
+    # at this level; the aggregator iterates KEYGEN_ROUND_SUBSTEPS and pulls
+    # the round display name from these keys).
     "keygen.open": "инициализация сессии",
     "keygen.pk": "генерация pk",
     "keygen.rlk-r1": "генерация rlk, раунд 1",
@@ -64,12 +66,19 @@ STEP_NAMES: dict[str, str] = {
     "keygen.galois.agent_gen": "gks: генерация gks_master_a",
     "keygen.galois.agent_agg": "gks: агрегация + иерархический вывод (агент)",
     "keygen.galois.service_store": "gks: иерархический вывод (сервис)",
-    # Per-image protocol steps.
+    # Per-image protocol steps (sub-steppable stages emit one Sample per
+    # sub-step; encrypt and partial-decrypt remain single-sample).
     "encrypt": "шифрование изображения",
-    "infer": "инференс",
-    "mac": "аутентификация шифротекста",
     "partial-decrypt": "частичная расшифровка",
-    "finalize": "окончательная расшифровка",
+    # Per-image sub-steps emitted by the instrumented per-image subcommands.
+    "infer.load_keys": "инференс: загрузка rlk + gks_infer",
+    "infer.load_input_ct": "инференс: загрузка шифротекста входа",
+    "infer.exec": "инференс: вычисление",
+    "infer.serialize_result": "инференс: сериализация результата",
+    "mac.derive_auth_keys": "mac: вывод gks_auth",
+    "mac.compute_ct": "mac: вычисление аутентифицированного ct",
+    "finalize.final_decrypt": "финализация: расшифровка + Auth",
+    "finalize.verdict_compute": "финализация: вычисление вердикта",
 }
 
 # Round → ordered list of per-party sub-step keys, used by the aggregator
@@ -116,6 +125,70 @@ PARTY_NAMES: dict[str, str] = {
     "joint": "совместно",
 }
 
+# Section headers + table column labels for summary.md. Keep keys ASCII;
+# values stay Russian per project convention.
+SECTION_HEADERS: dict[str, str] = {
+    "per_message_bytes": "Размер сообщений",
+    "key_inventory": "Инвентарь ключей",
+    "network_wire_time": "Время передачи по сети",
+    "accuracy_plain_vs_fhe": "Точность: C3AE открытый текст vs FHE",
+}
+
+# Column headers for the per-message bytes / key inventory tables. Kept
+# here so adjacent tables stay terminology-consistent.
+TABLE_HEADERS: dict[str, str] = {
+    "message_id": "id",
+    "message_label": "сообщение",
+    "sender": "отправитель",
+    "receiver": "получатель",
+    "bytes": "байт",
+    "kib": "КиБ",
+    "mib": "МиБ",
+    "key_name": "ключ",
+    "key_location": "расположение",
+    "on_wire": "передаётся",
+    "on_wire_yes": "да",
+    "on_wire_no": "нет",
+    "empty": "—",
+    "metric": "метрика",
+    "plain_column": "открытый текст",
+    "fhe_column": "FHE",
+}
+
+# Russian labels for the confusion-matrix / rate rows used by the
+# plain-vs-FHE accuracy comparison table. Keys mirror the dict returned
+# by ``_classify`` plus a synthetic ``samples`` row.
+ACCURACY_METRIC_NAMES: dict[str, str] = {
+    "samples": "выборка (всего)",
+    "tp": "истинно-положительные",
+    "tn": "истинно-отрицательные",
+    "fp": "ложно-положительные",
+    "fn": "ложно-отрицательные",
+    "unknown": "не определено",
+    "fpr": "FPR",
+    "fnr": "FNR",
+    "accuracy": "точность",
+}
+
+# Display names for KeyEntry.location values (KeyLocation literal).
+KEY_LOCATION_NAMES: dict[str, str] = {
+    "client_local": "клиент",
+    "agent_local": "агент",
+    "service_local": "сервис",
+    "derived_agent": "агент (производный)",
+    "derived_service": "сервис (производный)",
+    "aggregated_all": "у всех (агрегированный)",
+    "share": "доля (на проводе)",
+}
+
+# Display names for Party values used in the per-message bytes table.
+PARTY_SHORT_NAMES: dict[str, str] = {
+    "client": "клиент",
+    "agent": "агент",
+    "service": "сервис",
+    "resource_service": "ресурс-сервис",
+}
+
 # Axis / legend / table-header strings.
 AXIS: dict[str, str] = {
     "wall_ms": "время выполнения, мс",
@@ -132,6 +205,7 @@ AXIS: dict[str, str] = {
     "session_ms": "время сессии, мс",
     "party_lane": "сторона",
     "message_name": "сообщение",
+    "rate": "доля",
 }
 
 # Legend entries (Gantt + macro-phase colours).
@@ -146,18 +220,8 @@ LEGEND: dict[str, str] = {
     "macro_verify": "проверка результата",
 }
 
-# Per-step → party mapping. Per-party keygen sub-steps map to their
-# specific party (no "joint" anywhere). Legacy round-level keys keep a
-# "joint" tag but are NOT placed on any Gantt lane; the aggregator
-# renders them in the "Keygen by round" no-party table.
+# Per-step → party mapping for every Sample name production actually emits.
 PARTY_BY_STEP: dict[str, str] = {
-    # Legacy round-level keys: aggregator handles separately.
-    "keygen": "joint",
-    "keygen.open": "joint",
-    "keygen.pk": "joint",
-    "keygen.rlk-r1": "joint",
-    "keygen.rlk-r2": "joint",
-    "keygen.galois": "joint",
     # Per-party keygen sub-steps.
     "keygen.open.service": "service",
     "keygen.open.agent": "agent",
@@ -179,20 +243,29 @@ PARTY_BY_STEP: dict[str, str] = {
     "keygen.galois.service_store": "service",
     # Per-image steps.
     "encrypt": "client",
-    "infer": "service",
-    "mac": "agent",
     "partial-decrypt": "client",
-    "finalize": "agent",
+    # Per-image sub-steps.
+    "infer.load_keys": "service",
+    "infer.load_input_ct": "service",
+    "infer.exec": "service",
+    "infer.serialize_result": "service",
+    "mac.derive_auth_keys": "agent",
+    "mac.compute_ct": "agent",
+    "finalize.final_decrypt": "agent",
+    "finalize.verdict_compute": "agent",
 }
 
-# Producer → consumer mapping for the per-image transfer arrows in the
-# session-timeline Gantt. Mirrors the message flow in protocol.puml's
-# inference + verifiable-decryption sections. Each tuple is
-# (sender_party, receiver_party, artifact_filename); the artifact is
-# sized via os.stat at aggregate time.
-TRANSFERS_PER_IMAGE: tuple[tuple[str, str, str], ...] = (
-    ("client", "service", "input_ct.bin"),
-    ("service", "agent", "result_ct.bin"),
-    ("agent", "client", "auth_ct.bin"),
-    ("client", "agent", "client_share.bin"),
+# Per-image transfer events for the session-timeline Gantt. Mirrors the
+# message flow in protocol.puml's inference + verifiable-decryption sections.
+# Each tuple is (after_parent_stage, sender_party, receiver_party, message_id);
+# the resolver pulls bytes from the per-message catalog row to size the rect.
+# input_ct hops twice on the wire: VClient -> VAgent then VAgent -> VService.
+# Both `EncryptedImage` rows in MESSAGES share the same id; the (sender,
+# receiver) pair disambiguates the catalog lookup.
+TRANSFERS_PER_IMAGE: tuple[tuple[str, str, str, str], ...] = (
+    ("encrypt", "client", "agent", "EncryptedImage"),
+    ("encrypt", "agent", "service", "EncryptedImage"),
+    ("infer", "service", "agent", "InferenceResult"),
+    ("mac", "agent", "client", "AuthenticatedResult"),
+    ("partial-decrypt", "client", "agent", "PartialDecryption"),
 )

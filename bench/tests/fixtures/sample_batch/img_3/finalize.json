@@ -1,0 +1,40 @@
+{
+  "name": "finalize",
+  "phase": "phase2",
+  "started": "2026-05-16T12:05:00Z",
+  "go_version": "go1.23.0",
+  "goos": "linux",
+  "goarch": "amd64",
+  "num_cpu": 8,
+  "metadata": {},
+  "samples": [
+    {
+      "name": "finalize.final_decrypt",
+      "iter": 0,
+      "wall": 900000000,
+      "heap_alloc": 4000,
+      "heap_inuse": 4100,
+      "sys": 4200,
+      "alloc_delta": 400,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "pre_vm_hwm": 3800,
+      "vm_hwm": 3900,
+      "bytes": 0
+    },
+    {
+      "name": "finalize.verdict_compute",
+      "iter": 0,
+      "wall": 1000000,
+      "heap_alloc": 4010,
+      "heap_inuse": 4110,
+      "sys": 4210,
+      "alloc_delta": 410,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "pre_vm_hwm": 3900,
+      "vm_hwm": 4000,
+      "bytes": 0
+    }
+  ]
+}

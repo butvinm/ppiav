@@ -3,6 +3,7 @@ package vservice
 import (
 	"fmt"
 
+	hierkeys "github.com/butvinm/lattigo-hierkeys"
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
@@ -15,13 +16,20 @@ import (
 // it. The Orion model itself is NOT serialized: NewWithState reloads it
 // from disk (or skips loading entirely when orionDir == "").
 //
-// Rlk + Glk are the aggregated evaluation keys produced by the multi-party
-// keygen handshake. NewWithState rebuilds the evaluator from them, bypassing
-// the StoreEvalKeys path that requires a prior OpenSession.
+// The snapshot carries the small inbound payload (`Rlk`, `PKTop`,
+// `GksMaster`) PLUS the materialised `GksInfer` slice when available —
+// `ExportState` populates it directly from the live session so the CLI
+// `keygen` subcommand can persist the derived rotation set to disk
+// (per-sample re-derivation is multi-minute at LogN=16). `NewWithState`
+// honours `GksInfer` when supplied (no re-derivation) and falls back to
+// running the hierkeys derivation against `PKTop + GksMaster` when nil —
+// the HTTP path doesn't carry it on the wire.
 type ExportedState struct {
-	SID protocol.SessionID
-	Rlk *rlwe.RelinearizationKey
-	Glk []*rlwe.GaloisKey
+	SID       protocol.SessionID
+	Rlk       *rlwe.RelinearizationKey
+	PKTop     *rlwe.PublicKey
+	GksMaster map[int]*hierkeys.MasterKey
+	GksInfer  []*rlwe.GaloisKey
 }
 
 // ExportState snapshots the per-session state for `sid`. Returns an error
@@ -29,9 +37,12 @@ type ExportedState struct {
 // (StoreEvalKeys not called). The live session remains in the Service; the
 // caller is responsible for any subsequent eviction.
 //
-// Rlk and Glk are populated from the values passed to StoreEvalKeys; the
-// slice is shared by reference (GaloisKeys are large; tests and the HTTP
-// path do not mutate per-element entries).
+// `Rlk`, `PKTop`, and `GksMaster` are stashed by StoreEvalKeys and shared
+// by reference. `GksInfer` is populated from the live session so the CLI
+// keygen subcommand can persist the derived rotation set to disk
+// (per-sample re-derivation is multi-minute at LogN=16). NewWithState
+// honours a non-nil `GksInfer` when supplied; otherwise it re-runs the
+// hierarchical derivation against `PKTop + GksMaster`.
 func (s *Service) ExportState(sid protocol.SessionID) (*ExportedState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -42,7 +53,13 @@ func (s *Service) ExportState(sid protocol.SessionID) (*ExportedState, error) {
 	if sess.eval == nil && sess.orionEval == nil {
 		return nil, fmt.Errorf("%w (sid %q)", ErrNoEvaluator, sid)
 	}
-	return &ExportedState{SID: sid, Rlk: sess.rlk, Glk: sess.glk}, nil
+	return &ExportedState{
+		SID:       sid,
+		Rlk:       sess.rlk,
+		PKTop:     sess.pkTop,
+		GksMaster: sess.gksMaster,
+		GksInfer:  sess.gksInfer,
+	}, nil
 }
 
 // NewWithState constructs a fresh Service seeded from `state`. When
@@ -52,10 +69,12 @@ func (s *Service) ExportState(sid protocol.SessionID) (*ExportedState, error) {
 // fields are ignored — mirroring NewWithOrion). When `orionDir` is empty
 // the Service runs in synthetic-x² mode and `params` is used as-is.
 //
-// The session map is seeded directly: `state.SID → {evaluator}` with the
-// evaluator built from `state.Rlk + state.Glk`. The random sid mint in
-// OpenSession is bypassed so the bench `infer` subcommand can drive Infer
-// against the keygen-emitted SID without re-running the handshake.
+// The session map is seeded directly: `state.SID → {evaluator}`. The
+// per-target Galois keys are re-derived from `state.PKTop +
+// state.GksMaster` via the same hierarchical expansion
+// `StoreEvalKeys` runs. The random sid mint in OpenSession is bypassed
+// so the bench `infer` subcommand can drive Infer against the
+// keygen-emitted SID without re-running the multi-party handshake.
 func NewWithState(params protocol.Params, orionDir string, state *ExportedState) (*Service, error) {
 	if state == nil {
 		return nil, fmt.Errorf("vservice: NewWithState state is nil")
@@ -69,21 +88,41 @@ func NewWithState(params protocol.Params, orionDir string, state *ExportedState)
 		mergedParams = params
 	)
 	if orionDir != "" {
-		m, ckksParams, inputLevel, rotations, err := loadOrionModel(orionDir)
+		merged, m, err := mergeOrionParams(params, orionDir)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("vservice: NewWithState: %w", err)
 		}
+		mergedParams = merged
 		model = m
-		mergedParams.CKKS = ckksParams
-		mergedParams.InputLevel = inputLevel
-		if len(params.ExtraRotationIndices) > 0 || len(rotations) > 0 {
-			combined := make([]int, 0, len(params.ExtraRotationIndices)+len(rotations))
-			combined = append(combined, params.ExtraRotationIndices...)
-			combined = append(combined, rotations...)
-			mergedParams.ExtraRotationIndices = combined
-		}
 	} else if params.CKKS.LogN() <= 0 {
 		return nil, fmt.Errorf("vservice: NewWithState params.CKKS is zero-valued (LogN <= 0)")
+	}
+
+	// Honour a pre-derived gks_infer when supplied — the bench `infer`
+	// CLI subcommand passes it in straight from disk (gks_infer.bin) so a
+	// per-sample re-derivation isn't paid on every Infer invocation. The
+	// HTTP path leaves it nil and re-derives from PKTop + GksMaster.
+	//
+	// When supplied, validate the loaded set actually covers
+	// ExtraRotationIndices — a mismatched gks_infer.bin (wrong manifest,
+	// different λ, swapped artifact dir) would silently produce wrong
+	// outputs at Infer time. Empty ExtraRotationIndices means synthetic-x²
+	// mode, in which case gks_infer should be empty.
+	var (
+		gks        []*rlwe.GaloisKey
+		deriveSecs float64
+	)
+	if state.GksInfer != nil {
+		if err := validateGksInferCoverage(mergedParams, state.GksInfer); err != nil {
+			return nil, fmt.Errorf("vservice: NewWithState validate GksInfer: %w", err)
+		}
+		gks = state.GksInfer
+	} else {
+		var err error
+		gks, deriveSecs, err = deriveGksInfer(mergedParams, state.PKTop, state.GksMaster)
+		if err != nil {
+			return nil, fmt.Errorf("vservice: NewWithState derive gks_infer: %w", err)
+		}
 	}
 
 	s := &Service{
@@ -92,11 +131,17 @@ func NewWithState(params protocol.Params, orionDir string, state *ExportedState)
 		sessions:   map[protocol.SessionID]*sessionState{},
 	}
 
-	evk := rlwe.NewMemEvaluationKeySet(state.Rlk, state.Glk...)
-	// Stash rlk/glk on the session so a subsequent ExportState round-trips
-	// the same keys back out — without this the rebuilt Service can build
-	// the evaluator but ExportState would return nil keys.
-	sess := &sessionState{rlk: state.Rlk, glk: state.Glk}
+	evk := rlwe.NewMemEvaluationKeySet(state.Rlk, gks...)
+	// Stash everything on the session so a subsequent ExportState
+	// round-trips the same compact payload back out (PKTop +
+	// GksMaster, not the multi-GB derived slice).
+	sess := &sessionState{
+		rlk:                   state.Rlk,
+		gksInfer:              gks,
+		pkTop:                 state.PKTop,
+		gksMaster:             state.GksMaster,
+		deriveGksInferSeconds: deriveSecs,
+	}
 	if model != nil {
 		oe, err := orioneval.NewEvaluatorFromKeySet(mergedParams.CKKS, evk, nil)
 		if err != nil {
@@ -108,4 +153,38 @@ func NewWithState(params protocol.Params, orionDir string, state *ExportedState)
 	}
 	s.sessions[state.SID] = sess
 	return s, nil
+}
+
+// validateGksInferCoverage checks that the supplied gks_infer slice covers
+// the per-target rotation set the inference circuit needs. Each label in
+// `params.ExtraRotationIndices` (signed-label convention per
+// `protocol.Params` docs) must have a corresponding key at
+// `params.CKKS.GaloisElement(-label)`. A mismatched gks_infer.bin (wrong
+// manifest, different λ, swapped artifact dir) silently produces wrong
+// outputs at Infer time without this guard.
+func validateGksInferCoverage(params protocol.Params, gks []*rlwe.GaloisKey) error {
+	targets := params.ExtraRotationIndices
+	if len(targets) == 0 {
+		if len(gks) != 0 {
+			return fmt.Errorf("ExtraRotationIndices empty but GksInfer has %d entries", len(gks))
+		}
+		return nil
+	}
+	if len(gks) != len(targets) {
+		return fmt.Errorf("GksInfer length %d != ExtraRotationIndices length %d", len(gks), len(targets))
+	}
+	present := make(map[uint64]struct{}, len(gks))
+	for _, gk := range gks {
+		if gk == nil {
+			return fmt.Errorf("GksInfer contains nil entry")
+		}
+		present[gk.GaloisElement] = struct{}{}
+	}
+	for _, label := range targets {
+		want := params.CKKS.GaloisElement(-label)
+		if _, ok := present[want]; !ok {
+			return fmt.Errorf("GksInfer missing GaloisElement %d (label %d)", want, label)
+		}
+	}
+	return nil
 }

@@ -3,21 +3,15 @@ package main
 import (
 	"flag"
 	"fmt"
+	"time"
 
 	"github.com/butvinm/ppiav/internal/bench"
 	"github.com/butvinm/ppiav/internal/vagent"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 )
 
-// runMAC loads the VAgent state written by `keygen` and runs Stage 4a —
-// `BuildAuthenticatedCt` — on a saved result ciphertext. The output
-// authenticated ciphertext is written to --out-ct; a single-sample
-// bench.Run named "mac" is written to --out (default <workdir>/mac.json).
-//
-// The VAgent state surface for Auth is wide: sk_a drives the per-session
-// secret, mac_key carries (S, SeedF), and the encryptor + evaluator need
-// pk_agg + rlk + glk_full respectively. All of these are persisted by
-// keygen and reloaded here via NewWithState.
+// runMAC loads the VAgent state written by `keygen`, derives the auth-atom
+// keys locally, and runs `BuildAuthenticatedCt` on a saved result ciphertext.
 func runMAC(args []string) error {
 	fs := flag.NewFlagSet("mac", flag.ContinueOnError)
 	workdir := fs.String("workdir", "", "per-batch keygen artifact directory (required)")
@@ -45,7 +39,7 @@ func runMAC(args []string) error {
 	if err != nil {
 		return fmt.Errorf("mac: load sid: %w", err)
 	}
-	skShare, err := readSecretKey(*workdir, artifactSKAgent)
+	skTop, err := readSecretKey(*workdir, artifactSKAgent)
 	if err != nil {
 		return fmt.Errorf("mac: load sk_a: %w", err)
 	}
@@ -53,33 +47,21 @@ func runMAC(args []string) error {
 	if err != nil {
 		return fmt.Errorf("mac: load mac key: %w", err)
 	}
-	pkAgg, err := readPublicKey(*workdir)
+	pkEval, err := readPublicKey(*workdir, artifactPKEval)
 	if err != nil {
-		return fmt.Errorf("mac: load pk_agg: %w", err)
+		return fmt.Errorf("mac: load pk_eval: %w", err)
+	}
+	pkTop, err := readPublicKey(*workdir, artifactPKTop)
+	if err != nil {
+		return fmt.Errorf("mac: load pk_top: %w", err)
 	}
 	rlk, err := readRelinearizationKey(*workdir)
 	if err != nil {
 		return fmt.Errorf("mac: load rlk: %w", err)
 	}
-	gks, err := readGaloisKeys(*workdir, artifactGLKFull)
-	if err != nil {
-		return fmt.Errorf("mac: load glk_full: %w", err)
-	}
 	ct, err := readCiphertextPath(*inCt)
 	if err != nil {
 		return fmt.Errorf("mac: load in-ct: %w", err)
-	}
-
-	agent, err := vagent.NewWithState(params, &vagent.ExportedState{
-		SID:     sid,
-		SkShare: skShare,
-		MacKey:  macKey,
-		PkAgg:   pkAgg,
-		Rlk:     rlk,
-		Gks:     gks,
-	})
-	if err != nil {
-		return fmt.Errorf("mac: build VAgent: %w", err)
 	}
 
 	run := bench.NewRun("mac", benchPhase)
@@ -87,9 +69,62 @@ func runMAC(args []string) error {
 	run.Metadata["in_ct"] = *inCt
 	run.Metadata["out_ct"] = *outCt
 	run.Metadata["sid"] = string(sid)
+	writeRunOnExit := func() { _ = run.WriteJSON(stepOutPath(*outPath, *workdir, "mac")) }
+
+	// mac.derive_auth_keys captures both the gks_master read I/O (the
+	// dominant input by far at LogN=16) and NewWithState's hierkeys
+	// LevelExpansion + FinalizeKey pass over the negative auth atoms.
+	// Bytes carries the derived gks_auth bundle size — summed
+	// BinarySize() across each *rlwe.GaloisKey in the slice.
+	var (
+		agent             *vagent.Agent
+		readGksMasterSecs float64
+	)
+	deriveSample, err := bench.MeasureWithSize(sampleMacDeriveAuthKeys, func() (uint64, error) {
+		readGksStart := time.Now()
+		gksMaster, e := readMasterKeys(*workdir, artifactGKSMaster)
+		if e != nil {
+			return 0, fmt.Errorf("load gks_master: %w", e)
+		}
+		readGksMasterSecs = time.Since(readGksStart).Seconds()
+		a, e := vagent.NewWithState(params, &vagent.ExportedState{
+			SID:       sid,
+			SkTop:     skTop,
+			MacKey:    macKey,
+			PkAgg:     pkEval,
+			PkTop:     pkTop,
+			Rlk:       rlk,
+			GksMaster: gksMaster,
+		})
+		if e != nil {
+			return 0, fmt.Errorf("build VAgent: %w", e)
+		}
+		agent = a
+		gksAuth, ok := agent.GksAuth(sid)
+		if !ok {
+			return 0, fmt.Errorf("VAgent.GksAuth: no derived auth-atom keys for sid %q", sid)
+		}
+		var total uint64
+		for _, gk := range gksAuth {
+			if gk == nil {
+				continue
+			}
+			total += uint64(gk.BinarySize())
+		}
+		return total, nil
+	})
+	run.Append(deriveSample)
+	run.Metadata["read_gks_master_seconds"] = readGksMasterSecs
+	if err != nil {
+		writeRunOnExit()
+		return fmt.Errorf("mac: derive_auth_keys: %w", err)
+	}
+	if d, ok := agent.DeriveGksAuthSeconds(sid); ok {
+		run.Metadata["derive_gks_auth_seconds"] = d
+	}
 
 	var authCt *rlwe.Ciphertext
-	sample, err := bench.Measure("mac", func() error {
+	computeSample, err := bench.Measure(sampleMacComputeCt, func() error {
 		c, macErr := agent.BuildAuthenticatedCt(sid, ct)
 		if macErr != nil {
 			return fmt.Errorf("VAgent.BuildAuthenticatedCt: %w", macErr)
@@ -97,14 +132,14 @@ func runMAC(args []string) error {
 		authCt = c
 		return nil
 	})
-	run.Append(sample)
+	run.Append(computeSample)
 	if err != nil {
-		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "mac"))
+		writeRunOnExit()
 		return fmt.Errorf("mac: %w", err)
 	}
 
 	if err := writeCiphertextPath(*outCt, authCt); err != nil {
-		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "mac"))
+		writeRunOnExit()
 		return fmt.Errorf("mac: write ciphertext: %w", err)
 	}
 
@@ -113,4 +148,3 @@ func runMAC(args []string) error {
 	}
 	return nil
 }
-

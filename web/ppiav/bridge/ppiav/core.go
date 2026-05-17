@@ -22,39 +22,60 @@ import (
 	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
 )
 
-// paramsWire mirrors the JSON shape VService writes from
-// internal/vservice/http.go's paramsWire. Keeping a separate copy here
-// avoids pulling vservice into the WASM bridge (it imports net/http).
-type paramsWire struct {
-	CKKS                 json.RawMessage `json:"ckks"`
-	AuthenticatorLambda  int             `json:"authenticator_lambda"`
-	AuthenticatorEpsilon float64         `json:"authenticator_epsilon"`
-	FloodSigma           float64         `json:"flood_sigma"`
-	ExtraRotationIndices []int           `json:"extra_rotation_indices,omitempty"`
-	InputLevel           int             `json:"input_level"`
-}
-
-// ParseParamsJSON decodes the JSON written by vservice.writeParams into a
-// protocol.Params. Exported for tests.
-func ParseParamsJSON(data []byte) (protocol.Params, error) {
-	var pw paramsWire
-	if err := json.Unmarshal(data, &pw); err != nil {
-		return protocol.Params{}, fmt.Errorf("ppiav: decode params: %w", err)
+// ParseManifestJSON decodes the JSON written by vservice.writeManifest
+// into a protocol.Params. The LLKN hierarchy is reconstructed locally
+// from the decoded CKKS params using the wire LLKNLogPHK schedule,
+// validated against the bridge's own DefaultLLKNLogPHK to fail loud on
+// any silent drift between Go and WASM builds. LLKNBase is likewise
+// validated against DefaultLLKNBase. Exported for tests.
+func ParseManifestJSON(data []byte) (protocol.Params, error) {
+	var m protocol.Manifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return protocol.Params{}, fmt.Errorf("ppiav: decode manifest: %w", err)
+	}
+	if m.LLKNBase != protocol.DefaultLLKNBase {
+		return protocol.Params{}, fmt.Errorf("ppiav: LLKNBase mismatch (wire=%d, bridge expects %d)", m.LLKNBase, protocol.DefaultLLKNBase)
+	}
+	if !equalIntSlice(m.LLKNLogPHK, protocol.DefaultLLKNLogPHK) {
+		return protocol.Params{}, fmt.Errorf("ppiav: LLKNLogPHK mismatch (wire=%v, bridge expects %v)", m.LLKNLogPHK, protocol.DefaultLLKNLogPHK)
 	}
 	var ckksParams ckks.Parameters
-	if err := ckksParams.UnmarshalJSON(pw.CKKS); err != nil {
+	if err := ckksParams.UnmarshalJSON(m.CKKS); err != nil {
 		return protocol.Params{}, fmt.Errorf("ppiav: decode CKKS params: %w", err)
 	}
+	// LLKNLogPHK was validated above against DefaultLLKNLogPHK — route
+	// through the canonical builder so this stays the single LLKN
+	// construction site shared with Defaults / LoadOrionParams / vservice.
+	llknParams, err := protocol.BuildLLKNParams(ckksParams)
+	if err != nil {
+		return protocol.Params{}, fmt.Errorf("ppiav: build LLKN parameters: %w", err)
+	}
 	return protocol.Params{
-		CKKS: ckksParams,
+		CKKS:     ckksParams,
+		LLKN:     llknParams,
+		LLKNBase: m.LLKNBase,
 		Authenticator: authenticator.Config{
-			Lambda:  pw.AuthenticatorLambda,
-			Epsilon: pw.AuthenticatorEpsilon,
+			Lambda:  m.AuthenticatorLambda,
+			Epsilon: m.AuthenticatorEpsilon,
 		},
-		FloodSigma:           pw.FloodSigma,
-		ExtraRotationIndices: pw.ExtraRotationIndices,
-		InputLevel:           pw.InputLevel,
+		FloodSigma:           m.FloodSigma,
+		ExtraRotationIndices: m.ExtraRotationIndices,
+		InputLevel:           m.InputLevel,
 	}, nil
+}
+
+// equalIntSlice reports whether two int slices have the same length and
+// element-wise contents. Used for LLKNLogPHK schedule validation.
+func equalIntSlice(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // handles stores *vclient.Client instances keyed by an integer handle
@@ -69,7 +90,7 @@ var (
 // NewClient parses the params JSON, constructs a vclient.Client with a
 // fresh sk_c, stores it under a new handle, and returns the handle.
 func NewClient(paramsJSON []byte, sid string) (uint64, error) {
-	params, err := ParseParamsJSON(paramsJSON)
+	params, err := ParseManifestJSON(paramsJSON)
 	if err != nil {
 		return 0, err
 	}
@@ -97,7 +118,7 @@ func loadClient(h uint64) (*vclient.Client, error) {
 }
 
 // GenPKShare runs Stage 2b on the client and returns the marshaled
-// VClientPKShare bytes.
+// VClientPKShare bytes (dual eval+top shares; see protocol.VClientPKShare).
 func GenPKShare(h uint64) ([]byte, error) {
 	c, err := loadClient(h)
 	if err != nil {
@@ -107,15 +128,16 @@ func GenPKShare(h uint64) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ppiav: GenPKShare: %w", err)
 	}
-	out, err := protocol.VClientPKShare{Share: share}.MarshalBinary()
+	out, err := share.MarshalBinary()
 	if err != nil {
 		return nil, fmt.Errorf("ppiav: marshal VClientPKShare: %w", err)
 	}
 	return out, nil
 }
 
-// AggregatePK consumes the agent's marshaled VAgentPKShare bytes and
-// finalises the aggregated pk on the client.
+// AggregatePK consumes the agent's marshaled VAgentPKShare bytes (dual
+// eval+top shares) and finalises both aggregated public keys on the
+// client.
 func AggregatePK(h uint64, agentShareBytes []byte) error {
 	c, err := loadClient(h)
 	if err != nil {
@@ -125,7 +147,7 @@ func AggregatePK(h uint64, agentShareBytes []byte) error {
 	if err := msg.UnmarshalBinary(agentShareBytes); err != nil {
 		return fmt.Errorf("ppiav: unmarshal VAgentPKShare: %w", err)
 	}
-	if err := c.AggregatePK(msg.Share); err != nil {
+	if err := c.AggregatePK(msg); err != nil {
 		return fmt.Errorf("ppiav: AggregatePK: %w", err)
 	}
 	return nil
@@ -184,25 +206,26 @@ func GenRLKShareRound2(h uint64) ([]byte, error) {
 	return out, nil
 }
 
-// GenGaloisShares runs Stage 2d and returns the marshaled
-// VClientGaloisKeyShare bytes (length-prefixed concatenation of all
-// per-rotation shares in canonical label order).
-func GenGaloisShares(h uint64) ([]byte, error) {
+// GenMasterShares runs Stage 2d (single master atom set Galois handshake)
+// and returns the marshaled VClientGaloisShares bytes — one length-
+// prefixed share list of top-level master atoms (ascending). The
+// JS-visible namespace key stays `"genGaloisShares"` (see ppiav.go) so
+// the TS client doesn't need a coordinated rename.
+func GenMasterShares(h uint64) ([]byte, error) {
 	c, err := loadClient(h)
 	if err != nil {
 		return nil, err
 	}
-	shares, _, err := c.GenGaloisShares()
+	shares, _, err := c.GenMasterShares()
 	if err != nil {
-		return nil, fmt.Errorf("ppiav: GenGaloisShares: %w", err)
+		return nil, fmt.Errorf("ppiav: GenMasterShares: %w", err)
 	}
-	// vclient.GenGaloisShares can legitimately return (nil, nil, nil) when
-	// the canonical rotation set is empty (Lambda<=1). Allow that — the
-	// resulting marshal is a 4-byte zero count.
-	msg := protocol.VClientGaloisKeyShare{Shares: shares}
+	msg := protocol.VClientGaloisShares{
+		MasterShares: shares,
+	}
 	out, err := msg.MarshalBinary()
 	if err != nil {
-		return nil, fmt.Errorf("ppiav: marshal VClientGaloisKeyShare: %w", err)
+		return nil, fmt.Errorf("ppiav: marshal VClientGaloisShares: %w", err)
 	}
 	return out, nil
 }

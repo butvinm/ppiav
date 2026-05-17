@@ -4,6 +4,8 @@ import (
 	"math"
 	"testing"
 
+	hierkeys "github.com/butvinm/lattigo-hierkeys"
+	"github.com/butvinm/lattigo-hierkeys/llkn"
 	"github.com/butvinm/ppiav/internal/authenticator"
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/butvinm/ppiav/internal/testutil"
@@ -37,8 +39,12 @@ func testParams(t *testing.T) protocol.Params {
 	}
 	ckksParams, err := ckks.NewParametersFromLiteral(lit)
 	require.NoError(t, err)
+	llknParams, err := llkn.NewParameters(ckksParams.Parameters, [][]int{{40}})
+	require.NoError(t, err)
 	return protocol.Params{
 		CKKS:          ckksParams,
+		LLKN:          llknParams,
+		LLKNBase:      protocol.DefaultLLKNBase,
 		Authenticator: authenticator.Config{Lambda: 8, Epsilon: math.Exp2(20)},
 		FloodSigma:    math.Exp2(16),
 	}
@@ -99,8 +105,8 @@ func (n *negatingInferrer) OpenSession() (protocol.SessionID, error) {
 	return n.inner.OpenSession()
 }
 
-func (n *negatingInferrer) StoreEvalKeys(sid protocol.SessionID, rlk *rlwe.RelinearizationKey, gks []*rlwe.GaloisKey) error {
-	return n.inner.StoreEvalKeys(sid, rlk, gks)
+func (n *negatingInferrer) StoreEvalKeys(sid protocol.SessionID, rlk *rlwe.RelinearizationKey, pkTop *rlwe.PublicKey, gksMaster map[int]*hierkeys.MasterKey) error {
+	return n.inner.StoreEvalKeys(sid, rlk, pkTop, gksMaster)
 }
 
 func (n *negatingInferrer) Params() protocol.Params { return n.params }
@@ -144,6 +150,11 @@ func TestRunnerRejectsNegativeLogit(t *testing.T) {
 	ckksParams, err := ckks.NewParametersFromLiteral(lit)
 	require.NoError(t, err)
 	params.CKKS = ckksParams
+	// LLKN was built against the original Defaults() CKKS — rebuild against
+	// the override so params.LLKN.Top() matches the dimensions skTop is
+	// derived from. Mirrors vservice.NewWithOrion / NewWithState.
+	params.LLKN, err = protocol.BuildLLKNParams(ckksParams)
+	require.NoError(t, err)
 
 	inner := vservice.New(params)
 	mock := &negatingInferrer{inner: inner, params: params}

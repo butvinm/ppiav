@@ -52,7 +52,7 @@ func runFinalizeWith(t *testing.T, m float64) (protocol.Verdict, error) {
 	require.NoError(t, err)
 	zeroSk := rlwe.NewSecretKey(params.CKKS)
 	clientShare := clientProto.AllocateShare(ctM.Level())
-	clientProto.GenShare(stub.skC, zeroSk, ctM, &clientShare)
+	clientProto.GenShare(stub.skCEval, zeroSk, ctM, &clientShare)
 
 	return a.FinalizeDecryption(sid, ctM, clientShare)
 }
@@ -153,7 +153,7 @@ func TestFinalizeDropsSessionOnSuccess(t *testing.T) {
 	require.NoError(t, err)
 	zeroSk := rlwe.NewSecretKey(params.CKKS)
 	clientShare := clientProto.AllocateShare(ctM.Level())
-	clientProto.GenShare(stub.skC, zeroSk, ctM, &clientShare)
+	clientProto.GenShare(stub.skCEval, zeroSk, ctM, &clientShare)
 
 	_, err = a.FinalizeDecryption(sid, ctM, clientShare)
 	require.NoError(t, err)
@@ -217,7 +217,7 @@ func runFinalizeVerboseWith(t *testing.T, m float64) (protocol.Verdict, []float6
 	require.NoError(t, err)
 	zeroSk := rlwe.NewSecretKey(params.CKKS)
 	clientShare := clientProto.AllocateShare(ctM.Level())
-	clientProto.GenShare(stub.skC, zeroSk, ctM, &clientShare)
+	clientProto.GenShare(stub.skCEval, zeroSk, ctM, &clientShare)
 
 	verdict, slots, err := a.FinalizeDecryptionVerbose(sid, ctM, clientShare)
 	return verdict, slots, params, sCopy, err

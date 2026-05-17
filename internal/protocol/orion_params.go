@@ -14,6 +14,30 @@ import (
 // Bumped together with `orionManifest` when fields are renamed/removed.
 const orionManifestSchemaVersion = 2
 
+// ProtocolReserveLevels is retained at 0: with orion-v2-compiler >=2.1.6
+// the level reservation that MAC needs is baked at *compile* time via
+// CompilerConfig.reserve_output_levels (orion commit `feat(compiler):
+// add CompilerConfig.reserve_output_levels for downstream MAC`). Orion
+// shifts every node's level annotation up, so the compiled model's
+// LinearTransforms encode their plaintexts at the higher moduli and
+// result_ct lands at level `reserve_output_levels` directly — no
+// protocol-layer chain extension required (and any extension here would
+// be wasted: lattigo's LinearTransform drops the input ct to the LT's
+// baked level annotation, eating extra primes for free).
+//
+// The constant + helpers (`extendLogQForProtocolReserve`,
+// `ExtendCKKSForProtocolReserve`) are kept at 0 so the loaders are
+// no-ops, leaving a clear callout for a future caller who genuinely
+// needs further Go-side headroom. See
+// `internal/authenticator/level_reservation_test.go` for the
+// CKKS-level invariant the chain still has to satisfy.
+const ProtocolReserveLevels = 0
+
+// protocolReserveLogBits is the bit-size of each extra Q prime appended for
+// MAC headroom. Matches the model's evaluation-prime bit-size (40 in the
+// logn16 profile) so the scale arithmetic stays uniform across the chain.
+const protocolReserveLogBits = 40
+
 // orionManifest mirrors the JSON metadata block Orion emits when it writes
 // a compiled model (see `~/Dev/orion/python/orion-compiler/orion_compiler/
 // compiled_model.py:_build_metadata`). We only decode the fields needed to
@@ -46,8 +70,9 @@ type orionManifest struct {
 // scale/ring type), the per-circuit `InputLevel`, and the rotation index
 // set required to evaluate the circuit. The authenticator config and
 // flooding sigma come from the same defaults `Defaults()` uses — the Orion
-// path only changes the source of the CKKS knobs and unions the Orion
-// rotation indices into `RotationIndices()`.
+// path only changes the source of the CKKS knobs and stamps the Orion
+// rotation indices onto `ExtraRotationIndices` for the inference-side
+// handshake.
 //
 // File format: see `orionManifest`. The fixture under
 // `internal/protocol/testdata/orion_manifest.json` documents the exact
@@ -82,9 +107,17 @@ func LoadOrionParams(manifestPath string) (Params, error) {
 		return Params{}, fmt.Errorf("protocol: Orion manifest %q: %w", manifestPath, err)
 	}
 
+	// Extend the model's Q chain by ProtocolReserveLevels extra eval-level
+	// primes so MAC's slot-mask multiply has level ≥ 1 headroom after the
+	// circuit consumes `InputLevel` rescales. The extension is invisible
+	// to the model: the manifest's declared InputLevel is bumped by the
+	// same amount so encrypt uses the extended chain's higher level.
+	logQ := extendLogQForProtocolReserve(m.Params.LogQ)
+	inputLevel := m.InputLevel + ProtocolReserveLevels
+
 	ckksParams, err := ckks.NewParametersFromLiteral(ckks.ParametersLiteral{
 		LogN:            m.Params.LogN,
-		LogQ:            m.Params.LogQ,
+		LogQ:            logQ,
 		LogP:            m.Params.LogP,
 		LogDefaultScale: m.Params.LogDefaultScale,
 		RingType:        ringType,
@@ -93,15 +126,15 @@ func LoadOrionParams(manifestPath string) (Params, error) {
 		return Params{}, fmt.Errorf("protocol: build CKKS parameters from Orion manifest %q: %w", manifestPath, err)
 	}
 
-	if m.InputLevel < 1 || m.InputLevel > ckksParams.MaxLevel() {
+	if inputLevel < 1 || inputLevel > ckksParams.MaxLevel() {
 		// InputLevel == 0 would leave the inference circuit with no levels
 		// remaining for multiplication — silently fatal at Forward time.
 		// `Defaults()` callers get the "use MaxLevel" behaviour via the
 		// zero-default on the Params struct; an Orion manifest must commit
 		// to a real level.
 		return Params{}, fmt.Errorf(
-			"protocol: Orion manifest %q has InputLevel=%d outside [1, %d]",
-			manifestPath, m.InputLevel, ckksParams.MaxLevel(),
+			"protocol: Orion manifest %q has extended InputLevel=%d outside [1, %d] (manifest=%d, reserve=%d)",
+			manifestPath, inputLevel, ckksParams.MaxLevel(), m.InputLevel, ProtocolReserveLevels,
 		)
 	}
 
@@ -116,13 +149,51 @@ func LoadOrionParams(manifestPath string) (Params, error) {
 		extras = append(extras, -k)
 	}
 
+	llknParams, err := BuildLLKNParams(ckksParams)
+	if err != nil {
+		return Params{}, fmt.Errorf("protocol: Orion manifest %q: %w", manifestPath, err)
+	}
+
 	return Params{
 		CKKS:                 ckksParams,
+		LLKN:                 llknParams,
+		LLKNBase:             DefaultLLKNBase,
 		Authenticator:        authenticator.DefaultConfig(),
 		FloodSigma:           DefaultFloodSigma,
 		ExtraRotationIndices: extras,
-		InputLevel:           m.InputLevel,
+		InputLevel:           inputLevel,
 	}, nil
+}
+
+// extendLogQForProtocolReserve appends ProtocolReserveLevels extra
+// 40-bit primes to the supplied chain. Shared between the JSON-manifest
+// loader (`LoadOrionParams`) and the binary `.orion` loader
+// (`vservice.mergeOrionParams`) so both paths apply the same headroom.
+func extendLogQForProtocolReserve(modelLogQ []int) []int {
+	out := make([]int, 0, len(modelLogQ)+ProtocolReserveLevels)
+	out = append(out, modelLogQ...)
+	for i := 0; i < ProtocolReserveLevels; i++ {
+		out = append(out, protocolReserveLogBits)
+	}
+	return out
+}
+
+// ExtendCKKSForProtocolReserve rebuilds the supplied CKKS parameters
+// with the protocol-reserve primes appended to their Q chain. Used by
+// the binary `.orion` loader which receives a fully-built ckks.Parameters
+// rather than a manifest blob. Callers must bump their `InputLevel` by
+// `ProtocolReserveLevels` separately — this helper owns only the chain
+// extension.
+func ExtendCKKSForProtocolReserve(p ckks.Parameters) (ckks.Parameters, error) {
+	logQ := extendLogQForProtocolReserve(p.LogQi())
+	logP := append([]int(nil), p.LogPi()...)
+	return ckks.NewParametersFromLiteral(ckks.ParametersLiteral{
+		LogN:            p.LogN(),
+		LogQ:            logQ,
+		LogP:            logP,
+		LogDefaultScale: int(p.LogDefaultScale()),
+		RingType:        p.RingType(),
+	})
 }
 
 // parseOrionRingType maps Orion's `ring_type` strings to Lattigo's ring

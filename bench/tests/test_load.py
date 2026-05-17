@@ -15,7 +15,9 @@ FIXTURE = Path(__file__).parent / "fixtures" / "sample_run.json"
 def test_load_run_parses_all_fields() -> None:
     run = load_run(FIXTURE)
     assert run.name == "e2e"
-    assert run.phase == "phase1"
+    # Production emits phase2 (see cmd/ppiav-cli/main.go:45); the fixture and
+    # this assertion both track production.
+    assert run.phase == "phase2"
     assert run.go_version == "go1.23.0"
     assert run.goos == "linux"
     assert run.goarch == "amd64"

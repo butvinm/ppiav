@@ -1,0 +1,47 @@
+{
+  "name": "finalize",
+  "phase": "phase2",
+  "started": "2026-05-17T04:08:19.322745407Z",
+  "go_version": "go1.26.1",
+  "goos": "linux",
+  "goarch": "amd64",
+  "num_cpu": 16,
+  "metadata": {
+    "in_ct": "/home/ubuntu/ppiav/results/20260517T034855Z/img_24/auth_ct.bin",
+    "in_share": "/home/ubuntu/ppiav/results/20260517T034855Z/img_24/client_share.bin",
+    "out_decoded": "/home/ubuntu/ppiav/results/20260517T034855Z/img_24/decoded.json",
+    "ref_logit": 33.491065979003906,
+    "sid": "35103136addd5ba18181e977d44b4e37",
+    "workdir": "/home/ubuntu/ppiav/results/20260517T034855Z/keys"
+  },
+  "samples": [
+    {
+      "name": "finalize.final_decrypt",
+      "iter": 0,
+      "wall": 36379642,
+      "heap_alloc": 164201816,
+      "heap_inuse": 165322752,
+      "sys": 179120440,
+      "alloc_delta": 73698048,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "pre_vm_hwm": 174862336,
+      "vm_hwm": 174960640,
+      "bytes": 0
+    },
+    {
+      "name": "finalize.verdict_compute",
+      "iter": 0,
+      "wall": 8676,
+      "heap_alloc": 82903912,
+      "heap_inuse": 88219648,
+      "sys": 179128632,
+      "alloc_delta": 8072,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "pre_vm_hwm": 174960640,
+      "vm_hwm": 174960640,
+      "bytes": 0
+    }
+  ]
+}

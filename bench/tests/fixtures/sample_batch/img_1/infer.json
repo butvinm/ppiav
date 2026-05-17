@@ -1,0 +1,68 @@
+{
+  "name": "infer",
+  "phase": "phase2",
+  "started": "2026-05-16T12:02:00Z",
+  "go_version": "go1.23.0",
+  "goos": "linux",
+  "goarch": "amd64",
+  "num_cpu": 8,
+  "metadata": {},
+  "samples": [
+    {
+      "name": "infer.load_keys",
+      "iter": 0,
+      "wall": 200000000,
+      "heap_alloc": 1000,
+      "heap_inuse": 1100,
+      "sys": 1200,
+      "alloc_delta": 100,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "pre_vm_hwm": 3100,
+      "vm_hwm": 3200,
+      "bytes": 0
+    },
+    {
+      "name": "infer.load_input_ct",
+      "iter": 0,
+      "wall": 300000000,
+      "heap_alloc": 1010,
+      "heap_inuse": 1110,
+      "sys": 1210,
+      "alloc_delta": 110,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "pre_vm_hwm": 3200,
+      "vm_hwm": 3300,
+      "bytes": 0
+    },
+    {
+      "name": "infer.exec",
+      "iter": 0,
+      "wall": 400000000,
+      "heap_alloc": 1020,
+      "heap_inuse": 1120,
+      "sys": 1220,
+      "alloc_delta": 120,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "pre_vm_hwm": 3300,
+      "vm_hwm": 3400,
+      "bytes": 0
+    },
+    {
+      "name": "infer.serialize_result",
+      "iter": 0,
+      "wall": 500000000,
+      "heap_alloc": 1030,
+      "heap_inuse": 1130,
+      "sys": 1230,
+      "alloc_delta": 130,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "pre_vm_hwm": 3400,
+      "vm_hwm": 3500,
+      "bytes": 0
+    }
+  ]
+}

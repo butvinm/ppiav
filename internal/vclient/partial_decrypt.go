@@ -27,6 +27,10 @@ func (c *Client) PartialDecrypt(authenticatedCt *rlwe.Ciphertext) (multiparty.Ke
 	if authenticatedCt == nil {
 		return multiparty.KeySwitchShare{}, fmt.Errorf("vclient: authenticatedCt is nil")
 	}
+	skEval, err := c.skEval()
+	if err != nil {
+		return multiparty.KeySwitchShare{}, err
+	}
 	proto, err := multiparty.NewKeySwitchProtocol(c.params.CKKS, ring.DiscreteGaussian{
 		Sigma: c.params.FloodSigma,
 		Bound: 6 * c.params.FloodSigma,
@@ -37,6 +41,6 @@ func (c *Client) PartialDecrypt(authenticatedCt *rlwe.Ciphertext) (multiparty.Ke
 
 	share := proto.AllocateShare(authenticatedCt.Level())
 	zeroSk := rlwe.NewSecretKey(c.params.CKKS)
-	proto.GenShare(c.skShare, zeroSk, authenticatedCt, &share)
+	proto.GenShare(skEval, zeroSk, authenticatedCt, &share)
 	return share, nil
 }

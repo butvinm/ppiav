@@ -31,8 +31,8 @@ func TestExportStateRoundTrip(t *testing.T) {
 	require.NoError(t, a.OpenSession(sid))
 	stub := newVClientStub(t, params, sid)
 
-	// Drive PK + RLK + Galois on Agent A. The returned (joint, rlk, gks)
-	// are the inputs we'll pass through ExportedState to Agent B.
+	// Drive PK + RLK + Galois on Agent A. The returned (joint, rlk,
+	// gksAuth) are the inputs we'll pass through ExportedState to Agent B.
 	joint, _, gks := runFullKeygen(t, a, sid, stub)
 
 	// Capture authKey before export so we can replay the deterministic v[i].
@@ -58,18 +58,19 @@ func TestExportStateRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, ctMA)
 
-	// Export and rebuild on Agent B. ExportState now populates Gks from the
-	// AggregateGaloisShares-captured slice, so the test does not have to
-	// thread the gks variable back in.
+	// Export and rebuild on Agent B. ExportState populates GksMaster from
+	// AggregateGaloisShares; NewWithState rederives gksAuth from it via
+	// hierkeys.LevelExpansion. The test does not have to thread `gks`.
 	state, err := a.ExportState(sid)
 	require.NoError(t, err)
 	require.NotNil(t, state)
 	assert.Equal(t, sid, state.SID)
-	require.NotNil(t, state.SkShare)
+	require.NotNil(t, state.SkTop)
 	require.NotNil(t, state.PkAgg)
+	require.NotNil(t, state.PkTop)
 	require.NotNil(t, state.Rlk)
-	require.NotEmpty(t, state.Gks, "ExportState must populate Gks from AggregateGaloisShares")
-	_ = gks // gks remains available for cross-reference but is no longer threaded.
+	require.NotEmpty(t, state.GksMaster, "ExportState must populate GksMaster from AggregateGaloisShares")
+	_ = gks // gksAuth remains available on the live session but is rederived on the restored Agent.
 
 	b, err := NewWithState(params, state)
 	require.NoError(t, err)
@@ -131,7 +132,7 @@ func TestExportStateRequiresCompletedKeygen(t *testing.T) {
 	require.Error(t, err)
 }
 
-// NewWithState must reject nil state and nil SkShare so misuse fails
+// NewWithState must reject nil state and nil SkTop so misuse fails
 // loudly instead of producing a half-built Agent that crashes later.
 func TestNewWithStateRejectsInvalidInputs(t *testing.T) {
 	params := smallParams(t)
@@ -139,7 +140,7 @@ func TestNewWithStateRejectsInvalidInputs(t *testing.T) {
 	require.Error(t, err)
 
 	_, err = NewWithState(params, &ExportedState{SID: "x"})
-	require.Error(t, err, "missing SkShare must fail")
+	require.Error(t, err, "missing SkTop must fail")
 }
 
 // A second Agent built via NewWithState must also pass FinalizeDecryption
@@ -157,7 +158,7 @@ func TestNewWithStateSupportsFinalize(t *testing.T) {
 
 	state, err := a.ExportState(sid)
 	require.NoError(t, err)
-	require.NotEmpty(t, state.Gks, "ExportState must populate Gks")
+	require.NotEmpty(t, state.GksMaster, "ExportState must populate GksMaster")
 
 	b, err := NewWithState(params, state)
 	require.NoError(t, err)
@@ -165,7 +166,7 @@ func TestNewWithStateSupportsFinalize(t *testing.T) {
 	// Encrypt m=0.6 under pkAgg via Agent B's session encryptor.
 	sessB := agentState(t, b, sid)
 	require.NotNil(t, sessB.pkAgg)
-	require.NotNil(t, sessB.eval)
+	require.NotNil(t, sessB.authchain)
 	encoder := ckks.NewEncoder(params.CKKS)
 	values := make([]float64, params.CKKS.MaxSlots())
 	values[0] = 0.6
@@ -203,7 +204,7 @@ func runFinalizeOnAgentWithCtM(
 	require.NoError(t, err)
 	zeroSk := rlwe.NewSecretKey(params.CKKS)
 	clientShare := clientProto.AllocateShare(ctM.Level())
-	clientProto.GenShare(stub.skC, zeroSk, ctM, &clientShare)
+	clientProto.GenShare(stub.skCEval, zeroSk, ctM, &clientShare)
 	verdict, err := a.FinalizeDecryption(sid, ctM, clientShare)
 	require.NoError(t, err)
 	return verdict

@@ -1,0 +1,43 @@
+{
+  "name": "mac",
+  "phase": "phase2",
+  "started": "2026-05-16T12:03:00Z",
+  "go_version": "go1.23.0",
+  "goos": "linux",
+  "goarch": "amd64",
+  "num_cpu": 8,
+  "metadata": {
+    "derive_gks_auth_seconds": 0.6,
+    "read_gks_master_seconds": 0.1
+  },
+  "samples": [
+    {
+      "name": "mac.derive_auth_keys",
+      "iter": 0,
+      "wall": 600000000,
+      "heap_alloc": 2000,
+      "heap_inuse": 2100,
+      "sys": 2200,
+      "alloc_delta": 200,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "pre_vm_hwm": 3500,
+      "vm_hwm": 3600,
+      "bytes": 55501
+    },
+    {
+      "name": "mac.compute_ct",
+      "iter": 0,
+      "wall": 700000000,
+      "heap_alloc": 2010,
+      "heap_inuse": 2110,
+      "sys": 2210,
+      "alloc_delta": 210,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "pre_vm_hwm": 3600,
+      "vm_hwm": 3700,
+      "bytes": 0
+    }
+  ]
+}

@@ -9,17 +9,9 @@ import (
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 )
 
-// runInfer loads the VService state written by `keygen` and runs the
-// session's inference circuit on a saved input ciphertext. The output
-// ciphertext is written to --out-ct; a single-sample bench.Run named "infer"
-// is written to --out (default <workdir>/infer.json).
-//
-// --orion <dir> must point at the Orion compiled-model directory used by
-// keygen; vservice.NewWithState reloads model.orion from disk and overrides
-// the CKKS / InputLevel / ExtraRotationIndices fields from the manifest. The
-// params persisted to params.json are also Orion-derived (keygen runs
-// vservice.NewWithOrion), so the loadParams + NewWithState merge is
-// idempotent in the Orion path.
+// runInfer loads the VService state written by `keygen` and runs the session's
+// inference circuit on a saved input ciphertext. --orion <dir> must match the
+// Orion compiled-model directory used by keygen.
 func runInfer(args []string) error {
 	fs := flag.NewFlagSet("infer", flag.ContinueOnError)
 	workdir := fs.String("workdir", "", "per-batch keygen artifact directory (required)")
@@ -48,30 +40,6 @@ func runInfer(args []string) error {
 	if err != nil {
 		return fmt.Errorf("infer: load sid: %w", err)
 	}
-	rlk, err := readRelinearizationKey(*workdir)
-	if err != nil {
-		return fmt.Errorf("infer: load rlk: %w", err)
-	}
-	// VService consumes the full GLK set. After lattigo-hierkeys integration
-	// glk_master will swap in, but until then glk_full.bin is the canonical
-	// evaluator key set.
-	gks, err := readGaloisKeys(*workdir, artifactGLKFull)
-	if err != nil {
-		return fmt.Errorf("infer: load glk_full: %w", err)
-	}
-	ct, err := readCiphertextPath(*inCt)
-	if err != nil {
-		return fmt.Errorf("infer: load in-ct: %w", err)
-	}
-
-	svc, err := vservice.NewWithState(params, *orionDir, &vservice.ExportedState{
-		SID: sid,
-		Rlk: rlk,
-		Glk: gks,
-	})
-	if err != nil {
-		return fmt.Errorf("infer: build VService: %w", err)
-	}
 
 	run := bench.NewRun("infer", benchPhase)
 	run.Metadata["workdir"] = *workdir
@@ -81,9 +49,55 @@ func runInfer(args []string) error {
 	run.Metadata["in_ct"] = *inCt
 	run.Metadata["out_ct"] = *outCt
 	run.Metadata["sid"] = string(sid)
+	writeRunOnExit := func() { _ = run.WriteJSON(stepOutPath(*outPath, *workdir, "infer")) }
+
+	var svc *vservice.Service
+	loadKeysSample, err := bench.Measure(sampleInferLoadKeys, func() error {
+		rlk, e := readRelinearizationKey(*workdir)
+		if e != nil {
+			return fmt.Errorf("load rlk: %w", e)
+		}
+		// VService consumes the pre-derived expand-fully Galois key set.
+		// Per-sample re-derivation is multi-minute at LogN=16, so keygen
+		// caches it in gks_infer.bin and infer loads it directly.
+		gks, e := readGaloisKeys(*workdir, artifactGKSInfer)
+		if e != nil {
+			return fmt.Errorf("load gks_infer: %w", e)
+		}
+		s, e := vservice.NewWithState(params, *orionDir, &vservice.ExportedState{
+			SID:      sid,
+			Rlk:      rlk,
+			GksInfer: gks,
+		})
+		if e != nil {
+			return fmt.Errorf("build VService: %w", e)
+		}
+		svc = s
+		return nil
+	})
+	run.Append(loadKeysSample)
+	if err != nil {
+		writeRunOnExit()
+		return fmt.Errorf("infer: load_keys: %w", err)
+	}
+
+	var ct *rlwe.Ciphertext
+	loadInputSample, err := bench.Measure(sampleInferLoadInputCt, func() error {
+		c, e := readCiphertextPath(*inCt)
+		if e != nil {
+			return fmt.Errorf("load in-ct: %w", e)
+		}
+		ct = c
+		return nil
+	})
+	run.Append(loadInputSample)
+	if err != nil {
+		writeRunOnExit()
+		return fmt.Errorf("infer: load_input_ct: %w", err)
+	}
 
 	var outCipher *rlwe.Ciphertext
-	sample, err := bench.Measure("infer", func() error {
+	execSample, err := bench.Measure(sampleInferExec, func() error {
 		c, infErr := svc.Infer(sid, ct)
 		if infErr != nil {
 			return fmt.Errorf("VService.Infer: %w", infErr)
@@ -91,14 +105,18 @@ func runInfer(args []string) error {
 		outCipher = c
 		return nil
 	})
-	run.Append(sample)
+	run.Append(execSample)
 	if err != nil {
-		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "infer"))
+		writeRunOnExit()
 		return fmt.Errorf("infer: %w", err)
 	}
 
-	if err := writeCiphertextPath(*outCt, outCipher); err != nil {
-		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "infer"))
+	serializeSample, err := bench.Measure(sampleInferSerializeResult, func() error {
+		return writeCiphertextPath(*outCt, outCipher)
+	})
+	run.Append(serializeSample)
+	if err != nil {
+		writeRunOnExit()
 		return fmt.Errorf("infer: write ciphertext: %w", err)
 	}
 

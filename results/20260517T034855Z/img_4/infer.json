@@ -1,0 +1,60 @@
+{
+  "name": "infer",
+  "phase": "phase2",
+  "started": "2026-05-17T04:00:46.776004687Z",
+  "go_version": "go1.26.1",
+  "goos": "linux",
+  "goarch": "amd64",
+  "num_cpu": 16,
+  "metadata": {
+    "image_dir": "/home/ubuntu/ppiav/results/20260517T034855Z/img_4",
+    "load_keys_amortized_to": "/home/ubuntu/ppiav/results/20260517T034855Z/img_0",
+    "orion_dir": "/home/ubuntu/ppiav/models/out/logn16",
+    "sid": "35103136addd5ba18181e977d44b4e37",
+    "workdir": "/home/ubuntu/ppiav/results/20260517T034855Z/keys"
+  },
+  "samples": [
+    {
+      "name": "infer.load_input_ct",
+      "iter": 0,
+      "wall": 8618020,
+      "heap_alloc": 84387715592,
+      "heap_inuse": 84389265408,
+      "sys": 103899234256,
+      "alloc_delta": 37767416,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "pre_vm_hwm": 103869612032,
+      "vm_hwm": 103869612032,
+      "bytes": 0
+    },
+    {
+      "name": "infer.exec",
+      "iter": 0,
+      "wall": 51879404691,
+      "heap_alloc": 89120873288,
+      "heap_inuse": 89121865728,
+      "sys": 103899234256,
+      "alloc_delta": 4752060112,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "pre_vm_hwm": 103869612032,
+      "vm_hwm": 103869612032,
+      "bytes": 0
+    },
+    {
+      "name": "infer.serialize_result",
+      "iter": 0,
+      "wall": 2093702,
+      "heap_alloc": 84574402896,
+      "heap_inuse": 84576215040,
+      "sys": 103899234256,
+      "alloc_delta": 2125088,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "pre_vm_hwm": 103869612032,
+      "vm_hwm": 103869612032,
+      "bytes": 0
+    }
+  ]
+}

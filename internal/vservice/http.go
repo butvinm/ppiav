@@ -1,7 +1,6 @@
 package vservice
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -48,7 +47,7 @@ func (s *Server) handleParams(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if err := writeParams(w, s.svc.Params()); err != nil {
+	if err := writeManifest(w, s.svc.Params()); err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -83,8 +82,8 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	switch sub {
 	case "eval-keys":
 		s.handleEvalKeys(w, r, protocol.SessionID(sid))
-	case "image":
-		s.handleImage(w, r, protocol.SessionID(sid))
+	case "infer":
+		s.handleInfer(w, r, protocol.SessionID(sid))
 	default:
 		httputil.WriteError(w, http.StatusNotFound, "not found")
 	}
@@ -105,7 +104,7 @@ func (s *Server) handleEvalKeys(w http.ResponseWriter, r *http.Request, sid prot
 		httputil.WriteError(w, http.StatusBadRequest, fmt.Sprintf("unmarshal InferEvalKeys: %s", err))
 		return
 	}
-	if err := s.svc.StoreEvalKeys(sid, keys.RLK, keys.GKS); err != nil {
+	if err := s.svc.StoreEvalKeys(sid, keys.RLK, keys.PKTop, keys.GKSMaster); err != nil {
 		// Unknown sid is the only common error path here.
 		if errors.Is(err, ErrUnknownSession) {
 			httputil.WriteError(w, http.StatusNotFound, err.Error())
@@ -117,8 +116,9 @@ func (s *Server) handleEvalKeys(w http.ResponseWriter, r *http.Request, sid prot
 	w.WriteHeader(http.StatusOK)
 }
 
-// handleImage runs Stage 3 inference and returns the result ciphertext.
-func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, sid protocol.SessionID) {
+// handleInfer runs Stage 3 inference and returns the result ciphertext
+// wrapped as protocol.InferenceResult.
+func (s *Server) handleInfer(w http.ResponseWriter, r *http.Request, sid protocol.SessionID) {
 	if r.Method != http.MethodPost {
 		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -144,9 +144,10 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, sid protoco
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	outBytes, err := out.MarshalBinary()
+	result := protocol.InferenceResult{Ct: out}
+	outBytes, err := result.Ct.MarshalBinary()
 	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("marshal result ciphertext: %s", err))
+		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("marshal InferenceResult: %s", err))
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
@@ -154,24 +155,27 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, sid protoco
 	_, _ = w.Write(outBytes)
 }
 
-// paramsWire is the JSON representation of protocol.Params. CKKS uses
-// Lattigo's codec; the rest survives encoding/json untouched.
-type paramsWire struct {
-	CKKS                 json.RawMessage `json:"ckks"`
-	AuthenticatorLambda  int             `json:"authenticator_lambda"`
-	AuthenticatorEpsilon float64         `json:"authenticator_epsilon"`
-	FloodSigma           float64         `json:"flood_sigma"`
-	ExtraRotationIndices []int           `json:"extra_rotation_indices,omitempty"`
-	InputLevel           int             `json:"input_level"`
-}
-
-func writeParams(w http.ResponseWriter, p protocol.Params) error {
+func writeManifest(w http.ResponseWriter, p protocol.Params) error {
 	ckksBytes, err := p.CKKS.MarshalJSON()
 	if err != nil {
 		return fmt.Errorf("marshal CKKS params: %w", err)
 	}
-	pw := paramsWire{
+	// Read the LLKNLogPHK schedule off the live top-level params rather
+	// than re-stamping the default — a future custom-LLKN constructor must
+	// not be silently overridden by the default schedule. The only
+	// supported schedule today is `DefaultLLKNLogPHK`; mismatch is a
+	// caller-side bug and aborts the response.
+	logPHK := p.LLKN.Top().LogPi()
+	if !equalIntSlice(logPHK, protocol.DefaultLLKNLogPHK) {
+		return fmt.Errorf(
+			"vservice writeManifest: LLKN top LogPi %v does not match DefaultLLKNLogPHK %v",
+			logPHK, protocol.DefaultLLKNLogPHK,
+		)
+	}
+	pw := protocol.Manifest{
 		CKKS:                 ckksBytes,
+		LLKNBase:             p.LLKNBase,
+		LLKNLogPHK:           logPHK,
 		AuthenticatorLambda:  p.Authenticator.Lambda,
 		AuthenticatorEpsilon: p.Authenticator.Epsilon,
 		FloodSigma:           p.FloodSigma,
@@ -180,5 +184,20 @@ func writeParams(w http.ResponseWriter, p protocol.Params) error {
 	}
 	httputil.WriteJSON(w, http.StatusOK, pw)
 	return nil
+}
+
+// equalIntSlice reports whether two int slices have identical length and
+// element-wise contents. Used to validate the wire LLKNLogPHK schedule
+// against the canonical default.
+func equalIntSlice(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 

@@ -1,0 +1,5 @@
+{
+  "verdict": "reject",
+  "ref_logit": -0.31,
+  "noise_per_slot": [0.002, -0.001, 0.0005, -0.0015]
+}

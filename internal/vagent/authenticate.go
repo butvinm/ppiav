@@ -9,14 +9,17 @@ import (
 
 // BuildAuthenticatedCt runs Stage 4a — the §MPD-Auth/Auth construction.
 // Looks up the session, then delegates to the shared `Authenticator` with
-// the session's authKey, encryptor (pkAgg-backed), and evaluator
-// (rlk+gks-backed). Returns ct_M (the authenticated ciphertext) ready to
-// be streamed to VClient for partial decryption.
+// the session's authKey, encryptor (pkAgg-backed), and the chain
+// evaluator built by AggregateGaloisShares (rlk + per-auth-atom raw
+// `*rlwe.GaloisKey`s, eval level, negative galEls). Returns ct_M (the
+// authenticated ciphertext) ready to be streamed to VClient for partial
+// decryption.
 //
-// Preconditions enforced by the underlying Authenticator: eval must carry
-// `params.GaloisElement(-j)` for every j ∈ [1, Lambda); pkAgg must be
-// non-nil (AggregatePK has been called); rlkAgg must be non-nil
-// (AggregateRLKRound2 has been called); the evaluator built by
+// Preconditions enforced by the underlying Authenticator: the chain
+// evaluator's inner key set must carry `params.GaloisElement(-atom)` for
+// every auth atom (powers of two strictly less than Lambda); pkAgg must
+// be non-nil (AggregatePK has been called); rlkAgg must be non-nil
+// (AggregateRLKRound2 has been called). The chain evaluator built by
 // AggregateGaloisShares satisfies all three.
 func (a *Agent) BuildAuthenticatedCt(
 	sid protocol.SessionID,
@@ -34,10 +37,10 @@ func (a *Agent) BuildAuthenticatedCt(
 	if sess.encryptor == nil {
 		return nil, fmt.Errorf("vagent: BuildAuthenticatedCt before AggregatePK for sid %q", sid)
 	}
-	if sess.eval == nil {
+	if sess.authchain == nil {
 		return nil, fmt.Errorf("vagent: BuildAuthenticatedCt before AggregateGaloisShares for sid %q", sid)
 	}
-	ctM, err := a.auth.Auth(sess.authKey, sess.encryptor, sess.eval, resultCt)
+	ctM, err := a.auth.Auth(sess.authKey, sess.encryptor, sess.authchain, resultCt)
 	if err != nil {
 		return nil, fmt.Errorf("vagent: Auth: %w", err)
 	}

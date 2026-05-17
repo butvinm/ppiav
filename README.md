@@ -101,7 +101,7 @@ uv run python -m bench.eval \
     --orion  ../models/out/logn16
 ```
 
-The driver creates `results/<UTC-ts>/` containing `keys/`, per-image `img_<idx>/` directories, `keygen.json`, `eval_inputs.json`, `summary.md` (per-step timing / RSS / bytes / FPR-FNR / noise / SNR / network tables), and `plots/` (7 PNGs). See `bench/README.md` for the layout.
+The driver creates `results/<UTC-ts>/` containing `keys/`, per-image `img_<idx>/` directories, `keygen.json`, `eval_inputs.json`, `summary.md` (per-party time + memory by party, keygen by round, per-message bytes, key inventory, plain vs FHE accuracy, noise + SNR, network wire time), and `plots/` (6 PNGs). See `bench/README.md` for the layout.
 
 On a 128 GB host the `logn16` configuration peaks at ~114 GB RSS at the first `infer` step — set `GOMEMLIMIT=120GiB` in the environment before invoking `bench.eval` so the Go runtime applies back-pressure before the OOM killer fires (the in-process `infer` does no streaming and there is no other knob to cap heap growth).
 

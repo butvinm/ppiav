@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
 
 	orioneval "github.com/butvinm/orion/v2/evaluator"
@@ -40,9 +41,9 @@ const orionModelFile = "model.orion"
 // Identity (k_orion == 0) is dropped — Lattigo short-circuits
 // `Automorphism(galEl=1)` so no key is required (see
 // `~/Dev/3rd-party/lattigo/core/rlwe/evaluator_automorphism.go:19`). The
-// returned slice is not deduplicated against the authenticator's
-// `[1, Lambda)` set — `protocol.Params.RotationIndices()` does that
-// downstream.
+// returned slice carries the inference-side labels only; the
+// authenticator's `[1, Lambda)` atom set is a disjoint mechanism handled
+// independently by `Params.AuthAtoms()`.
 func loadOrionModel(orionDir string) (*orioneval.Model, ckks.Parameters, int, []int, error) {
 	path := filepath.Join(orionDir, orionModelFile)
 	data, err := os.ReadFile(path)
@@ -78,4 +79,59 @@ func loadOrionModel(orionDir string) (*orioneval.Model, ckks.Parameters, int, []
 	}
 
 	return model, ckksParams, inputLevel, rotations, nil
+}
+
+// mergeOrionParams loads the compiled Orion model at `orionDir` and folds
+// its CKKS / InputLevel / rotation-index overrides into `params`. The LLKN
+// hierarchy is rebuilt against the Orion-overridden CKKS — the caller's
+// `params.LLKN` was built against `Defaults().CKKS` (or whatever CKKS the
+// caller passed in) and is stale post-override. The multi-party top-level
+// Galois handshake CRPs are sampled over the LLKN top ring; if VClient
+// rebuilds LLKN from the wire CKKS while VService keeps a stale LLKN, the
+// two sides draw CRPs over different rings and the aggregated keys
+// silently mismatch.
+//
+// `params.ExtraRotationIndices` is preserved (a defensive copy is taken so
+// appending to the merged slice does not mutate the caller's slice — the
+// params value is passed by-value but the underlying array is shared).
+//
+// Shared by `NewWithOrion` and `NewWithState` (Orion branch) so the two
+// constructors stay byte-for-byte identical in their parameter merge.
+func mergeOrionParams(params protocol.Params, orionDir string) (protocol.Params, *orioneval.Model, error) {
+	model, ckksParams, inputLevel, rotations, err := loadOrionModel(orionDir)
+	if err != nil {
+		return protocol.Params{}, nil, err
+	}
+
+	// Extend the model's Q chain by ProtocolReserveLevels extra 40-bit
+	// primes and bump InputLevel by the same amount. The model itself
+	// only declared what it needs; protocol-layer ops (MAC's slot-mask
+	// multiply requires Level() ≥ 1) need headroom on top. Encrypt uses
+	// the bumped InputLevel so the extra primes are real, not phantom;
+	// after the model's K rescales the ciphertext lands at level
+	// ProtocolReserveLevels. See internal/protocol/orion_params.go for
+	// the JSON-fixture-path twin of this code and the regression test
+	// at internal/authenticator/level_reservation_test.go.
+	extendedCKKS, err := protocol.ExtendCKKSForProtocolReserve(ckksParams)
+	if err != nil {
+		return protocol.Params{}, nil, fmt.Errorf("vservice: extend CKKS for protocol reserve: %w", err)
+	}
+	merged := params
+	merged.CKKS = extendedCKKS
+	merged.InputLevel = inputLevel + protocol.ProtocolReserveLevels
+
+	llknParams, err := protocol.BuildLLKNParams(extendedCKKS)
+	if err != nil {
+		return protocol.Params{}, nil, fmt.Errorf("vservice: rebuild LLKN against extended Orion CKKS: %w", err)
+	}
+	merged.LLKN = llknParams
+
+	if len(params.ExtraRotationIndices) > 0 || len(rotations) > 0 {
+		combined := make([]int, 0, len(params.ExtraRotationIndices)+len(rotations))
+		combined = append(combined, params.ExtraRotationIndices...)
+		combined = append(combined, rotations...)
+		merged.ExtraRotationIndices = combined
+	}
+
+	return merged, model, nil
 }

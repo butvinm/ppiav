@@ -38,6 +38,12 @@ models/out/
 results/*/
 !results/.gitkeep
 
+# Local docker compose env — `.env.example` is the committed template.
+deploy/.env
+
+# Diagram renders — regenerated from docs/*.puml via plantuml.
+docs/*.png
+
 # IDE / editor
 .idea/
 .vscode/

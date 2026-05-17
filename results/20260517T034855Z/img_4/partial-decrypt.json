@@ -1,0 +1,31 @@
+{
+  "name": "partial-decrypt",
+  "phase": "phase2",
+  "started": "2026-05-17T04:07:39.40760121Z",
+  "go_version": "go1.26.1",
+  "goos": "linux",
+  "goarch": "amd64",
+  "num_cpu": 16,
+  "metadata": {
+    "in_ct": "/home/ubuntu/ppiav/results/20260517T034855Z/img_4/auth_ct.bin",
+    "out_share": "/home/ubuntu/ppiav/results/20260517T034855Z/img_4/client_share.bin",
+    "sid": "35103136addd5ba18181e977d44b4e37",
+    "workdir": "/home/ubuntu/ppiav/results/20260517T034855Z/keys"
+  },
+  "samples": [
+    {
+      "name": "partial-decrypt",
+      "iter": 0,
+      "wall": 8288262,
+      "heap_alloc": 123536864,
+      "heap_inuse": 124362752,
+      "sys": 174901560,
+      "alloc_delta": 36709488,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "pre_vm_hwm": 175308800,
+      "vm_hwm": 175927296,
+      "bytes": 0
+    }
+  ]
+}

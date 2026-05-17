@@ -2,6 +2,7 @@ package vagent
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -24,6 +25,27 @@ import (
 // single-shot result stream — set to 24h so the browser does not auto-
 // reconnect against an evicted session.
 const sseRetryHintMs = 24 * 60 * 60 * 1000
+
+// Per-route VAgent -> VService request deadlines. Sized for the LogN=16
+// production target: the prior single 30s Client.Timeout was guaranteed
+// to fail on /eval-keys (multi-minute hierkeys.LevelExpansion +
+// FinalizeKey across ExtraRotationIndices) and could fail on /image
+// (Orion inference at LogN=16).
+const (
+	// evalKeysDeadline bounds the /eval-keys POST. VService runs
+	// hierkeys.LevelExpansion + FinalizeKey concurrently across
+	// GOMAXPROCS workers; ~tens of seconds concurrent at LogN=16 per
+	// `~/Dev/lattigo-hierkeys/README.md` §15.4. 10 minutes gives margin
+	// for a sequential fallback or under-provisioned VPS.
+	evalKeysDeadline = 10 * time.Minute
+	// imageDeadline bounds the /image POST. Orion C3AE inference at
+	// LogN=16 is bounded by the model's circuit depth.
+	imageDeadline = 5 * time.Minute
+	// shortRPCDeadline bounds small JSON control RPCs (/sessions,
+	// /params, RService /callback). These are server-to-server calls
+	// that should never legitimately take more than a few seconds.
+	shortRPCDeadline = 30 * time.Second
+)
 
 // Server exposes the VAgent HTTP routes. See docs/DESIGN.md §`Protocol`.
 // `rservicePublicURL` is the browser-visible RService URL (distinct from
@@ -51,10 +73,14 @@ func NewServer(agent *Agent, vserviceURL, rserviceURL, rservicePublicURL string)
 		vserviceURL:       strings.TrimRight(vserviceURL, "/"),
 		rserviceURL:       rsvcURL,
 		rservicePublicURL: rsvcPubURL,
-		// 30s is well above the longest legitimate VService /image
-		// turnaround (Orion inference) but bounds hung
-		// peers so handler goroutines do not leak.
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		// Default transport (no Client.Timeout): per-request deadlines are
+		// applied via context.WithTimeout at the call site. The VService
+		// /eval-keys handler runs hierkeys.LevelExpansion + FinalizeKey
+		// across ExtraRotationIndices, which is multi-minute sequential /
+		// tens-of-seconds concurrent at LogN=16 — a single 30s
+		// Client.Timeout would force a guaranteed-failure across all
+		// requests at the production parameter set.
+		httpClient: &http.Client{},
 		mux:        http.NewServeMux(),
 	}
 	s.register()
@@ -124,7 +150,15 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	resp, err := s.httpClient.Post(s.vserviceURL+"/sessions", "application/json", nil)
+	ctx, cancel := context.WithTimeout(r.Context(), shortRPCDeadline)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.vserviceURL+"/sessions", nil)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("build vservice /sessions request: %s", err))
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		httputil.WriteError(w, http.StatusBadGateway, fmt.Sprintf("call vservice /sessions: %s", err))
 		return
@@ -247,7 +281,14 @@ func (s *Server) handleParams(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	resp, err := s.httpClient.Get(s.vserviceURL + "/params")
+	ctx, cancel := context.WithTimeout(r.Context(), shortRPCDeadline)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.vserviceURL+"/params", nil)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("build vservice /params request: %s", err))
+		return
+	}
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		httputil.WriteError(w, http.StatusBadGateway, fmt.Sprintf("call vservice /params: %s", err))
 		return
@@ -287,20 +328,21 @@ func (s *Server) handlePKShare(w http.ResponseWriter, r *http.Request, sid proto
 		return
 	}
 	// GenPKShare must run before AggregatePK to set up the protocol/CRP/local
-	// share. The order mirrors orchestrator.runner's keygen sequence.
+	// shares. The order mirrors orchestrator.runner's keygen sequence.
+	// Returns the agent's dual (eval + top) PK shares directly.
 	agentShare, err := s.agent.GenPKShare(sid)
 	if err != nil {
 		httputil.WriteError(w, sidErrorStatus(err), err.Error())
 		return
 	}
-	if err := s.agent.AggregatePK(sid, client.Share); err != nil {
+	if err := s.agent.AggregatePK(sid, client); err != nil {
 		// AggregatePK fails when the wire share is semantically malformed
 		// (wrong ring, wrong degree). Still F2 per DESIGN.md §`Failure modes`:
 		// "Malformed wire input … plus Verdict = Reject. Session torn down."
 		s.rejectAndEvict(w, http.StatusBadRequest, sid, err.Error())
 		return
 	}
-	writeBinary(w, protocol.VAgentPKShare{Share: agentShare})
+	writeBinary(w, agentShare)
 }
 
 func (s *Server) handleRLKRound1(w http.ResponseWriter, r *http.Request, sid protocol.SessionID) {
@@ -380,34 +422,43 @@ func (s *Server) handleGKSShares(w http.ResponseWriter, r *http.Request, sid pro
 		s.rejectAndEvict(w, http.StatusBadRequest, sid, fmt.Sprintf("read body: %s", err))
 		return
 	}
-	var client protocol.VClientGaloisKeyShare
+	var client protocol.VClientGaloisShares
 	if err := client.UnmarshalBinary(body); err != nil {
-		s.rejectAndEvict(w, http.StatusBadRequest, sid, fmt.Sprintf("unmarshal VClientGaloisKeyShare: %s", err))
+		s.rejectAndEvict(w, http.StatusBadRequest, sid, fmt.Sprintf("unmarshal VClientGaloisShares: %s", err))
 		return
 	}
-	// GenGaloisShares draws CRPs in canonical label order; the resulting
-	// labels slice is what AggregateGaloisShares cross-checks against the
-	// client's parallel labels (both sides derive the labels from
-	// `params.RotationIndices()` so the agent slice is authoritative).
-	_, agentLabels, err := s.agent.GenGaloisShares(sid)
-	if err != nil {
+	// GenMasterShares draws the master-atom CRPs in canonical order; the
+	// labels are not on the wire (both sides derive them from
+	// `params.MasterAtoms()`). The aggregator validates share counts
+	// against the stashed agent shares.
+	if _, _, err := s.agent.GenMasterShares(sid); err != nil {
 		httputil.WriteError(w, sidErrorStatus(err), err.Error())
 		return
 	}
-	rlk, gks, err := s.agent.AggregateGaloisShares(sid, client.Shares, agentLabels)
+	rlk, pkTop, gksMaster, err := s.agent.AggregateGaloisShares(sid, client)
 	if err != nil {
 		// Count-mismatch / share-shape mismatch is F2 (malformed wire input).
 		s.rejectAndEvict(w, http.StatusBadRequest, sid, err.Error())
 		return
 	}
-	keys := protocol.InferEvalKeys{RLK: rlk, GKS: gks}
+	keys := protocol.InferEvalKeys{RLK: rlk, PKTop: pkTop, GKSMaster: gksMaster}
 	keysBytes, err := keys.MarshalBinary()
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("marshal InferEvalKeys: %s", err))
 		return
 	}
 	targetURL := s.vserviceURL + "/sessions/" + url.PathEscape(string(sid)) + "/eval-keys"
-	resp, err := s.httpClient.Post(targetURL, "application/octet-stream", bytes.NewReader(keysBytes))
+	// evalKeysDeadline bounds VService's hierkeys.LevelExpansion +
+	// FinalizeKey across ExtraRotationIndices — multi-minute at LogN=16.
+	ctx, cancel := context.WithTimeout(r.Context(), evalKeysDeadline)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(keysBytes))
+	if err != nil {
+		s.rejectAndEvict(w, http.StatusInternalServerError, sid, fmt.Sprintf("build vservice eval-keys request: %s", err))
+		return
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		// F3: VService unreachable / inference layer unreachable mid-keygen.
 		// AggregateGaloisShares already mutated session state; rejectAndEvict
@@ -446,32 +497,43 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, sid protoco
 		return
 	}
 
-	targetURL := s.vserviceURL + "/sessions/" + url.PathEscape(string(sid)) + "/image"
+	targetURL := s.vserviceURL + "/sessions/" + url.PathEscape(string(sid)) + "/infer"
 	// Forward the original bytes verbatim — we already unmarshaled to
 	// validate, but the VService handler unmarshals from the bytes itself.
-	resp, err := s.httpClient.Post(targetURL, "application/octet-stream", bytes.NewReader(body))
+	// imageDeadline bounds the Orion inference circuit at LogN=16.
+	ctxImg, cancelImg := context.WithTimeout(r.Context(), imageDeadline)
+	defer cancelImg()
+	reqImg, err := http.NewRequestWithContext(ctxImg, http.MethodPost, targetURL, bytes.NewReader(body))
+	if err != nil {
+		s.rejectAndEvict(w, http.StatusInternalServerError, sid, fmt.Sprintf("build vservice /infer request: %s", err))
+		return
+	}
+	reqImg.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := s.httpClient.Do(reqImg)
 	if err != nil {
 		// F3: inference unreachable.
-		s.rejectAndEvict(w, http.StatusBadGateway, sid, fmt.Sprintf("call vservice /image: %s", err))
+		s.rejectAndEvict(w, http.StatusBadGateway, sid, fmt.Sprintf("call vservice /infer: %s", err))
 		return
 	}
 	defer resp.Body.Close()
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		s.rejectAndEvict(w, http.StatusBadGateway, sid, fmt.Sprintf("read vservice /image: %s", err))
+		s.rejectAndEvict(w, http.StatusBadGateway, sid, fmt.Sprintf("read vservice /infer: %s", err))
 		return
 	}
 	if resp.StatusCode != http.StatusOK {
 		// F3: VService returned an error during inference.
-		s.rejectAndEvict(w, http.StatusBadGateway, sid, fmt.Sprintf("vservice /image returned %d: %s", resp.StatusCode, respBody))
+		s.rejectAndEvict(w, http.StatusBadGateway, sid, fmt.Sprintf("vservice /infer returned %d: %s", resp.StatusCode, respBody))
 		return
 	}
-	resultCt := &rlwe.Ciphertext{}
-	if err := resultCt.UnmarshalBinary(respBody); err != nil {
+	var result protocol.InferenceResult
+	result.Ct = &rlwe.Ciphertext{}
+	if err := result.Ct.UnmarshalBinary(respBody); err != nil {
 		// F3: VService returned a malformed ciphertext.
-		s.rejectAndEvict(w, http.StatusBadGateway, sid, fmt.Sprintf("unmarshal vservice /image response: %s", err))
+		s.rejectAndEvict(w, http.StatusBadGateway, sid, fmt.Sprintf("unmarshal vservice /infer response: %s", err))
 		return
 	}
+	resultCt := result.Ct
 
 	ctM, err := s.agent.BuildAuthenticatedCt(sid, resultCt)
 	if err != nil {
@@ -572,7 +634,7 @@ func (s *Server) handlePartialDecryption(w http.ResponseWriter, r *http.Request,
 		httputil.WriteError(w, http.StatusBadGateway, fmt.Sprintf("rservice callback: %s", err))
 		return
 	}
-	httputil.WriteJSON(w, http.StatusOK, map[string]string{"redirect": s.rservicePublicURL + "/protected"})
+	httputil.WriteJSON(w, http.StatusOK, protocol.FinalizeRedirect{Redirect: s.rservicePublicURL + "/protected"})
 }
 
 // rejectAndEvict handles F2 (malformed wire) and F3 (inference error) per
@@ -598,7 +660,14 @@ func (s *Server) postVerdict(sid protocol.SessionID, verdict protocol.Verdict) e
 		return fmt.Errorf("marshal VerdictNotification: %w", err)
 	}
 	targetURL := s.rserviceURL + "/api/callback/" + url.PathEscape(string(sid))
-	resp, err := s.httpClient.Post(targetURL, "application/json", bytes.NewReader(notifBytes))
+	ctx, cancel := context.WithTimeout(context.Background(), shortRPCDeadline)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(notifBytes))
+	if err != nil {
+		return fmt.Errorf("build rservice callback request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("post: %w", err)
 	}

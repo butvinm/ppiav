@@ -23,15 +23,9 @@ type decodedOutput struct {
 	NoisePerSlot []float64 `json:"noise_per_slot"`
 }
 
-// runFinalize loads the VAgent state written by `keygen` and runs Stage 4b —
-// `FinalizeDecryptionVerbose` — on a saved authenticated ciphertext + the
-// VClient's KeySwitchShare. Two artifacts are written: the per-image
-// `--out-decoded` (decoded.json with verdict + noise vector) and the
-// single-sample bench.Run JSON at `--out` (default <workdir>/finalize.json).
-//
-// The Agent is built fresh in this process so the in-memory single-use
-// session map never sees a replay — eviction inside FinalizeDecryption is
-// irrelevant across CLI boundaries.
+// runFinalize loads the VAgent state and runs FinalizeDecryptionVerbose on a
+// saved authenticated ciphertext + the VClient's KeySwitchShare, writing the
+// verdict + noise vector to --out-decoded.
 func runFinalize(args []string) error {
 	fs := flag.NewFlagSet("finalize", flag.ContinueOnError)
 	workdir := fs.String("workdir", "", "per-batch keygen artifact directory (required)")
@@ -64,7 +58,7 @@ func runFinalize(args []string) error {
 	if err != nil {
 		return fmt.Errorf("finalize: load sid: %w", err)
 	}
-	skShare, err := readSecretKey(*workdir, artifactSKAgent)
+	skTop, err := readSecretKey(*workdir, artifactSKAgent)
 	if err != nil {
 		return fmt.Errorf("finalize: load sk_a: %w", err)
 	}
@@ -81,13 +75,13 @@ func runFinalize(args []string) error {
 		return fmt.Errorf("finalize: load in-share: %w", err)
 	}
 
-	// FinalizeDecryption needs only sk_a + mac_key; PkAgg/Rlk/Gks are
+	// FinalizeDecryption needs only sk_a + mac_key; PkAgg/Rlk/GksAuth are
 	// unused on the decrypt path. Leave them nil to keep the loaded
 	// surface minimal.
 	agent, err := vagent.NewWithState(params, &vagent.ExportedState{
-		SID:     sid,
-		SkShare: skShare,
-		MacKey:  macKey,
+		SID:    sid,
+		SkTop:  skTop,
+		MacKey: macKey,
 	})
 	if err != nil {
 		return fmt.Errorf("finalize: build VAgent: %w", err)
@@ -101,11 +95,13 @@ func runFinalize(args []string) error {
 	run.Metadata["sid"] = string(sid)
 	run.Metadata["ref_logit"] = *refLogit
 
+	writeRunOnExit := func() { _ = run.WriteJSON(stepOutPath(*outPath, *workdir, "finalize")) }
+
 	var (
 		verdict protocol.Verdict
 		slots   []float64
 	)
-	sample, err := bench.Measure("finalize", func() error {
+	decryptSample, err := bench.Measure(sampleFinalizeFinalDecrypt, func() error {
 		v, s, finErr := agent.FinalizeDecryptionVerbose(sid, ct, share)
 		if finErr != nil {
 			return fmt.Errorf("VAgent.FinalizeDecryptionVerbose: %w", finErr)
@@ -114,19 +110,29 @@ func runFinalize(args []string) error {
 		slots = s
 		return nil
 	})
-	run.Append(sample)
+	run.Append(decryptSample)
 	if err != nil {
-		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "finalize"))
+		writeRunOnExit()
 		return fmt.Errorf("finalize: %w", err)
 	}
 
-	decoded, err := buildDecodedOutput(*refLogit, params.Authenticator.Lambda, macKey.S, slots, verdict)
+	var decoded decodedOutput
+	verdictSample, err := bench.Measure(sampleFinalizeVerdictCompute, func() error {
+		d, e := buildDecodedOutput(*refLogit, params.Authenticator.Lambda, macKey.S, slots, verdict)
+		if e != nil {
+			return e
+		}
+		decoded = d
+		return nil
+	})
+	run.Append(verdictSample)
 	if err != nil {
-		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "finalize"))
+		writeRunOnExit()
 		return fmt.Errorf("finalize: %w", err)
 	}
+
 	if err := writeDecodedJSON(*outDecoded, decoded); err != nil {
-		_ = run.WriteJSON(stepOutPath(*outPath, *workdir, "finalize"))
+		writeRunOnExit()
 		return fmt.Errorf("finalize: write decoded.json: %w", err)
 	}
 

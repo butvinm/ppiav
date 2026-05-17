@@ -3,6 +3,8 @@ package vagent
 import (
 	"fmt"
 
+	hierkeys "github.com/butvinm/lattigo-hierkeys"
+	"github.com/butvinm/ppiav/internal/authchain"
 	"github.com/butvinm/ppiav/internal/authenticator"
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
@@ -15,25 +17,27 @@ import (
 // deterministically from SID via protocol.NewSessionCRS (mirroring
 // OpenSession).
 //
-// Aggregated keys (PkAgg, Rlk, Gks) are conceptually held by VService and
-// transported to the Agent's process via separate artifact files; this
-// struct bundles them with the per-session secrets (SkShare, MacKey) for
-// a single round-trip across the CLI boundary. mac/finalize both need a
-// fully-wired evaluator and encryptor — PkAgg powers Auth's encrypt-v
-// step, Rlk+Gks power Auth's rotate-and-sum.
+// Aggregated keys (PkAgg, PkTop, Rlk, GksMaster) plus per-session
+// secrets (SkTop, MacKey) are bundled for a single round-trip across the
+// CLI boundary. mac/finalize both need a fully-wired chain evaluator and
+// encryptor — PkAgg powers Auth's encrypt-v step; Rlk + the locally
+// derived gksAuth (rederived from GksMaster inside NewWithState) power
+// Auth's chain-rotate-and-sum. GksAuth is NOT persisted: it is recomputed
+// from GksMaster + PKTop via hierkeys.LevelExpansion on restore.
 type ExportedState struct {
-	SID     protocol.SessionID
-	SkShare *rlwe.SecretKey
-	MacKey  authenticator.Key
-	PkAgg   *rlwe.PublicKey
-	Rlk     *rlwe.RelinearizationKey
-	Gks     []*rlwe.GaloisKey
+	SID       protocol.SessionID
+	SkTop     *rlwe.SecretKey
+	MacKey    authenticator.Key
+	PkAgg     *rlwe.PublicKey
+	PkTop     *rlwe.PublicKey
+	Rlk       *rlwe.RelinearizationKey
+	GksMaster map[int]*hierkeys.MasterKey
 }
 
 // ExportState snapshots the per-session state for `sid`. Returns an error
 // if the session is unknown or its keygen hasn't completed (pkAgg / rlkAgg
-// / eval not yet built). The live session remains in the Agent; the caller
-// is responsible for any subsequent eviction.
+// not yet built). The live session remains in the Agent; the caller is
+// responsible for any subsequent eviction.
 func (a *Agent) ExportState(sid protocol.SessionID) (*ExportedState, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -41,8 +45,8 @@ func (a *Agent) ExportState(sid protocol.SessionID) (*ExportedState, error) {
 	if err != nil {
 		return nil, err
 	}
-	if sess.skShare == nil {
-		return nil, fmt.Errorf("vagent: ExportState session %q has nil skShare", sid)
+	if sess.skTop == nil {
+		return nil, fmt.Errorf("vagent: ExportState session %q has nil skTop", sid)
 	}
 	if sess.pkAgg == nil {
 		return nil, fmt.Errorf("vagent: ExportState session %q has nil pkAgg (run AggregatePK first)", sid)
@@ -54,17 +58,18 @@ func (a *Agent) ExportState(sid protocol.SessionID) (*ExportedState, error) {
 	// slice header.
 	sCopy := make([]int, len(sess.authKey.S))
 	copy(sCopy, sess.authKey.S)
-	// Share the gks slice by reference: GaloisKeys are large (tens of MB
-	// each) and the bench caller serialises them to disk immediately. Tests
-	// and the HTTP path do not mutate the per-element entries; the shared
-	// slice header is safe.
+	// Share the gksMaster map by reference: per-element entries are large
+	// and the bench caller serialises them to disk immediately. Tests and
+	// the HTTP path do not mutate the per-element entries; the shared map
+	// header is safe.
 	return &ExportedState{
-		SID:     sid,
-		SkShare: sess.skShare,
-		MacKey:  authenticator.Key{S: sCopy, SeedF: sess.authKey.SeedF},
-		PkAgg:   sess.pkAgg,
-		Rlk:     sess.rlkAgg,
-		Gks:     sess.gks,
+		SID:       sid,
+		SkTop:     sess.skTop,
+		MacKey:    authenticator.Key{S: sCopy, SeedF: sess.authKey.SeedF},
+		PkAgg:     sess.pkAgg,
+		PkTop:     sess.pkTopAgg,
+		Rlk:       sess.rlkAgg,
+		GksMaster: sess.gksMaster,
 	}, nil
 }
 
@@ -72,15 +77,18 @@ func (a *Agent) ExportState(sid protocol.SessionID) (*ExportedState, error) {
 // single entry built from `state`. Used by the bench CLI to recreate Agent
 // state across process boundaries. The CRS is rebuilt deterministically
 // from state.SID — the same construction OpenSession uses. When PkAgg /
-// Rlk / Gks are all non-nil the seeded session is ready for
-// BuildAuthenticatedCt; when nil the session is mac/finalize-incapable
-// (useful for tests that only need to verify state seeding).
+// Rlk / PkTop / GksMaster are all non-nil the seeded session is ready for
+// BuildAuthenticatedCt: the auth-atom Galois keys (gksAuth) are
+// re-derived in-process from gksMaster + pkTop via
+// hierkeys.LevelExpansion (the dominant cost at LogN=16). When nil the
+// session is mac/finalize-incapable (useful for tests that only need to
+// verify state seeding).
 func NewWithState(params protocol.Params, state *ExportedState) (*Agent, error) {
 	if state == nil {
 		return nil, fmt.Errorf("vagent: NewWithState state is nil")
 	}
-	if state.SkShare == nil {
-		return nil, fmt.Errorf("vagent: NewWithState SkShare is nil")
+	if state.SkTop == nil {
+		return nil, fmt.Errorf("vagent: NewWithState SkTop is nil")
 	}
 	auth, err := authenticator.New(params.Authenticator, params.CKKS)
 	if err != nil {
@@ -100,7 +108,7 @@ func NewWithState(params protocol.Params, state *ExportedState) (*Agent, error) 
 	}
 	sess := &sessionState{
 		crs:        crs,
-		skShare:    state.SkShare,
+		skTop:      state.SkTop,
 		authKey:    authenticator.Key{S: sCopy, SeedF: state.MacKey.SeedF},
 		authResult: make(chan *rlwe.Ciphertext, 1),
 	}
@@ -108,14 +116,24 @@ func NewWithState(params protocol.Params, state *ExportedState) (*Agent, error) 
 		sess.pkAgg = state.PkAgg
 		sess.encryptor = rlwe.NewEncryptor(params.CKKS, state.PkAgg)
 	}
-	if state.Rlk != nil {
+	if state.PkTop != nil {
+		sess.pkTopAgg = state.PkTop
+	}
+	if state.Rlk != nil && state.GksMaster != nil && state.PkTop != nil {
+		atoms := params.AuthAtoms()
+		gksAuth, deriveSecs, err := deriveAuthGks(params, state.PkTop, state.GksMaster, atoms)
+		if err != nil {
+			return nil, fmt.Errorf("vagent: NewWithState derive auth Galois keys: %w", err)
+		}
 		sess.rlkAgg = state.Rlk
-		// Stash gks on the session so a subsequent ExportState round-trips
-		// the full Galois set back out — without this the rebuilt Agent
-		// can build the evaluator but ExportState would return nil Gks.
-		sess.gks = state.Gks
-		evk := rlwe.NewMemEvaluationKeySet(state.Rlk, state.Gks...)
-		sess.eval = ckks.NewEvaluator(params.CKKS, evk)
+		sess.gksAuth = gksAuth
+		sess.gksMaster = state.GksMaster
+		sess.deriveGksAuthSeconds = deriveSecs
+		chainEval, err := authchain.New(params.CKKS, state.Rlk, gksAuth, atoms)
+		if err != nil {
+			return nil, fmt.Errorf("vagent: NewWithState build authchain: %w", err)
+		}
+		sess.authchain = chainEval
 	}
 	a.sessions[state.SID] = sess
 	return a, nil

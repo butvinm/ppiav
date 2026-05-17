@@ -90,9 +90,9 @@ func TestHTTPVAgent_PostSessions_AllocatesSidAndRegisters(t *testing.T) {
 	// (it only checks the sessions map) and 404s with "unknown session"
 	// otherwise. Using it as a probe avoids reflecting into the private
 	// sessions map.
-	require.NoError(t, svc.StoreEvalKeys(sid, nil, nil),
+	require.NoError(t, svc.StoreEvalKeys(sid, nil, nil, nil),
 		"vservice must have the sid registered (StoreEvalKeys is the probe)")
-	require.ErrorContains(t, svc.StoreEvalKeys("never-allocated", nil, nil),
+	require.ErrorContains(t, svc.StoreEvalKeys("never-allocated", nil, nil, nil),
 		"unknown session", "control: probe distinguishes registered sids")
 }
 
@@ -192,7 +192,7 @@ func TestHTTPVAgent_GetParams_ProxiesToVService(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Contains(t, resp.Header.Get("Content-Type"), "application/json")
 
-	// Body must be a paramsWire-shaped JSON. We only check the
+	// Body must be a protocol.Manifest-shaped JSON. We only check the
 	// authenticator lambda value as a smoke test — full schema is the
 	// vservice handler's responsibility.
 	var raw map[string]any
@@ -213,12 +213,17 @@ func TestHTTPVAgent_PKShare_HappyPath(t *testing.T) {
 	sid := openSessionViaHTTP(t, vagentSrv)
 	stub := newVClientStub(t, params, sid)
 
-	// Build VClient's PK share off the stub's CRS — the first CRP draw is PK.
-	pkProto := multiparty.NewPublicKeyGenProtocol(params.CKKS)
-	clientCRP := pkProto.SampleCRP(stub.crs)
-	clientShare := pkProto.AllocateShare()
-	pkProto.GenShare(stub.skC, clientCRP, &clientShare)
-	clientBytes, err := protocol.VClientPKShare{Share: clientShare}.MarshalBinary()
+	// Build VClient's dual PK shares off the stub's CRS — pk_eval first,
+	// then pk_top.
+	pkProtoEval := multiparty.NewPublicKeyGenProtocol(params.CKKS)
+	clientCRPEval := pkProtoEval.SampleCRP(stub.crs)
+	clientShareEval := pkProtoEval.AllocateShare()
+	pkProtoEval.GenShare(stub.skCEval, clientCRPEval, &clientShareEval)
+	pkProtoTop := multiparty.NewPublicKeyGenProtocol(params.LLKN.Top())
+	clientCRPTop := pkProtoTop.SampleCRP(stub.crs)
+	clientShareTop := pkProtoTop.AllocateShare()
+	pkProtoTop.GenShare(stub.skCTop, clientCRPTop, &clientShareTop)
+	clientBytes, err := protocol.VClientPKShare{ShareEval: clientShareEval, ShareTop: clientShareTop}.MarshalBinary()
 	require.NoError(t, err)
 
 	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/pk-share", clientBytes)
@@ -277,62 +282,15 @@ func TestHTTPVAgent_PKShare_RejectsGet(t *testing.T) {
 func runKeygenViaHTTP(t *testing.T, base string, sid protocol.SessionID, stub *vclientStub, params protocol.Params) {
 	t.Helper()
 
-	// PK
-	pkProto := multiparty.NewPublicKeyGenProtocol(params.CKKS)
-	clientCRP := pkProto.SampleCRP(stub.crs)
-	clientPKShare := pkProto.AllocateShare()
-	pkProto.GenShare(stub.skC, clientCRP, &clientPKShare)
-	pkBytes, err := protocol.VClientPKShare{Share: clientPKShare}.MarshalBinary()
-	require.NoError(t, err)
-	pkResp := postOctet(t, base, "/sessions/"+string(sid)+"/pk-share", pkBytes)
-	pkRespBody, err := io.ReadAll(pkResp.Body)
-	require.NoError(t, err)
-	pkResp.Body.Close()
-	require.Equal(t, http.StatusOK, pkResp.StatusCode, "pk-share body=%s", pkRespBody)
-	var agentPK protocol.VAgentPKShare
-	require.NoError(t, agentPK.UnmarshalBinary(pkRespBody))
+	runKeygenUpToGKS(t, base, sid, stub, params)
 
-	// RLK round 1
-	rlkProto := multiparty.NewRelinearizationKeyGenProtocol(params.CKKS)
-	clientRLKCRP := rlkProto.SampleCRP(stub.crs)
-	clientEphSk, clientRLK1, clientRLK2 := rlkProto.AllocateShare()
-	rlkProto.GenShareRoundOne(stub.skC, clientRLKCRP, clientEphSk, &clientRLK1)
-	r1Bytes, err := protocol.VClientRLKRound1{Share: clientRLK1}.MarshalBinary()
-	require.NoError(t, err)
-	r1Resp := postOctet(t, base, "/sessions/"+string(sid)+"/rlk/round1", r1Bytes)
-	r1RespBody, err := io.ReadAll(r1Resp.Body)
-	require.NoError(t, err)
-	r1Resp.Body.Close()
-	require.Equal(t, http.StatusOK, r1Resp.StatusCode, "rlk/round1 body=%s", r1RespBody)
-	var agentR1 protocol.VAgentRLKRound1
-	require.NoError(t, agentR1.UnmarshalBinary(r1RespBody))
+	// Single master atom set Galois shares.
+	masterLabels := params.MasterAtoms()
+	clientMaster := generateClientGaloisShares(t, stub, params, masterLabels)
 
-	// Stub-side round-1 aggregate (must mirror the agent's).
-	_, clientRLK1Agg, _ := rlkProto.AllocateShare()
-	rlkProto.AggregateShares(clientRLK1, agentR1.Share, &clientRLK1Agg)
-
-	// RLK round 2
-	rlkProto.GenShareRoundTwo(clientEphSk, stub.skC, clientRLK1Agg, &clientRLK2)
-	r2Bytes, err := protocol.VClientRLKRound2{Share: clientRLK2}.MarshalBinary()
-	require.NoError(t, err)
-	r2Resp := postOctet(t, base, "/sessions/"+string(sid)+"/rlk/round2", r2Bytes)
-	r2RespBody, err := io.ReadAll(r2Resp.Body)
-	require.NoError(t, err)
-	r2Resp.Body.Close()
-	require.Equal(t, http.StatusOK, r2Resp.StatusCode, "rlk/round2 body=%s", r2RespBody)
-
-	// Galois shares
-	gkg := multiparty.NewGaloisKeyGenProtocol(params.CKKS)
-	labels := params.RotationIndices()
-	clientGalShares := make([]multiparty.GaloisKeyGenShare, len(labels))
-	for i, j := range labels {
-		crp := gkg.SampleCRP(stub.crs)
-		s := gkg.AllocateShare()
-		galEl := params.CKKS.GaloisElement(-j)
-		require.NoError(t, gkg.GenShare(stub.skC, galEl, crp, &s))
-		clientGalShares[i] = s
-	}
-	gksBytes, err := protocol.VClientGaloisKeyShare{Shares: clientGalShares}.MarshalBinary()
+	gksBytes, err := protocol.VClientGaloisShares{
+		MasterShares: clientMaster,
+	}.MarshalBinary()
 	require.NoError(t, err)
 	gksResp := postOctet(t, base, "/sessions/"+string(sid)+"/gks-shares", gksBytes)
 	gksRespBody, err := io.ReadAll(gksResp.Body)
@@ -350,15 +308,15 @@ func TestHTTPVAgent_FullKeygenForwardsEvalKeysToVService(t *testing.T) {
 
 	// After the gks-shares handler runs, VService must have stored the
 	// eval keys for sid. We can't introspect the private map directly, but
-	// we can verify the agent's session-level invariants (rlkAgg, eval are
-	// non-nil) and check VService doesn't 404 a duplicate StoreEvalKeys.
+	// we can verify the agent's session-level invariants (rlkAgg, authchain
+	// are non-nil) and check VService doesn't 404 a duplicate StoreEvalKeys.
 	sess := agentState(t, agent, sid)
 	require.NotNil(t, sess.rlkAgg, "AggregateGaloisShares must have finalised rlk")
-	require.NotNil(t, sess.eval, "Session evaluator must be wired")
+	require.NotNil(t, sess.authchain, "Session chain evaluator must be wired")
 
 	// Re-issue StoreEvalKeys directly against the vservice — if the sid
 	// hadn't been stored, this would 404. (It overwrites; that's fine.)
-	require.NoError(t, svc.StoreEvalKeys(sid, sess.rlkAgg, nil))
+	require.NoError(t, svc.StoreEvalKeys(sid, sess.rlkAgg, nil, nil))
 }
 
 func TestHTTPVAgent_RLKRound1_UnknownSidReturns404(t *testing.T) {
@@ -396,12 +354,33 @@ func TestHTTPVAgent_GKSShares_LabelMismatchReturns400(t *testing.T) {
 	stub := newVClientStub(t, params, sid)
 	runKeygenUpToGKS(t, vagentSrv.URL, sid, stub, params)
 
-	// Zero shares < Lambda-1 labels → count mismatch → 400.
-	emptyBytes, err := protocol.VClientGaloisKeyShare{Shares: nil}.MarshalBinary()
+	// Zero shares < expected atom-set size → count mismatch → 400.
+	emptyBytes, err := protocol.VClientGaloisShares{
+		MasterShares: nil,
+	}.MarshalBinary()
 	require.NoError(t, err)
 	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/gks-shares", emptyBytes)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+// TestHTTPVAgent_GKSShares_RejectsCountMismatch asserts the design-A
+// decoder rejects a well-formed but short share list (zero shares when
+// the master atom set has >0 atoms). Distinct from a malformed-bytes 400
+// — the body parses cleanly here, but the count mismatch fires inside
+// AggregateGaloisShares.
+func TestHTTPVAgent_GKSShares_RejectsCountMismatch(t *testing.T) {
+	_, vagentSrv, _, _, _, params := newHTTPFixture(t)
+	sid := openSessionViaHTTP(t, vagentSrv)
+	stub := newVClientStub(t, params, sid)
+	runKeygenUpToGKS(t, vagentSrv.URL, sid, stub, params)
+
+	// Well-formed zero-share body — single 4-byte zero count.
+	zeroBody := []byte{0x00, 0x00, 0x00, 0x00}
+
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/gks-shares", zeroBody)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode, "count-mismatch shares must be rejected")
 }
 
 func TestHTTPVAgent_UnknownPathReturns404(t *testing.T) {
@@ -454,18 +433,12 @@ func TestHTTPVAgent_GKSShares_VServiceForwardFailure(t *testing.T) {
 	stub := newVClientStub(t, params, sid)
 	runKeygenUpToGKS(t, vagentSrv.URL, sid, stub, params)
 
-	// Build valid gks shares.
-	gkg := multiparty.NewGaloisKeyGenProtocol(params.CKKS)
-	labels := params.RotationIndices()
-	clientGalShares := make([]multiparty.GaloisKeyGenShare, len(labels))
-	for i, j := range labels {
-		crp := gkg.SampleCRP(stub.crs)
-		s := gkg.AllocateShare()
-		galEl := params.CKKS.GaloisElement(-j)
-		require.NoError(t, gkg.GenShare(stub.skC, galEl, crp, &s))
-		clientGalShares[i] = s
-	}
-	gksBytes, err := protocol.VClientGaloisKeyShare{Shares: clientGalShares}.MarshalBinary()
+	// Build valid master-atom-set gks shares.
+	masterLabels := params.MasterAtoms()
+	clientMaster := generateClientGaloisShares(t, stub, params, masterLabels)
+	gksBytes, err := protocol.VClientGaloisShares{
+		MasterShares: clientMaster,
+	}.MarshalBinary()
 	require.NoError(t, err)
 	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/gks-shares", gksBytes)
 	defer resp.Body.Close()
@@ -678,7 +651,7 @@ func runFullKeygenViaHTTPThenStore(
 	runKeygenViaHTTP(t, vagentBase, sid, stub, params)
 	sess := agentState(t, agent, sid)
 	require.NotNil(t, sess.pkAgg)
-	return jointSk(t, params, stub.skC, sess.skShare), sess.pkAgg
+	return jointSk(t, params, stub.skCEval, sess.skEvalCached), sess.pkAgg
 }
 
 func TestHTTPVAgent_Image_HappyPath(t *testing.T) {
@@ -790,7 +763,7 @@ func TestHTTPVAgent_PartialDecryption_AcceptVerdict(t *testing.T) {
 	require.NoError(t, err)
 	zeroSk := rlwe.NewSecretKey(params.CKKS)
 	clientShare := clientProto.AllocateShare(ctM.Level())
-	clientProto.GenShare(stub.skC, zeroSk, ctM, &clientShare)
+	clientProto.GenShare(stub.skCEval, zeroSk, ctM, &clientShare)
 	pdBytes, err := protocol.PartialDecryption{Share: clientShare}.MarshalBinary()
 	require.NoError(t, err)
 
@@ -800,9 +773,7 @@ func TestHTTPVAgent_PartialDecryption_AcceptVerdict(t *testing.T) {
 	respBody, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode, "body=%s", respBody)
-	var redirectBody struct {
-		Redirect string `json:"redirect"`
-	}
+	var redirectBody protocol.FinalizeRedirect
 	require.NoError(t, json.Unmarshal(respBody, &redirectBody))
 	assert.Equal(t, rsvcSrv.URL+"/protected", redirectBody.Redirect)
 
@@ -910,7 +881,7 @@ func TestHTTPVAgent_PartialDecryption_BeforeImageRejects(t *testing.T) {
 	require.NoError(t, err)
 	zeroSk := rlwe.NewSecretKey(params.CKKS)
 	share := proto.AllocateShare(dummyCt.Level())
-	proto.GenShare(stub.skC, zeroSk, dummyCt, &share)
+	proto.GenShare(stub.skCEval, zeroSk, dummyCt, &share)
 	pdBytes, err := protocol.PartialDecryption{Share: share}.MarshalBinary()
 	require.NoError(t, err)
 
@@ -965,7 +936,7 @@ func TestHTTPVAgent_PartialDecryption_CallbackFailureReturns502(t *testing.T) {
 	require.NoError(t, err)
 	zeroSk := rlwe.NewSecretKey(params.CKKS)
 	clientShare := clientProto.AllocateShare(ctM.Level())
-	clientProto.GenShare(stub.skC, zeroSk, ctM, &clientShare)
+	clientProto.GenShare(stub.skCEval, zeroSk, ctM, &clientShare)
 	pdBytes, err := protocol.PartialDecryption{Share: clientShare}.MarshalBinary()
 	require.NoError(t, err)
 
@@ -1168,18 +1139,13 @@ func TestHTTPVAgent_GKSShares_EvalKeysForwardFailureRejectsAndEvicts(t *testing.
 	stub := newVClientStub(t, params, sid)
 	runKeygenUpToGKS(t, vagentSrv.URL, sid, stub, params)
 
-	// Build valid gks shares so the handler reaches the VService forward.
-	gkg := multiparty.NewGaloisKeyGenProtocol(params.CKKS)
-	labels := params.RotationIndices()
-	clientGalShares := make([]multiparty.GaloisKeyGenShare, len(labels))
-	for i, j := range labels {
-		crp := gkg.SampleCRP(stub.crs)
-		s := gkg.AllocateShare()
-		galEl := params.CKKS.GaloisElement(-j)
-		require.NoError(t, gkg.GenShare(stub.skC, galEl, crp, &s))
-		clientGalShares[i] = s
-	}
-	gksBytes, err := protocol.VClientGaloisKeyShare{Shares: clientGalShares}.MarshalBinary()
+	// Build valid master-atom-set gks shares so the handler reaches the
+	// VService forward.
+	masterLabels := params.MasterAtoms()
+	clientMaster := generateClientGaloisShares(t, stub, params, masterLabels)
+	gksBytes, err := protocol.VClientGaloisShares{
+		MasterShares: clientMaster,
+	}.MarshalBinary()
 	require.NoError(t, err)
 
 	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/gks-shares", gksBytes)
@@ -1222,8 +1188,8 @@ func TestHTTPVAgent_Image_VServiceFailureRejectAndEvicts(t *testing.T) {
 			_, _ = w.Write([]byte(`{"SessionID":"sid-img-` + strings.Repeat("a", int(n)) + `"}`))
 			return
 		}
-		if strings.HasSuffix(r.URL.Path, "/image") {
-			http.Error(w, "vservice image down", http.StatusInternalServerError)
+		if strings.HasSuffix(r.URL.Path, "/infer") {
+			http.Error(w, "vservice infer down", http.StatusInternalServerError)
 			return
 		}
 		http.NotFound(w, r)
@@ -1288,11 +1254,20 @@ func TestHTTPVAgent_PartialDecryption_MalformedBodyEvicts(t *testing.T) {
 // as a helper because two new tests need the same prefix.
 func runKeygenUpToGKS(t *testing.T, base string, sid protocol.SessionID, stub *vclientStub, params protocol.Params) {
 	t.Helper()
-	pkProto := multiparty.NewPublicKeyGenProtocol(params.CKKS)
-	clientCRP := pkProto.SampleCRP(stub.crs)
-	clientPKShare := pkProto.AllocateShare()
-	pkProto.GenShare(stub.skC, clientCRP, &clientPKShare)
-	pkBytes, err := protocol.VClientPKShare{Share: clientPKShare}.MarshalBinary()
+
+	// Dual PK shares (eval + top).
+	pkProtoEval := multiparty.NewPublicKeyGenProtocol(params.CKKS)
+	clientCRPEval := pkProtoEval.SampleCRP(stub.crs)
+	clientPKShareEval := pkProtoEval.AllocateShare()
+	pkProtoEval.GenShare(stub.skCEval, clientCRPEval, &clientPKShareEval)
+	pkProtoTop := multiparty.NewPublicKeyGenProtocol(params.LLKN.Top())
+	clientCRPTop := pkProtoTop.SampleCRP(stub.crs)
+	clientPKShareTop := pkProtoTop.AllocateShare()
+	pkProtoTop.GenShare(stub.skCTop, clientCRPTop, &clientPKShareTop)
+	pkBytes, err := protocol.VClientPKShare{
+		ShareEval: clientPKShareEval,
+		ShareTop:  clientPKShareTop,
+	}.MarshalBinary()
 	require.NoError(t, err)
 	r := postOctet(t, base, "/sessions/"+string(sid)+"/pk-share", pkBytes)
 	require.Equal(t, http.StatusOK, r.StatusCode)
@@ -1304,7 +1279,7 @@ func runKeygenUpToGKS(t *testing.T, base string, sid protocol.SessionID, stub *v
 	rlkProto := multiparty.NewRelinearizationKeyGenProtocol(params.CKKS)
 	clientRLKCRP := rlkProto.SampleCRP(stub.crs)
 	ephSk, share1, share2 := rlkProto.AllocateShare()
-	rlkProto.GenShareRoundOne(stub.skC, clientRLKCRP, ephSk, &share1)
+	rlkProto.GenShareRoundOne(stub.skCEval, clientRLKCRP, ephSk, &share1)
 	r1b, err := protocol.VClientRLKRound1{Share: share1}.MarshalBinary()
 	require.NoError(t, err)
 	r1 := postOctet(t, base, "/sessions/"+string(sid)+"/rlk/round1", r1b)
@@ -1315,7 +1290,7 @@ func runKeygenUpToGKS(t *testing.T, base string, sid protocol.SessionID, stub *v
 	require.NoError(t, agentR1.UnmarshalBinary(r1RespBody))
 	_, share1Agg, _ := rlkProto.AllocateShare()
 	rlkProto.AggregateShares(share1, agentR1.Share, &share1Agg)
-	rlkProto.GenShareRoundTwo(ephSk, stub.skC, share1Agg, &share2)
+	rlkProto.GenShareRoundTwo(ephSk, stub.skCEval, share1Agg, &share2)
 	r2b, err := protocol.VClientRLKRound2{Share: share2}.MarshalBinary()
 	require.NoError(t, err)
 	r2 := postOctet(t, base, "/sessions/"+string(sid)+"/rlk/round2", r2b)

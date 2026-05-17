@@ -35,6 +35,13 @@ import (
 // The bench loader/aggregator key off it for table grouping; the synthetic
 // `x²` (--orion="") path uses the same tag (it just swaps the inference
 // circuit).
+//
+// TODO: per memory `feedback_readme_user_facing.md` (2026-05-16 extension),
+// "phase" should not appear in user-facing strings. The value here is
+// pinned to keep wire compatibility with bench/bench/load.py's required
+// `phase` field and existing on-disk results. Renaming it (e.g. to
+// "ppiav") requires a coordinated change in the Python loader; deferred
+// as ppiav-side ABI debt until that coordinated change lands.
 const benchPhase = "phase2"
 
 // usage prints the top-level help and exits with status 2 (flag convention).
@@ -48,6 +55,7 @@ Subcommands:
   keygen           bilateral collaborative keygen; writes keys + sid + params
   encrypt          VClient.EncryptImage on a fresh image
   infer            VService.Infer on a saved input ciphertext
+  infer-batch      VService.Infer over N image dirs with a single LoadModel
   mac              VAgent.BuildAuthenticatedCt on a saved result ciphertext
   partial-decrypt  VClient.PartialDecrypt on a saved auth ciphertext
   finalize         VAgent.FinalizeDecryptionVerbose on a saved auth ct + share
@@ -82,6 +90,8 @@ func main() {
 		err = runEncrypt(args)
 	case "infer":
 		err = runInfer(args)
+	case "infer-batch":
+		err = runInferBatch(args)
 	case "mac":
 		err = runMAC(args)
 	case "partial-decrypt":
