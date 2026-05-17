@@ -6,7 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "numpy>=2.0",
     "pillow>=10.0",
-    "orion-v2-compiler>=2.1.6,<3",
+    "orion-v2-compiler>=2.1.7,<3",
     "torch>=2.2",
     "kagglehub",
 ]
