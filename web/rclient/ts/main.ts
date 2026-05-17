@@ -25,19 +25,26 @@ declare global {
 const receivedAt = new Date().toISOString();
 
 // classifyVerdict returns the CSS modifier + human label for a verdict
-// string. The wire format mirrors protocol.Verdict.String(): "Accept",
-// "Reject", "Unknown".
+// string. Wire format mirrors protocol.Verdict.String(): "accept",
+// "reject", "result_auth_failed", "unknown".
 function classifyVerdict(v: string): {
-  cls: "accept" | "reject" | "unknown";
+  cls: "accept" | "reject" | "auth-failed" | "unknown";
   label: string;
+  message: string;
 } {
   switch (v.toLowerCase()) {
     case "accept":
-      return { cls: "accept", label: "verified" };
+      return { cls: "accept", label: "пройдено", message: "Доступ предоставлен." };
     case "reject":
-      return { cls: "reject", label: "rejected" };
+      return { cls: "reject", label: "отказано", message: "Доступ запрещён." };
+    case "result_auth_failed":
+      return {
+        cls: "auth-failed",
+        label: "не аутентично",
+        message: "Результат не аутентичен. Доступ запрещён.",
+      };
     default:
-      return { cls: "unknown", label: "unknown" };
+      return { cls: "unknown", label: "неизвестно", message: "Вердикт недоступен." };
   }
 }
 
@@ -48,13 +55,13 @@ function render(): void {
   }
   const v = window.verdict;
   if (v === undefined) {
-    status.textContent = "no verdict injected by server";
+    status.textContent = "сервер не передал вердикт";
     status.classList.add("error");
     return;
   }
   status.replaceChildren();
 
-  const { cls, label } = classifyVerdict(v.verdict);
+  const { cls, label, message } = classifyVerdict(v.verdict);
 
   const verdictRow = document.createElement("div");
   verdictRow.className = "verdict";
@@ -63,12 +70,7 @@ function render(): void {
   pill.textContent = label;
   const verdictLabel = document.createElement("span");
   verdictLabel.className = "verdict-label";
-  verdictLabel.textContent =
-    cls === "accept"
-      ? "Access granted."
-      : cls === "reject"
-        ? "Access denied."
-        : "Verdict unavailable.";
+  verdictLabel.textContent = message;
   verdictRow.appendChild(pill);
   verdictRow.appendChild(verdictLabel);
 
@@ -76,8 +78,8 @@ function render(): void {
   meta.className = "meta";
   const rows: [string, string][] = [
     ["sid", v.sid],
-    ["verdict", v.verdict],
-    ["received", receivedAt],
+    ["вердикт", v.verdict],
+    ["получен", receivedAt],
   ];
   for (const [k, val] of rows) {
     const dt = document.createElement("dt");

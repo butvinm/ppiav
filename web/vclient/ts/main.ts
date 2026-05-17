@@ -113,14 +113,14 @@ function setStatus(msg: string, error = false): void {
 }
 
 function showError(msg: string): void {
-  setStatus("Error: " + msg, true);
+  setStatus("Ошибка: " + msg, true);
   console.error("[vclient]", msg);
 }
 
 async function loadWasm(): Promise<void> {
   if (typeof globalThis.Go === "undefined") {
     throw new Error(
-      "Go WASM runtime not found — wasm_exec.js must load before main.js",
+      "Среда исполнения Go WASM не найдена — wasm_exec.js должен загрузиться до main.js",
     );
   }
   const existing = globalThis.ppiav as { __ready?: boolean } | undefined;
@@ -153,9 +153,7 @@ async function loadWasm(): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS));
   }
   throw new Error(
-    "ppiav WASM bridge did not become ready within " +
-      READY_TIMEOUT_MS +
-      "ms",
+    "WASM-мост ppiav не инициализирован за " + READY_TIMEOUT_MS + " мс",
   );
 }
 
@@ -179,19 +177,23 @@ async function fetchParams(sid: string): Promise<string> {
   return await resp.text();
 }
 
+// Названия шагов следуют этапам протокола из thesis.typ:
+//   2. Совместная генерация ключей (pk-* / rlk* / gks)
+//   3. Передача изображения и инференс (encrypt, infer)
+//   4. Защищённая расшифровка результата (partial, redirect)
 const STEP_SPECS: StepSpec[] = [
-  { id: "pk-gen", label: "Generate PK share", kind: "wasm" },
-  { id: "pk-exchange", label: "Exchange PK share", kind: "network" },
-  { id: "pk-aggregate", label: "Aggregate PK", kind: "wasm" },
-  { id: "rlk1-gen", label: "Generate RLK round-1 share", kind: "wasm" },
-  { id: "rlk1-exchange", label: "Exchange RLK round-1 share", kind: "network" },
-  { id: "rlk1-aggregate", label: "Aggregate RLK round-1", kind: "wasm" },
-  { id: "rlk2", label: "Send RLK round-2 share", kind: "network" },
-  { id: "gks", label: "Send Galois key shares", kind: "network" },
-  { id: "encrypt", label: "Preprocess and encrypt image", kind: "wasm" },
-  { id: "infer", label: "Submit image and await authenticated result", kind: "network" },
-  { id: "partial", label: "Compute partial decryption", kind: "wasm" },
-  { id: "redirect", label: "Submit partial decryption", kind: "network" },
+  { id: "pk-gen", label: "Генерация доли публичного ключа", kind: "wasm" },
+  { id: "pk-exchange", label: "Обмен долями публичного ключа", kind: "network" },
+  { id: "pk-aggregate", label: "Агрегация публичного ключа", kind: "wasm" },
+  { id: "rlk1-gen", label: "Генерация доли ключа релинеаризации, раунд 1", kind: "wasm" },
+  { id: "rlk1-exchange", label: "Обмен долями ключа релинеаризации, раунд 1", kind: "network" },
+  { id: "rlk1-aggregate", label: "Агрегация ключа релинеаризации, раунд 1", kind: "wasm" },
+  { id: "rlk2", label: "Отправка доли ключа релинеаризации, раунд 2", kind: "network" },
+  { id: "gks", label: "Отправка долей мастер-ключей вращения", kind: "network" },
+  { id: "encrypt", label: "Подготовка и шифрование изображения", kind: "wasm" },
+  { id: "infer", label: "Отправка изображения и ожидание аутентифицированного результата", kind: "network" },
+  { id: "partial", label: "Частичная расшифровка своей долей ключа", kind: "wasm" },
+  { id: "redirect", label: "Отправка частичной расшифровки", kind: "network" },
 ];
 
 async function runWasmStep<T>(
@@ -432,7 +434,7 @@ async function runProtocol(
   );
   if (typeof body.redirect !== "string" || body.redirect === "") {
     throw new Error(
-      "partial-decryption: response missing 'redirect' field: " +
+      "partial-decryption: в ответе отсутствует поле 'redirect': " +
         JSON.stringify(body),
     );
   }
@@ -453,26 +455,26 @@ function mustElement<T extends HTMLElement>(
 async function main(): Promise<void> {
   const sid = getSidFromURL();
   if (sid === null) {
-    showError("No sid provided in URL (expected ?sid=<id>)");
+    showError("Идентификатор сессии не передан в URL (ожидается ?sid=<id>)");
     return;
   }
-  setStatus("Loading WASM...");
+  setStatus("Загрузка WASM...");
   try {
     await loadWasm();
   } catch (err) {
     showError(
-      "WASM load failed: " +
+      "Не удалось загрузить WASM: " +
         (err instanceof Error ? err.message : String(err)),
     );
     return;
   }
-  setStatus("Fetching session parameters...");
+  setStatus("Загрузка параметров сессии...");
   let paramsJSON: string;
   try {
     paramsJSON = await fetchParams(sid);
   } catch (err) {
     showError(
-      "Could not load session params: " +
+      "Не удалось загрузить параметры сессии: " +
         (err instanceof Error ? err.message : String(err)),
     );
     return;
@@ -480,11 +482,11 @@ async function main(): Promise<void> {
   const bridge = globalThis.ppiav;
   const created = bridge.newClient(paramsJSON, sid);
   if (isError(created)) {
-    showError("Could not construct ppiav client: " + created.error);
+    showError("Не удалось создать клиент ppiav: " + created.error);
     return;
   }
   const handle = created.handle;
-  setStatus("Ready. Select an image to verify.");
+  setStatus("Готово. Выберите изображение для верификации.");
 
   const stepsHost = mustElement("steps", HTMLDivElement);
   const macroEl = mustElement("macro", HTMLParagraphElement);
@@ -506,11 +508,11 @@ async function main(): Promise<void> {
       return;
     }
     input.disabled = true;
-    setStatus("Running verification protocol...");
+    setStatus("Выполняется протокол верификации...");
     runProtocol(tracker, sid, handle, file)
       .catch((err: unknown) => {
         showError(
-          "Protocol failed: " +
+          "Ошибка протокола: " +
             (err instanceof Error ? err.message : String(err)),
         );
         input.disabled = false;
