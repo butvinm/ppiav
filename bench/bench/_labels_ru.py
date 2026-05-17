@@ -71,7 +71,7 @@ STEP_NAMES: dict[str, str] = {
     "encrypt": "шифрование изображения",
     "partial-decrypt": "частичная расшифровка",
     # Per-image sub-steps emitted by the instrumented per-image subcommands.
-    "infer.load_keys": "инференс: загрузка rlk + gks_infer",
+    "infer.load_keys": "инференс: загрузка модели и ключей",
     "infer.load_input_ct": "инференс: загрузка шифротекста входа",
     "infer.exec": "инференс: вычисление",
     "infer.serialize_result": "инференс: сериализация результата",
