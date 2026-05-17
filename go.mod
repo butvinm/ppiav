@@ -4,7 +4,7 @@ go 1.26.1
 
 require (
 	github.com/butvinm/lattigo-hierkeys v0.0.0-20260418043512-d2be85d55189
-	github.com/butvinm/orion/v2 v2.1.5
+	github.com/butvinm/orion/v2 v2.1.8
 	github.com/stretchr/testify v1.11.1
 	github.com/tuneinsight/lattigo/v6 v6.2.0
 )
