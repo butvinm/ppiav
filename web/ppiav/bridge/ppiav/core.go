@@ -9,73 +9,21 @@
 package ppiav
 
 import (
-	"encoding/json"
 	"fmt"
 	"sync"
 	"sync/atomic"
 
-	"github.com/butvinm/ppiav/internal/authenticator"
 	"github.com/butvinm/ppiav/internal/protocol"
 	"github.com/butvinm/ppiav/internal/vclient"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 	"github.com/tuneinsight/lattigo/v6/multiparty"
-	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
 )
 
-// ParseManifestJSON decodes the JSON written by vservice.writeManifest
-// into a protocol.Params. The LLKN hierarchy is reconstructed locally
-// from the decoded CKKS params using the wire LLKNLogPHK schedule,
-// validated against the bridge's own DefaultLLKNLogPHK to fail loud on
-// any silent drift between Go and WASM builds. LLKNBase is likewise
-// validated against DefaultLLKNBase. Exported for tests.
+// ParseManifestJSON re-exports protocol.ParseManifestJSON. The browser
+// bridge needs it from JS; vagent needs it from Go on the server side.
+// One implementation lives in internal/protocol.
 func ParseManifestJSON(data []byte) (protocol.Params, error) {
-	var m protocol.Manifest
-	if err := json.Unmarshal(data, &m); err != nil {
-		return protocol.Params{}, fmt.Errorf("ppiav: decode manifest: %w", err)
-	}
-	if m.LLKNBase != protocol.DefaultLLKNBase {
-		return protocol.Params{}, fmt.Errorf("ppiav: LLKNBase mismatch (wire=%d, bridge expects %d)", m.LLKNBase, protocol.DefaultLLKNBase)
-	}
-	if !equalIntSlice(m.LLKNLogPHK, protocol.DefaultLLKNLogPHK) {
-		return protocol.Params{}, fmt.Errorf("ppiav: LLKNLogPHK mismatch (wire=%v, bridge expects %v)", m.LLKNLogPHK, protocol.DefaultLLKNLogPHK)
-	}
-	var ckksParams ckks.Parameters
-	if err := ckksParams.UnmarshalJSON(m.CKKS); err != nil {
-		return protocol.Params{}, fmt.Errorf("ppiav: decode CKKS params: %w", err)
-	}
-	// LLKNLogPHK was validated above against DefaultLLKNLogPHK — route
-	// through the canonical builder so this stays the single LLKN
-	// construction site shared with Defaults / LoadOrionParams / vservice.
-	llknParams, err := protocol.BuildLLKNParams(ckksParams)
-	if err != nil {
-		return protocol.Params{}, fmt.Errorf("ppiav: build LLKN parameters: %w", err)
-	}
-	return protocol.Params{
-		CKKS:     ckksParams,
-		LLKN:     llknParams,
-		LLKNBase: m.LLKNBase,
-		Authenticator: authenticator.Config{
-			Lambda:  m.AuthenticatorLambda,
-			Epsilon: m.AuthenticatorEpsilon,
-		},
-		FloodSigma:           m.FloodSigma,
-		ExtraRotationIndices: m.ExtraRotationIndices,
-		InputLevel:           m.InputLevel,
-	}, nil
-}
-
-// equalIntSlice reports whether two int slices have the same length and
-// element-wise contents. Used for LLKNLogPHK schedule validation.
-func equalIntSlice(a, b []int) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
+	return protocol.ParseManifestJSON(data)
 }
 
 // handles stores *vclient.Client instances keyed by an integer handle
