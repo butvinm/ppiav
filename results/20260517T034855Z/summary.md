@@ -37,11 +37,7 @@
 | агент верификации  | финализация: расшифровка + Auth              |  10 |        36.18 |       38.49 |                0.5 |           176.0 |
 | агент верификации  | финализация: вычисление вердикта             |  10 |         0.01 |        0.01 |                0.0 |           176.1 |
 
-_delta RSS = vm_hwm - pre_vm_hwm = step's incremental memory growth. Peak VM HWM = high-water mark
-of the resident set at step exit. Keygen sub-steps share one process when run via `ppiav-cli
-keygen`, so each sub-step's pre_vm_hwm is the previous sub-step's vm_hwm; the delta is the marginal
-cost of that sub-step on top of the prior session state. Per-image steps each spawn a fresh process,
-so their delta RSS is the true per-call peak._
+_delta RSS = vm_hwm - pre_vm_hwm = step's incremental memory growth. Peak VM HWM = high-water mark of the resident set at step exit. Keygen sub-steps share one process when run via `ppiav-cli keygen`, so each sub-step's pre_vm_hwm is the previous sub-step's vm_hwm; the delta is the marginal cost of that sub-step on top of the prior session state. Per-image steps each spawn a fresh process, so their delta RSS is the true per-call peak._
 
 ## Keygen by round (joint)
 
@@ -53,8 +49,7 @@ so their delta RSS is the true per-call peak._
 | генерация rlk, раунд 2    |   1 |        240.21 |         98836.1 |
 | генерация ключей вращения |   1 |      34064.21 |         99355.5 |
 
-_Rounds execute bilaterally inside one `ppiav-cli keygen` process. Each row sums its per-party
-sub-step samples from the table above._
+_Rounds execute bilaterally inside one `ppiav-cli keygen` process. Each row sums its per-party sub-step samples from the table above._
 
 ## Размер сообщений
 
@@ -86,12 +81,7 @@ sub-step samples from the table above._
 | PartialDecryption   | Частично расшифрованный шифротекст           | клиент      | агент      |   1048600 |   1024.0 |   1.00 |
 | FinalizeRedirect    | Перенаправление на страницу ресурса          | агент       | клиент     |       128 |      0.1 |   0.00 |
 
-_Note: lattigo-hierkeys ships a single compressed master atom set: `gks_master.bin` is the wire
-artifact (top-level MasterKey bundle) consumed by both VAgent (derives the auth-atom keys locally on
-`mac`) and VService (derives the inference rotation set on `infer`). `gks_infer.bin` is the
-per-target derived set VService caches locally — derivable from `gks_master.bin + pk_top.bin +
-params.json` but tens-of-GB at LogN=16, so cached on disk to avoid multi-minute per-sample
-re-derivation._
+_Note: lattigo-hierkeys ships a single compressed master atom set: `gks_master.bin` is the wire artifact (top-level MasterKey bundle) consumed by both VAgent (derives the auth-atom keys locally on `mac`) and VService (derives the inference rotation set on `infer`). `gks_infer.bin` is the per-target derived set VService caches locally — derivable from `gks_master.bin + pk_top.bin + params.json` but tens-of-GB at LogN=16, so cached on disk to avoid multi-minute per-sample re-derivation._
 
 ## Инвентарь ключей
 
@@ -143,18 +133,18 @@ re-derivation._
 
 **SNR per image** (`|ref_logit| / std(noise_per_slot_i)`):
 
-| idx |         \ |          ref_logit\ |     | SNR |
-| --: | --------: | ------------------: | --- | --- |
-|   0 |   16.5628 |  219779858431219.94 |     |     |
-|   1 | 1216.9502 | 6692092741504850.00 |     |     |
-|   2 |   20.0280 |  290997734804852.94 |     |     |
-|   3 |  408.5040 | 5176307401642508.00 |     |     |
-|   4 |   10.6847 |  135091645003570.45 |     |     |
-|   5 |   13.1281 |  185902375235529.34 |     |     |
-|  24 |   33.4911 |  456785441703824.25 |     |     |
-|  25 |   26.9990 |  360852162137634.31 |     |     |
-|  35 |    7.7763 |   87155173178650.52 |     |     |
-|  43 |   78.8496 | 1060673962909840.75 |     |     |
+| idx | \|ref_logit\| |                 SNR |
+| --: | ------------: | ------------------: |
+|   0 |       16.5628 |  219779858431219.94 |
+|   1 |     1216.9502 | 6692092741504850.00 |
+|   2 |       20.0280 |  290997734804852.94 |
+|   3 |      408.5040 | 5176307401642508.00 |
+|   4 |       10.6847 |  135091645003570.45 |
+|   5 |       13.1281 |  185902375235529.34 |
+|  24 |       33.4911 |  456785441703824.25 |
+|  25 |       26.9990 |  360852162137634.31 |
+|  35 |        7.7763 |   87155173178650.52 |
+|  43 |       78.8496 | 1060673962909840.75 |
 
 ## Время передачи по сети
 
