@@ -55,6 +55,7 @@ Subcommands:
   keygen           bilateral collaborative keygen; writes keys + sid + params
   encrypt          VClient.EncryptImage on a fresh image
   infer            VService.Infer on a saved input ciphertext
+  infer-batch      VService.Infer over N image dirs with a single LoadModel
   mac              VAgent.BuildAuthenticatedCt on a saved result ciphertext
   partial-decrypt  VClient.PartialDecrypt on a saved auth ciphertext
   finalize         VAgent.FinalizeDecryptionVerbose on a saved auth ct + share
@@ -89,6 +90,8 @@ func main() {
 		err = runEncrypt(args)
 	case "infer":
 		err = runInfer(args)
+	case "infer-batch":
+		err = runInferBatch(args)
 	case "mac":
 		err = runMAC(args)
 	case "partial-decrypt":

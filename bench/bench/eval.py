@@ -164,19 +164,14 @@ def run_pipeline(
 
     manifest_dir = inputs.resolve().parent
     images: list[dict[str, Any]] = manifest["images"]
+
+    img_dirs: list[Path] = []
     for entry in images:
         idx = int(entry["idx"])
         img_dir = batch_dir / f"img_{idx}"
         img_dir.mkdir(parents=True, exist_ok=True)
+        img_dirs.append(img_dir)
         image_path = _resolve_image_path(manifest_dir, str(entry["path"]))
-        ref_logit = float(entry.get("ref_logit", 0.0))
-
-        input_ct = img_dir / "input_ct.bin"
-        result_ct = img_dir / "result_ct.bin"
-        auth_ct = img_dir / "auth_ct.bin"
-        client_share = img_dir / "client_share.bin"
-        decoded = img_dir / "decoded.json"
-
         _run_step(
             cli,
             "encrypt",
@@ -186,29 +181,35 @@ def run_pipeline(
                 "--image",
                 str(image_path),
                 "--out-ct",
-                str(input_ct),
+                str(img_dir / "input_ct.bin"),
                 "--out",
                 str(img_dir / "encrypt.json"),
             ],
             cwd=repo,
         )
-        _run_step(
-            cli,
-            "infer",
-            [
-                "--workdir",
-                str(keys_dir),
-                "--orion",
-                str(orion_abs),
-                "--in-ct",
-                str(input_ct),
-                "--out-ct",
-                str(result_ct),
-                "--out",
-                str(img_dir / "infer.json"),
-            ],
-            cwd=repo,
-        )
+
+    # Orion 2.1.5's LoadModel eagerly pre-encodes LinearTransformations
+    # (~265s at LogN=16); amortize across the whole batch in one process.
+    _run_step(
+        cli,
+        "infer-batch",
+        [
+            "--workdir",
+            str(keys_dir),
+            "--orion",
+            str(orion_abs),
+            "--image-dirs",
+            ",".join(str(d) for d in img_dirs),
+        ],
+        cwd=repo,
+    )
+
+    for entry, img_dir in zip(images, img_dirs, strict=True):
+        ref_logit = float(entry.get("ref_logit", 0.0))
+        result_ct = img_dir / "result_ct.bin"
+        auth_ct = img_dir / "auth_ct.bin"
+        client_share = img_dir / "client_share.bin"
+        decoded = img_dir / "decoded.json"
         _run_step(
             cli,
             "mac",
