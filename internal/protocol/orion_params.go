@@ -14,16 +14,24 @@ import (
 // Bumped together with `orionManifest` when fields are renamed/removed.
 const orionManifestSchemaVersion = 2
 
-// ProtocolReserveLevels is the number of CKKS Q-chain primes the protocol
-// layer adds on top of what the model declares in its Orion manifest. The
-// model declares the multiplicative depth it needs (input_level = K, K
-// rescales); the protocol layer adds one extra prime + bumps input_level
-// by 1 so result_ct lands at level 1 with the headroom MAC's slot-mask
-// `Auth.MulNew` requires. Mirrors how PHK primes live outside the model's
-// view: the model is oblivious, the protocol owns the headroom budget.
-// See `internal/authenticator/level_reservation_test.go` for the
-// architectural invariant locked in as a unit test.
-const ProtocolReserveLevels = 1
+// ProtocolReserveLevels is retained at 0: with orion-v2-compiler >=2.1.6
+// the level reservation that MAC needs is baked at *compile* time via
+// CompilerConfig.reserve_output_levels (orion commit `feat(compiler):
+// add CompilerConfig.reserve_output_levels for downstream MAC`). Orion
+// shifts every node's level annotation up, so the compiled model's
+// LinearTransforms encode their plaintexts at the higher moduli and
+// result_ct lands at level `reserve_output_levels` directly — no
+// protocol-layer chain extension required (and any extension here would
+// be wasted: lattigo's LinearTransform drops the input ct to the LT's
+// baked level annotation, eating extra primes for free).
+//
+// The constant + helpers (`extendLogQForProtocolReserve`,
+// `ExtendCKKSForProtocolReserve`) are kept at 0 so the loaders are
+// no-ops, leaving a clear callout for a future caller who genuinely
+// needs further Go-side headroom. See
+// `internal/authenticator/level_reservation_test.go` for the
+// CKKS-level invariant the chain still has to satisfy.
+const ProtocolReserveLevels = 0
 
 // protocolReserveLogBits is the bit-size of each extra Q prime appended for
 // MAC headroom. Matches the model's evaluation-prime bit-size (40 in the

@@ -38,14 +38,16 @@ func TestLoadOrionParams(t *testing.T) {
 	// (signed-label convention — see protocol.Params doc).
 	assert.Equal(t, []int{-1, -4, -16, -64, -128, -256, -512, -1024}, params.ExtraRotationIndices)
 
-	// LLKN hierarchy is stamped identically to Defaults(). The manifest
-	// itself does not constrain LLKN params (they're hierarchy-only).
+	// LLKN-hierarchy shape (level count, base, atom sets) is identical
+	// to Defaults(). The Q/P prime counts are NOT compared here: with
+	// orion-v2-compiler >=2.1.6's reserve_output_levels baked at compile
+	// time, the Orion path's Q chain length differs from Defaults() (the
+	// synthetic-x² path's CKKS shape is decoupled from whatever the
+	// compiled Orion manifest declares).
 	defaults, err := Defaults()
 	require.NoError(t, err)
 	assert.Equal(t, defaults.LLKNBase, params.LLKNBase)
 	require.Equal(t, defaults.LLKN.NumLevels(), params.LLKN.NumLevels())
-	assert.Equal(t, defaults.LLKN.Top().QCount(), params.LLKN.Top().QCount())
-	assert.Equal(t, defaults.LLKN.Top().PCount(), params.LLKN.Top().PCount())
 	assert.Equal(t, defaults.AuthAtoms(), params.AuthAtoms())
 	assert.Equal(t, defaults.MasterAtoms(), params.MasterAtoms())
 }

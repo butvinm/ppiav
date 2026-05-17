@@ -11,7 +11,7 @@ import time
 import tracemalloc
 
 import torch
-from orion_compiler import Compiler
+from orion_compiler import Compiler, CompilerConfig
 
 from models.c3ae_fhe import C3AE
 from models.params import PARAMS
@@ -54,6 +54,19 @@ def main() -> None:
         choices=[1, 2],
         help="First-conv stride forwarded to the model constructor.",
     )
+    parser.add_argument(
+        "--reserve-output-levels",
+        type=int,
+        default=0,
+        help=(
+            "Extra Q-chain levels to leave free at the output of the "
+            "compiled circuit (CompilerConfig.reserve_output_levels). "
+            "Use >0 when a downstream protocol op (e.g. MAC's slot-mask "
+            "multiply at Level()>=1) needs headroom after Forward. "
+            "Requires CKKSParams.logq to have at least reserve_output_levels "
+            "more primes than the un-reserved model would need."
+        ),
+    )
     args = parser.parse_args()
 
     output = args.output or os.path.join("out", args.config, "model.orion")
@@ -69,7 +82,11 @@ def main() -> None:
     n_params = sum(p.numel() for p in net.parameters() if p.requires_grad)
     print(f"Model loaded: {n_params:,} parameters (stride={args.stride}, config={args.config})")
 
-    compiler = Compiler(net, ckks_params)
+    compiler = Compiler(
+        net,
+        ckks_params,
+        config=CompilerConfig(reserve_output_levels=args.reserve_output_levels),
+    )
 
     # Establish a baseline RSS so our reported "peak" excludes the cost of
     # importing torch / orion_compiler / loading weights — we only attribute
