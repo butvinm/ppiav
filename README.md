@@ -67,9 +67,13 @@ uv run python -m models.utkface --target ./data/UTKFace
 # Train: --variant relu (baseline) or --variant fhe (Quad approximation for Orion)
 uv run python -m models.train --variant fhe --data-dir ./data/UTKFace --epochs 60
 
-# Compile for FHE inference
+# Compile for FHE inference.
+# --reserve-output-levels 1 leaves one unused modulus level on result_ct
+# so VAgent's MPD-Auth (MulNew with the slot-mask plaintext) has headroom.
+# Without it, mac fails: "resultCt at level 0 — Auth requires Level() >= 1".
 uv run python -m models.compile --variant fhe --config logn16 \
-    --weights ./out/weights_fhe.pth --output ./out/logn16/model.orion
+    --weights ./out/weights_fhe.pth --output ./out/logn16/model.orion \
+    --reserve-output-levels 1
 
 # Evaluate both variants
 uv run python -m models.eval --data-dir ./data/UTKFace --output results/cleartext.csv

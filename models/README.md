@@ -18,7 +18,9 @@ cd models
 uv sync
 uv run python -m models.utkface --target ./data/UTKFace
 uv run python -m models.train --variant fhe --data-dir ./data/UTKFace --epochs 60 --output ./out/weights_fhe.pth
-uv run python -m models.compile --variant fhe --config logn16 --weights ./out/weights_fhe.pth --output ./out/logn16/model.orion
+uv run python -m models.compile --variant fhe --config logn16 \
+    --weights ./out/weights_fhe.pth --output ./out/logn16/model.orion \
+    --reserve-output-levels 1
 
 # Stratified batch + manifest with cleartext reference logits (used by the eval driver).
 uv run python -m models.prepare_samples \
