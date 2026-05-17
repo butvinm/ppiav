@@ -104,11 +104,7 @@ func LoadOrionParams(manifestPath string) (Params, error) {
 	// circuit consumes `InputLevel` rescales. The extension is invisible
 	// to the model: the manifest's declared InputLevel is bumped by the
 	// same amount so encrypt uses the extended chain's higher level.
-	logQ := make([]int, 0, len(m.Params.LogQ)+ProtocolReserveLevels)
-	logQ = append(logQ, m.Params.LogQ...)
-	for i := 0; i < ProtocolReserveLevels; i++ {
-		logQ = append(logQ, protocolReserveLogBits)
-	}
+	logQ := extendLogQForProtocolReserve(m.Params.LogQ)
 	inputLevel := m.InputLevel + ProtocolReserveLevels
 
 	ckksParams, err := ckks.NewParametersFromLiteral(ckks.ParametersLiteral{
@@ -159,6 +155,37 @@ func LoadOrionParams(manifestPath string) (Params, error) {
 		ExtraRotationIndices: extras,
 		InputLevel:           inputLevel,
 	}, nil
+}
+
+// extendLogQForProtocolReserve appends ProtocolReserveLevels extra
+// 40-bit primes to the supplied chain. Shared between the JSON-manifest
+// loader (`LoadOrionParams`) and the binary `.orion` loader
+// (`vservice.mergeOrionParams`) so both paths apply the same headroom.
+func extendLogQForProtocolReserve(modelLogQ []int) []int {
+	out := make([]int, 0, len(modelLogQ)+ProtocolReserveLevels)
+	out = append(out, modelLogQ...)
+	for i := 0; i < ProtocolReserveLevels; i++ {
+		out = append(out, protocolReserveLogBits)
+	}
+	return out
+}
+
+// ExtendCKKSForProtocolReserve rebuilds the supplied CKKS parameters
+// with the protocol-reserve primes appended to their Q chain. Used by
+// the binary `.orion` loader which receives a fully-built ckks.Parameters
+// rather than a manifest blob. Callers must bump their `InputLevel` by
+// `ProtocolReserveLevels` separately — this helper owns only the chain
+// extension.
+func ExtendCKKSForProtocolReserve(p ckks.Parameters) (ckks.Parameters, error) {
+	logQ := extendLogQForProtocolReserve(p.LogQi())
+	logP := append([]int(nil), p.LogPi()...)
+	return ckks.NewParametersFromLiteral(ckks.ParametersLiteral{
+		LogN:            p.LogN(),
+		LogQ:            logQ,
+		LogP:            logP,
+		LogDefaultScale: int(p.LogDefaultScale()),
+		RingType:        p.RingType(),
+	})
 }
 
 // parseOrionRingType maps Orion's `ring_type` strings to Lattigo's ring
