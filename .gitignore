@@ -38,6 +38,9 @@ models/out/
 results/*/
 !results/.gitkeep
 
+# Local docker compose env — `.env.example` is the committed template.
+deploy/.env
+
 # IDE / editor
 .idea/
 .vscode/

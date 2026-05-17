@@ -10,6 +10,12 @@
 # carries rservice-public-url. The "public" URLs must be reachable from
 # the host browser (localhost:<port>) — the docker-DNS names are not.
 #
+# PPIAV_VAGENT_PUBLIC_URL and PPIAV_RSERVICE_PUBLIC_URL are read from
+# deploy/.env (auto-loaded by `docker compose`). Defaults match the host
+# port mappings below — override to test from a phone on the same Wi-Fi
+# (http://192.168.x.y:PORT) or to front the stack with HTTPS / a reverse
+# proxy (https://my.host/path). See deploy/.env.example.
+#
 # --orion and the compiled model directory are not mounted here. To run
 # end-to-end with the compiled FHE model, override BOTH vservice and
 # vagent commands with `--orion /opt/orion` (so VAgent and VService agree
@@ -48,7 +54,7 @@ services:
       - "--rservice-url"
       - "http://rservice:8082"
       - "--rservice-public-url"
-      - "http://localhost:8082"
+      - "${PPIAV_RSERVICE_PUBLIC_URL:-http://localhost:8082}"
     # To run with the compiled Orion model, append `--orion /opt/orion`
     # to the command above and add the same volume mount as vservice:
     #   volumes:
@@ -69,6 +75,6 @@ services:
       - "--vagent-url"
       - "http://vagent:8081"
       - "--vagent-public-url"
-      - "http://localhost:8081"
+      - "${PPIAV_VAGENT_PUBLIC_URL:-http://localhost:8081}"
     depends_on:
       - vagent
