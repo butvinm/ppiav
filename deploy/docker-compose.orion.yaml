@@ -1,0 +1,69 @@
+# Self-contained stack for running the Phase-3 services with the
+# compiled Orion (logn16) FHE model. Use INSTEAD of docker-compose.yml,
+# not on top of it.
+#
+#   PPIAV_ORION_DIR=../models/out/logn16 \
+#     docker compose -f docker-compose.orion.yaml up --build
+#
+# Host requirements:
+#   - models/out/logn16/model.orion + compile.json present, compiled with
+#     `models.compile ... --reserve-output-levels 1` (see CLAUDE.md).
+#   - ≥128 GB RAM — logn16 infer.load_keys peaks ~118 GB RSS.
+#
+# Public-URL semantics are identical to the synthetic base compose file:
+# *-url is server-to-server (Docker DNS), *-public-url is browser-visible
+# (host port-mapped). Override PPIAV_VAGENT_PUBLIC_URL /
+# PPIAV_RSERVICE_PUBLIC_URL in deploy/.env to front the stack with
+# HTTPS or a remote host.
+
+services:
+  vservice:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.vservice
+    image: ppiav-vservice:latest
+    ports:
+      - "8080:8080"
+    command: ["--addr", ":8080", "--orion", "/opt/orion"]
+    environment:
+      GOMEMLIMIT: "100GiB"
+    volumes:
+      - ${PPIAV_ORION_DIR:?set PPIAV_ORION_DIR=../models/out/logn16}:/opt/orion:ro
+
+  vagent:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.vagent
+    image: ppiav-vagent:latest
+    ports:
+      - "8081:8081"
+    command:
+      - "--addr"
+      - ":8081"
+      - "--vservice-url"
+      - "http://vservice:8080"
+      - "--rservice-url"
+      - "http://rservice:8082"
+      - "--rservice-public-url"
+      - "${PPIAV_RSERVICE_PUBLIC_URL:-http://localhost:8082}"
+    environment:
+      GOMEMLIMIT: "10GiB"
+    depends_on:
+      - vservice
+
+  rservice:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.rservice
+    image: ppiav-rservice:latest
+    ports:
+      - "8082:8082"
+    command:
+      - "--addr"
+      - ":8082"
+      - "--vagent-url"
+      - "http://vagent:8081"
+      - "--vagent-public-url"
+      - "${PPIAV_VAGENT_PUBLIC_URL:-http://localhost:8081}"
+    depends_on:
+      - vagent
