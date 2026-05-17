@@ -5,7 +5,7 @@
 // stream of either determinate updates (loaded/total) or indeterminate
 // elapsed ticks. Every event also appends to the dev log panel.
 
-export type StepKind = "wasm" | "network" | "sse" | "compute";
+export type StepKind = "wasm" | "network" | "compute";
 
 export interface StepSpec {
   id: string;

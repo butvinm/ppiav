@@ -3,7 +3,6 @@ package vagent
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,26 +20,16 @@ import (
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 )
 
-// sseRetryHintMs is the `retry:` SSE field value emitted before closing the
-// single-shot result stream — set to 24h so the browser does not auto-
-// reconnect against an evicted session.
-const sseRetryHintMs = 24 * 60 * 60 * 1000
-
 // Per-route VAgent -> VService request deadlines. Sized for the LogN=16
 // production target: the prior single 30s Client.Timeout was guaranteed
 // to fail on /eval-keys (multi-minute hierkeys.LevelExpansion +
-// FinalizeKey across ExtraRotationIndices) and could fail on /image
+// FinalizeKey across ExtraRotationIndices) and could fail on /infer
 // (Orion inference at LogN=16).
 const (
-	// evalKeysDeadline bounds the /eval-keys POST. VService runs
-	// hierkeys.LevelExpansion + FinalizeKey concurrently across
-	// GOMAXPROCS workers; ~tens of seconds concurrent at LogN=16 per
-	// `~/Dev/lattigo-hierkeys/README.md` §15.4. 10 minutes gives margin
-	// for a sequential fallback or under-provisioned VPS.
 	evalKeysDeadline = 10 * time.Minute
-	// imageDeadline bounds the /image POST. Orion C3AE inference at
+	// inferDeadline bounds the /infer POST. Orion C3AE inference at
 	// LogN=16 is bounded by the model's circuit depth.
-	imageDeadline = 5 * time.Minute
+	inferDeadline = 5 * time.Minute
 	// shortRPCDeadline bounds small JSON control RPCs (/sessions,
 	// /params, RService /callback). These are server-to-server calls
 	// that should never legitimately take more than a few seconds.
@@ -216,62 +205,12 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		s.handleRLKRound2(w, r, sessID)
 	case sub == "gks-shares":
 		s.handleGKSShares(w, r, sessID)
-	case sub == "result":
-		s.handleResultSSE(w, r, sessID)
-	case sub == "image":
-		s.handleImage(w, r, sessID)
+	case sub == "infer":
+		s.handleInfer(w, r, sessID)
 	case sub == "partial-decryption":
 		s.handlePartialDecryption(w, r, sessID)
 	default:
 		httputil.WriteError(w, http.StatusNotFound, "not found")
-	}
-}
-
-// handleResultSSE streams a single base64 AuthenticatedResult event over
-// SSE so the client can race the image POST without missing the deposit.
-func (s *Server) handleResultSSE(w http.ResponseWriter, r *http.Request, sid protocol.SessionID) {
-	if r.Method != http.MethodGet {
-		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	ch, ok := s.agent.SessionAuthResult(sid)
-	if !ok {
-		httputil.WriteError(w, http.StatusNotFound, fmt.Sprintf("vagent: unknown session id %q", sid))
-		return
-	}
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		httputil.WriteError(w, http.StatusInternalServerError, "response writer does not support flushing")
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(http.StatusOK)
-	// Tell the EventSource not to reconnect after we close. Without this
-	// hint the browser auto-reconnects in ~3s, leaving a stray request
-	// against a now-evicted session — wasteful and noisy.
-	_, _ = fmt.Fprintf(w, "retry: %d\n\n", sseRetryHintMs)
-	flusher.Flush()
-
-	select {
-	case ct := <-ch:
-		if ct == nil {
-			return
-		}
-		data, err := ct.MarshalBinary()
-		if err != nil {
-			// Headers already written — cannot upgrade to 500. Emit an SSE
-			// error event so the browser can surface it (best-effort).
-			_, _ = fmt.Fprintf(w, "event: error\ndata: marshal AuthenticatedResult: %s\n\n", err)
-			flusher.Flush()
-			return
-		}
-		encoded := base64.StdEncoding.EncodeToString(data)
-		_, _ = fmt.Fprintf(w, "data: %s\n\n", encoded)
-		flusher.Flush()
-	case <-r.Context().Done():
-		return
 	}
 }
 
@@ -475,9 +414,9 @@ func (s *Server) handleGKSShares(w http.ResponseWriter, r *http.Request, sid pro
 	w.WriteHeader(http.StatusOK)
 }
 
-// handleImage forwards the encrypted image to VService, folds the result
-// through MPD-Auth, and gates Stage-4a SSE delivery.
-func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, sid protocol.SessionID) {
+// handleInfer forwards the encrypted image to VService, folds the result
+// through MPD-Auth, and returns the authenticated ciphertext bytes inline.
+func (s *Server) handleInfer(w http.ResponseWriter, r *http.Request, sid protocol.SessionID) {
 	if r.Method != http.MethodPost {
 		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -500,8 +439,8 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, sid protoco
 	targetURL := s.vserviceURL + "/sessions/" + url.PathEscape(string(sid)) + "/infer"
 	// Forward the original bytes verbatim — we already unmarshaled to
 	// validate, but the VService handler unmarshals from the bytes itself.
-	// imageDeadline bounds the Orion inference circuit at LogN=16.
-	ctxImg, cancelImg := context.WithTimeout(r.Context(), imageDeadline)
+	// inferDeadline bounds the Orion inference circuit at LogN=16.
+	ctxImg, cancelImg := context.WithTimeout(r.Context(), inferDeadline)
 	defer cancelImg()
 	reqImg, err := http.NewRequestWithContext(ctxImg, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
@@ -551,31 +490,17 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, sid protoco
 	}
 	// Cache ct_M for the upcoming partial-decryption call.
 	if ok := s.agent.storeAuthenticatedCt(sid, ctM); !ok {
-		// Sid was deleted between session() and storeAuthenticatedCt — race
-		// only possible from a concurrent FinalizeDecryption, which we don't
-		// expect on this code path. Surface as 404 for consistency.
 		httputil.WriteError(w, http.StatusNotFound, fmt.Sprintf("vagent: unknown session id %q", sid))
 		return
 	}
-	// Non-blocking SSE deposit: covers both the pre-arrival case (SSE handler
-	// not yet attached — buffer 1 absorbs it) and the impossible-by-protocol
-	// duplicate-image case (default branch silently drops). See agent.go
-	// sessionState.authResult.
-	ch, ok := s.agent.SessionAuthResult(sid)
-	if !ok {
-		httputil.WriteError(w, http.StatusNotFound, fmt.Sprintf("vagent: unknown session id %q", sid))
+	ctMBytes, err := ctM.MarshalBinary()
+	if err != nil {
+		s.rejectAndEvict(w, http.StatusInternalServerError, sid, fmt.Sprintf("marshal AuthenticatedResult: %s", err))
 		return
 	}
-	select {
-	case ch <- ctM:
-	default:
-		// Capacity-1 channel already holds a ct from an earlier image POST.
-		// Impossible per the protocol (one image per session), but log so
-		// operators see misbehaving clients. The latest ct_M is still
-		// cached on the session for partial-decryption to use.
-		log.Printf("vagent: duplicate image POST for sid %q; SSE channel already full", sid)
-	}
+	w.Header().Set("Content-Type", "application/octet-stream")
 	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(ctMBytes)
 }
 
 // handlePartialDecryption runs Stage 4b: finalize the verdict, push it to

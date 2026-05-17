@@ -179,46 +179,6 @@ async function fetchParams(sid: string): Promise<string> {
   return await resp.text();
 }
 
-/**
- * Open the SSE result stream and resolve with the marshaled
- * AuthenticatedResult bytes when the single `data:` event arrives.
- *
- * Per DESIGN.md §3 Stage 2e/4a, the stream is opened *before* the image
- * POST so the ct_M deposit can never miss the receiver.
- */
-function openResultStream(sid: string): Promise<Uint8Array> {
-  return new Promise((resolve, reject) => {
-    const url = "/sessions/" + sid + "/result";
-    const es = new EventSource(url);
-    let settled = false;
-    es.onmessage = (event: MessageEvent<string>) => {
-      try {
-        // SSE framing is text-only: AuthenticatedResult is base64.
-        const binStr = atob(event.data);
-        const bytes = new Uint8Array(binStr.length);
-        for (let i = 0; i < binStr.length; i++) {
-          bytes[i] = binStr.charCodeAt(i);
-        }
-        settled = true;
-        es.close();
-        resolve(bytes);
-      } catch (err) {
-        settled = true;
-        es.close();
-        reject(err instanceof Error ? err : new Error(String(err)));
-      }
-    };
-    es.addEventListener("error", (_ev: Event) => {
-      // EventSource fires "error" both on transient disconnects and on
-      // the final close after the one-shot event. Only surface a failure
-      // if we never received the data event.
-      if (!settled && es.readyState === EventSource.CLOSED) {
-        reject(new Error("SSE stream closed before AuthenticatedResult"));
-      }
-    });
-  });
-}
-
 const STEP_SPECS: StepSpec[] = [
   { id: "pk-gen", label: "Generate PK share", kind: "wasm" },
   { id: "pk-exchange", label: "Exchange PK share", kind: "network" },
@@ -229,8 +189,7 @@ const STEP_SPECS: StepSpec[] = [
   { id: "rlk2", label: "Send RLK round-2 share", kind: "network" },
   { id: "gks", label: "Send Galois key shares", kind: "network" },
   { id: "encrypt", label: "Preprocess and encrypt image", kind: "wasm" },
-  { id: "image", label: "Submit encrypted image", kind: "network" },
-  { id: "wait", label: "Awaiting authenticated result", kind: "sse" },
+  { id: "infer", label: "Submit image and await authenticated result", kind: "network" },
   { id: "partial", label: "Compute partial decryption", kind: "wasm" },
   { id: "redirect", label: "Submit partial decryption", kind: "network" },
 ];
@@ -358,23 +317,6 @@ function fmtBytes(n: number): string {
   return (n / (1024 * 1024 * 1024)).toFixed(2) + " GB";
 }
 
-async function awaitResult(
-  tracker: ProgressTracker,
-  resultPromise: Promise<Uint8Array>,
-): Promise<Uint8Array> {
-  const step = tracker.start("wait");
-  step.showElapsed();
-  try {
-    const out = await resultPromise;
-    step.summarize("in=" + fmtBytes(out.byteLength));
-    step.success();
-    return out;
-  } catch (e) {
-    step.error(e);
-    throw e;
-  }
-}
-
 async function runProtocol(
   tracker: ProgressTracker,
   sid: string,
@@ -446,9 +388,6 @@ async function runProtocol(
   const gks = unwrapBytes(bridge.genGaloisShares(handle), "genGaloisShares");
   await uploadAck(tracker, "gks", "/sessions/" + sid + "/gks-shares", gks);
 
-  // Stage 2e — open SSE before image POST so ct_M can't be lost to a race.
-  const resultPromise = openResultStream(sid);
-
   // Stage 3 — preprocess + encrypt + POST. preprocess is async (decode +
   // canvas), so we drive this step manually instead of via runWasmStep.
   const encryptStep = tracker.start("encrypt");
@@ -467,10 +406,15 @@ async function runProtocol(
     encryptStep.error(e);
     throw e;
   }
-  await uploadAck(tracker, "image", "/sessions/" + sid + "/image", ctReal);
 
-  // Stage 4a — wait for AuthenticatedResult, then partial-decrypt.
-  const authCt = await awaitResult(tracker, resultPromise);
+  // Stage 3 + 4a — single blocking POST: VAgent runs inference + MPD-Auth
+  // and returns the AuthenticatedResult ciphertext in the response body.
+  const authCt = await uploadAndDownload(
+    tracker,
+    "infer",
+    "/sessions/" + sid + "/infer",
+    ctReal,
+  );
   const partial = await runWasmStep(
     tracker,
     "partial",

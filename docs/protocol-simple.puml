@@ -42,25 +42,15 @@ VerificationService --> VerificationAgent -- : Подтверждение
 VerificationAgent --> VerificationClient -- : Подтверждение
 
 == 3. Передача изображения и инференс ==
-User ->> VerificationClient : Изображение
-VerificationClient ->> VerificationAgent : EncryptedImage
-activate VerificationAgent
-VerificationAgent ->> VerificationService : EncryptedImage
-activate VerificationService
-VerificationService ->> VerificationAgent : Подтверждение
-VerificationAgent ->> VerificationClient : Подтверждение
-deactivate VerificationAgent
-note over VerificationService : Инференс
+User -> VerificationClient : Изображение
+VerificationClient -> VerificationAgent ++ : EncryptedImage
+VerificationAgent -> VerificationService ++ : EncryptedImage
+VerificationService -> VerificationService : Инференс
+VerificationService --> VerificationAgent -- : InferenceResult
+VerificationAgent -> VerificationAgent : Аутентификация результата
+VerificationAgent --> VerificationClient -- : AuthenticatedResult
 
 == 4. Защищенная расшифровка результата ==
-VerificationClient -> VerificationAgent : RequestResult
-activate VerificationAgent
-VerificationAgent -> VerificationService : RequestResult
-VerificationService --> VerificationAgent : InferenceResult
-deactivate VerificationService
-VerificationAgent -> VerificationAgent : Аутентификация результата
-VerificationAgent --> VerificationClient : AuthenticatedResult
-deactivate VerificationAgent
 VerificationClient -> VerificationAgent ++ : PartialDecryption
 
 == 5. Завершение сессии верификации ==

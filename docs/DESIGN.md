@@ -127,13 +127,9 @@ sequenceDiagram
     VS-->>VA: 200
     VA-->>VC: 200 (setup complete)
 
-    %% Stage 2e — SSE channel for the eventual authenticated result
-    VC->>VA: GET /sessions/:sid/result (RequestResult, open SSE)
-    VA-->>VC: 200 (event-stream)
-
-    %% Stage 3 — image submission and inference
+    %% Stage 3 — image submission and inference (single blocking RPC)
     VC->>VC: EncryptImage
-    VC->>VA: POST /sessions/:sid/image (EncryptedImage)
+    VC->>VA: POST /sessions/:sid/infer (EncryptedImage)
     VA->>VS: POST /sessions/:sid/infer (EncryptedImage)
     activate VS
     VS->>VS: Infer
@@ -142,7 +138,7 @@ sequenceDiagram
 
     %% Stage 4a — MPD-Auth joint decryption
     VA->>VA: pick verification values, build authenticated_ct
-    VA-->>VC: AuthenticatedResult (SSE event)
+    VA-->>VC: AuthenticatedResult (response body)
     VC->>VC: PartialDecrypt (sk_c, noise flooding)
     VC->>VA: POST /sessions/:sid/partial-decryption (PartialDecryption)
     VA->>VA: FinalDecrypt (sk_a), authenticity check, verdict = sign(logit)
@@ -172,7 +168,6 @@ The session-specific CKKS keys are generated jointly by VClient and VAgent. The 
 2. **Public key (one round).** VClient generates `sk_c, pk_c` and sends `pk_c` to VAgent. VAgent generates its own `sk_a, pk_a`, aggregates `pk = pk_c + pk_a`, and returns `pk_a` to VClient so it can compute the same aggregate locally.
 3. **Relinearization key (two rounds).** Both rounds follow the same client-share-then-agent-share pattern. Round 1: VClient generates an ephemeral secret `ephSk_c` and its first-round share `rlk_c⁽¹⁾`; VAgent generates its own `ephSk_a, rlk_a⁽¹⁾`; both sides aggregate `rlk⁽¹⁾_agg`. Round 2: VClient generates `rlk_c⁽²⁾`, VAgent generates `rlk_a⁽²⁾`, both aggregate the final `rlk`. The two-round structure follows the standard multi-party CKKS relinearization protocol.
 4. **Rotation keys.** Both parties contribute matching `multiparty.GaloisKeyGenShare` shares for the rotations the compiled circuit and `Auth` need. The canonical (Phase 4) form, shown in the diagram, collapses the per-rotation shares into a single `gks_master` pair (`gks_master_c`, `gks_master_a` → `gks_master`). VAgent forwards `rlk` and `gks_master` to VService as `InferEvalKeys`; VAgent and VService then independently expand `gks_master` into the per-rotation keys each side actually uses — `gks_auth` at VAgent (for `Auth`'s rotation-and-sum), `gks_infer` at VService (for the inference circuit) — via lattigo-hierkeys. This is purely a transport-and-storage optimisation. Phase 1–3 skip the master/derive step: VClient and VAgent emit one share per rotation, aggregate the assembled `gks` directly, and ship the full set to VService (VAgent uses the same assembled set locally). The multi-party protocol is identical; only the wire shape differs.
-5. **Result channel.** VClient opens a server-sent-events connection to VAgent for the eventual authenticated result. Opening it before submitting the image avoids a race.
 
 ### Stage 3: Image submission and inference
 
@@ -183,7 +178,7 @@ The session-specific CKKS keys are generated jointly by VClient and VAgent. The 
 ### Stage 4: Authenticated joint decryption and verdict
 
 1. **Authenticated ciphertext.** VAgent picks fresh secret verification values and folds them into `result_ct` to produce an authenticated ciphertext bound to this session's secret material. The construction is described in §Multiparty decryption with authentication.
-2. **Partial decryption.** VAgent streams the authenticated ciphertext to VClient over SSE. VClient runs the first step of the joint decryption using `sk_c`, adding flood noise to mask its secret share, and posts the partially-decrypted ciphertext back to VAgent. VClient never recovers a plaintext.
+2. **Partial decryption.** VAgent returns the authenticated ciphertext to VClient as the response body of the `/infer` POST. VClient runs the first step of the joint decryption using `sk_c`, adding flood noise to mask its secret share, and posts the partially-decrypted ciphertext back to VAgent. VClient never recovers a plaintext.
 3. **Final decryption and authenticity check.** VAgent completes the decryption with `sk_a`, recovers the plaintext result vector, and checks that the verification values it injected come out intact. A mismatch indicates the client deviated from the protocol; VAgent aborts with a reject verdict.
 4. **Verdict.** The C3AE model emits a binary-classifier logit at slot 0 (positive = "above the trained age threshold"). VAgent binarises directly: `Verdict = Accept` iff the recovered `m > 0`, else `Reject`. There is no runtime threshold or policy interface — the classification boundary is baked into model training. (Equivalent statement: `sigmoid(m) > 0.5`. Same decision.)
 5. **Callback and redirect.** VAgent calls RService's verdict callback with the result for this sid. RService persists the verdict. VAgent then signals VClient that verification is complete; VClient redirects the browser back to RService. The browser hits the original gated URL with its session cookie, RService looks up the verdict, and serves either the content or a denied page.
@@ -572,7 +567,7 @@ type EncryptedImage struct { Ct *rlwe.Ciphertext }
 // Stage 3: VService → VAgent — raw inference ciphertext before MAC.
 type InferenceResult struct { Ct *rlwe.Ciphertext }
 
-// Stage 4a: VAgent → VClient (over SSE) — result ct with verification values folded in.
+// Stage 4a: VAgent → VClient (inline /infer response body) — result ct with verification values folded in.
 type AuthenticatedResult struct { Ct *rlwe.Ciphertext }
 
 // Stage 4a: VClient → VAgent — partial-decryption share with noise flooding applied.
@@ -1018,9 +1013,7 @@ Single-page app served by VAgent at `/verify?sid=…`. TypeScript, transpiled wi
 
 **Image source: file upload only.** `<input type="file">` plus a drag-and-drop overlay. No webcam — the permissions UX (HTTPS gating, `getUserMedia` quirks across mobile platforms) is orthogonal to the FHE story.
 
-**SSE via native `EventSource`.** Opens `GET /sessions/{sid}/result` and listens for the `AuthenticatedResult` event. The matching server side is ~15 lines of Go using `http.Flusher.Flush()`.
-
-**Wire formats.** JSON for control messages (`Manifest`, `VerificationSession`, `VerdictNotification`, `FinalizeRedirect`); `application/octet-stream` for share- and ciphertext-bearing endpoints (`/pk-share`, `/rlk/round1`, `/rlk/round2`, `/gks-shares`, `/eval-keys`, `/image`, `/infer`, `/partial-decryption`). No base64 inflation on the hot path. The `/gks-shares` body carries both auth-atom and infer-atom shares in a single `VClientGaloisShares` message — single round-trip.
+**Wire formats.** JSON for control messages (`Manifest`, `VerificationSession`, `VerdictNotification`, `FinalizeRedirect`); `application/octet-stream` for share- and ciphertext-bearing endpoints (`/pk-share`, `/rlk/round1`, `/rlk/round2`, `/gks-shares`, `/eval-keys`, `/infer`, `/partial-decryption`). The `/infer` POST blocks until inference + MPD-Auth complete and returns the marshaled `AuthenticatedResult` ciphertext in the response body — no separate result channel. No base64 inflation on the hot path. The `/gks-shares` body carries both auth-atom and infer-atom shares in a single `VClientGaloisShares` message — single round-trip.
 
 **Sid from URL.** SPA reads `?sid=…` at load time and threads it through every subsequent request. No JS-side cookie reading.
 
