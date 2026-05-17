@@ -35,19 +35,32 @@ VerificationAgent --> VerificationClient -- : VAgentRLKRound1
 VerificationClient -> VerificationAgent ++ : VClientRLKRound2
 VerificationAgent --> VerificationClient -- : Подтверждение
 VerificationClient -> VerificationAgent ++ : VClientGaloisShares
+VerificationAgent -> VerificationAgent : Иерархический вывод ключей
 VerificationAgent -> VerificationService ++ : InferEvalKeys
+VerificationService -> VerificationService : Иерархический вывод ключей
 VerificationService --> VerificationAgent -- : Подтверждение
 VerificationAgent --> VerificationClient -- : Подтверждение
 
 == 3. Передача изображения и инференс ==
-VerificationClient -> VerificationAgent : RequestResult
-User -> VerificationClient : Изображение
-VerificationClient -> VerificationAgent ++ : EncryptedImage
-VerificationAgent -> VerificationService ++ : EncryptedImage
-VerificationService --> VerificationAgent -- : InferenceResult
+User ->> VerificationClient : Изображение
+VerificationClient ->> VerificationAgent : EncryptedImage
+activate VerificationAgent
+VerificationAgent ->> VerificationService : EncryptedImage
+activate VerificationService
+VerificationService ->> VerificationAgent : Подтверждение
+VerificationAgent ->> VerificationClient : Подтверждение
+deactivate VerificationAgent
+note over VerificationService : Инференс
 
 == 4. Защищенная расшифровка результата ==
+VerificationClient -> VerificationAgent : RequestResult
+activate VerificationAgent
+VerificationAgent -> VerificationService : RequestResult
+VerificationService --> VerificationAgent : InferenceResult
+deactivate VerificationService
+VerificationAgent -> VerificationAgent : Аутентификация результата
 VerificationAgent --> VerificationClient : AuthenticatedResult
+deactivate VerificationAgent
 VerificationClient -> VerificationAgent ++ : PartialDecryption
 
 == 5. Завершение сессии верификации ==
