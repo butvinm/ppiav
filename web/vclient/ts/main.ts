@@ -191,7 +191,7 @@ const STEP_SPECS: StepSpec[] = [
   { id: "rlk2", label: "Отправка доли ключа релинеаризации, раунд 2", kind: "network" },
   { id: "gks", label: "Отправка долей мастер-ключей вращения", kind: "network" },
   { id: "encrypt", label: "Подготовка и шифрование изображения", kind: "wasm" },
-  { id: "infer", label: "Отправка изображения и ожидание аутентифицированного результата", kind: "network" },
+  { id: "infer", label: "Отправка изображения и ожидание результата", kind: "network" },
   { id: "partial", label: "Частичная расшифровка своей долей ключа", kind: "wasm" },
   { id: "redirect", label: "Отправка частичной расшифровки", kind: "network" },
 ];
