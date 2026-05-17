@@ -14,6 +14,22 @@ import (
 // Bumped together with `orionManifest` when fields are renamed/removed.
 const orionManifestSchemaVersion = 2
 
+// ProtocolReserveLevels is the number of CKKS Q-chain primes the protocol
+// layer adds on top of what the model declares in its Orion manifest. The
+// model declares the multiplicative depth it needs (input_level = K, K
+// rescales); the protocol layer adds one extra prime + bumps input_level
+// by 1 so result_ct lands at level 1 with the headroom MAC's slot-mask
+// `Auth.MulNew` requires. Mirrors how PHK primes live outside the model's
+// view: the model is oblivious, the protocol owns the headroom budget.
+// See `internal/authenticator/level_reservation_test.go` for the
+// architectural invariant locked in as a unit test.
+const ProtocolReserveLevels = 1
+
+// protocolReserveLogBits is the bit-size of each extra Q prime appended for
+// MAC headroom. Matches the model's evaluation-prime bit-size (40 in the
+// logn16 profile) so the scale arithmetic stays uniform across the chain.
+const protocolReserveLogBits = 40
+
 // orionManifest mirrors the JSON metadata block Orion emits when it writes
 // a compiled model (see `~/Dev/orion/python/orion-compiler/orion_compiler/
 // compiled_model.py:_build_metadata`). We only decode the fields needed to
@@ -83,9 +99,21 @@ func LoadOrionParams(manifestPath string) (Params, error) {
 		return Params{}, fmt.Errorf("protocol: Orion manifest %q: %w", manifestPath, err)
 	}
 
+	// Extend the model's Q chain by ProtocolReserveLevels extra eval-level
+	// primes so MAC's slot-mask multiply has level ≥ 1 headroom after the
+	// circuit consumes `InputLevel` rescales. The extension is invisible
+	// to the model: the manifest's declared InputLevel is bumped by the
+	// same amount so encrypt uses the extended chain's higher level.
+	logQ := make([]int, 0, len(m.Params.LogQ)+ProtocolReserveLevels)
+	logQ = append(logQ, m.Params.LogQ...)
+	for i := 0; i < ProtocolReserveLevels; i++ {
+		logQ = append(logQ, protocolReserveLogBits)
+	}
+	inputLevel := m.InputLevel + ProtocolReserveLevels
+
 	ckksParams, err := ckks.NewParametersFromLiteral(ckks.ParametersLiteral{
 		LogN:            m.Params.LogN,
-		LogQ:            m.Params.LogQ,
+		LogQ:            logQ,
 		LogP:            m.Params.LogP,
 		LogDefaultScale: m.Params.LogDefaultScale,
 		RingType:        ringType,
@@ -94,15 +122,15 @@ func LoadOrionParams(manifestPath string) (Params, error) {
 		return Params{}, fmt.Errorf("protocol: build CKKS parameters from Orion manifest %q: %w", manifestPath, err)
 	}
 
-	if m.InputLevel < 1 || m.InputLevel > ckksParams.MaxLevel() {
+	if inputLevel < 1 || inputLevel > ckksParams.MaxLevel() {
 		// InputLevel == 0 would leave the inference circuit with no levels
 		// remaining for multiplication — silently fatal at Forward time.
 		// `Defaults()` callers get the "use MaxLevel" behaviour via the
 		// zero-default on the Params struct; an Orion manifest must commit
 		// to a real level.
 		return Params{}, fmt.Errorf(
-			"protocol: Orion manifest %q has InputLevel=%d outside [1, %d]",
-			manifestPath, m.InputLevel, ckksParams.MaxLevel(),
+			"protocol: Orion manifest %q has extended InputLevel=%d outside [1, %d] (manifest=%d, reserve=%d)",
+			manifestPath, inputLevel, ckksParams.MaxLevel(), m.InputLevel, ProtocolReserveLevels,
 		)
 	}
 
@@ -129,7 +157,7 @@ func LoadOrionParams(manifestPath string) (Params, error) {
 		Authenticator:        authenticator.DefaultConfig(),
 		FloodSigma:           DefaultFloodSigma,
 		ExtraRotationIndices: extras,
-		InputLevel:           m.InputLevel,
+		InputLevel:           inputLevel,
 	}, nil
 }
 

@@ -14,12 +14,13 @@ func TestLoadOrionParams(t *testing.T) {
 	params, err := LoadOrionParams(path)
 	require.NoError(t, err)
 
-	// CKKS shape matches the LogN16_D16_P6 profile in models/models/params.py
-	// (17 Q primes, 6 P primes — one extra 40-bit prime so the deepest
-	// C3AE compile lands result_ct at level ≥ 1 for MAC headroom).
+	// Manifest declares the model's own chain (LogN16_D15_P6: 16 Q primes,
+	// input_level=15). LoadOrionParams extends by ProtocolReserveLevels=1
+	// 40-bit prime on top so MAC has level-1 headroom — the resulting
+	// CKKS shape is 17 Q primes, MaxLevel=16, InputLevel=16.
 	assert.Equal(t, 16, params.CKKS.LogN())
-	assert.Equal(t, 17, len(params.CKKS.LogQi()))
-	assert.Equal(t, 16, params.CKKS.MaxLevel())
+	assert.Equal(t, 16+ProtocolReserveLevels, len(params.CKKS.LogQi()))
+	assert.Equal(t, 15+ProtocolReserveLevels, params.CKKS.MaxLevel())
 	assert.InDelta(t, math.Exp2(40), params.CKKS.DefaultScale().Float64(), 1e-3)
 
 	// Default authenticator + flooding settings carry over unchanged.
@@ -27,8 +28,10 @@ func TestLoadOrionParams(t *testing.T) {
 	assert.InDelta(t, math.Exp2(20), params.Authenticator.Epsilon, 1e-9)
 	assert.InDelta(t, math.Exp2(16), params.FloodSigma, 1e-9)
 
-	// InputLevel pulled from the manifest verbatim.
-	assert.Equal(t, 16, params.InputLevel)
+	// InputLevel = manifest.InputLevel + ProtocolReserveLevels so encrypt
+	// uses the extended chain's higher level; after the model's rescales
+	// the ciphertext lands at level ProtocolReserveLevels.
+	assert.Equal(t, 15+ProtocolReserveLevels, params.InputLevel)
 
 	// Extras stashed for the inference-side handshake. The fixture stores
 	// raw Orion k_orion values; LoadOrionParams negates them on ingest
