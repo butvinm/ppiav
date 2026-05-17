@@ -682,7 +682,7 @@ func TestHTTPVAgent_PartialDecryption_AcceptVerdict(t *testing.T) {
 }
 
 // TestHTTPVAgent_PartialDecryption_TamperedShareReject sends a share built
-// under a different sk_c → Ver fails → callback Reject + 302.
+// under a different sk_c → Ver fails → callback ResultAuthFailed + 200.
 func TestHTTPVAgent_PartialDecryption_TamperedShareReject(t *testing.T) {
 	vagentSrv, _, _, agent, rstub, _, params := newHTTPFixtureWithRService(t)
 	sid := openSessionViaHTTP(t, vagentSrv)
@@ -729,7 +729,7 @@ func TestHTTPVAgent_PartialDecryption_TamperedShareReject(t *testing.T) {
 
 	calls, _, gotVerd := rstub.snapshot()
 	assert.Equal(t, 1, calls)
-	assert.Equal(t, protocol.VerdictReject, gotVerd)
+	assert.Equal(t, protocol.VerdictResultAuthFailed, gotVerd)
 }
 
 // TestHTTPVAgent_PartialDecryption_MalformedShareRejectThen4xx exercises

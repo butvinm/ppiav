@@ -189,13 +189,13 @@ The session-specific CKKS keys are generated jointly by VClient and VAgent. The 
 
 The happy path runs Stages 1–4 to a `Verdict = Accept` or `Verdict = Reject`. **Once a session is opened**, every non-happy-path outcome collapses into `Verdict = Reject` delivered through the standard Stage 4 callback — same wire shape, same RService 403, same UX for the user. No `Verdict = Error` variant. The one exception is F4a below: if VService is unreachable during Stage 1, no sid is ever issued, so there is no session to deliver a verdict against — the failure surfaces only as a 5xx to the user from RService.
 
-| ID  | Trigger                             | Where                | Resolution                                                                                                                                      |
-| --- | ----------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| F1  | `Ver` returns false                 | Stage 4, VAgent      | `Verdict = Reject` to RService. Session torn down.                                                                                              |
-| F2  | Malformed wire input                | Any stage            | HTTP 400 to the offending party (Phase 3) / Go error return (Phase 1) **plus** `Verdict = Reject` to RService. Session torn down.               |
-| F3  | Inference error                     | Stage 3, VService    | VS returns error to VAgent; VAgent surfaces `Verdict = Reject` to RService. Session torn down.                                                  |
-| F4a | VService unreachable, Stage 1 setup | Stage 1, VAgent      | No sid is issued; VAgent returns an error to RService; RService returns its own 5xx to the user. No session is opened, so nothing to tear down. |
-| F4b | VService unreachable, Stages 2–3    | Stage 2 or 3, VAgent | After retry budget exhausted, VAgent emits `Verdict = Reject` to RService. Session torn down.                                                   |
+| ID  | Trigger                             | Where                | Resolution                                                                                                                                          |
+| --- | ----------------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F1  | `Ver` returns false                 | Stage 4, VAgent      | `Verdict = ResultAuthFailed` to RService (distinct from a clean classifier `Reject` so operators can spot a misbehaving client). Session torn down. |
+| F2  | Malformed wire input                | Any stage            | HTTP 400 to the offending party (Phase 3) / Go error return (Phase 1) **plus** `Verdict = Reject` to RService. Session torn down.                   |
+| F3  | Inference error                     | Stage 3, VService    | VS returns error to VAgent; VAgent surfaces `Verdict = Reject` to RService. Session torn down.                                                      |
+| F4a | VService unreachable, Stage 1 setup | Stage 1, VAgent      | No sid is issued; VAgent returns an error to RService; RService returns its own 5xx to the user. No session is opened, so nothing to tear down.     |
+| F4b | VService unreachable, Stages 2–3    | Stage 2 or 3, VAgent | After retry budget exhausted, VAgent emits `Verdict = Reject` to RService. Session torn down.                                                       |
 
 ### F1: forgery vs. noise are indistinguishable on purpose
 

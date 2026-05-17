@@ -434,7 +434,7 @@ func TestPartialDecryptionBinaryRoundTrip(t *testing.T) {
 // VerdictNotification travels as JSON across `POST /api/callback/:sid`.
 // Round-trip via encoding/json so handler-side wire shape is locked.
 func TestVerdictNotificationJSONRoundTrip(t *testing.T) {
-	cases := []Verdict{VerdictAccept, VerdictReject, VerdictUnknown}
+	cases := []Verdict{VerdictAccept, VerdictReject, VerdictUnknown, VerdictResultAuthFailed}
 	for _, v := range cases {
 		original := VerdictNotification{Verdict: v}
 		data, err := json.Marshal(original)

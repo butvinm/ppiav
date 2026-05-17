@@ -11,6 +11,13 @@ const (
 	VerdictUnknown Verdict = iota
 	VerdictAccept
 	VerdictReject
+	// VerdictResultAuthFailed denotes that MPD-Auth `Ver` returned false:
+	// the joint decryption produced a plaintext whose injected verification
+	// values do not match the per-session authKey. Distinct from
+	// VerdictReject (which is a clean negative classifier outcome) so that
+	// operators and RService can distinguish a misbehaving client from a
+	// legitimately-rejected one.
+	VerdictResultAuthFailed
 )
 
 func (v Verdict) String() string {
@@ -21,6 +28,8 @@ func (v Verdict) String() string {
 		return "accept"
 	case VerdictReject:
 		return "reject"
+	case VerdictResultAuthFailed:
+		return "result_auth_failed"
 	default:
 		return "invalid"
 	}

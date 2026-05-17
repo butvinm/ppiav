@@ -14,6 +14,7 @@ func TestVerdictString(t *testing.T) {
 		{VerdictUnknown, "unknown"},
 		{VerdictAccept, "accept"},
 		{VerdictReject, "reject"},
+		{VerdictResultAuthFailed, "result_auth_failed"},
 		{Verdict(99), "invalid"},
 	}
 	for _, c := range cases {
@@ -28,4 +29,5 @@ func TestVerdictConstants(t *testing.T) {
 	assert.Equal(t, Verdict(0), VerdictUnknown)
 	assert.Equal(t, Verdict(1), VerdictAccept)
 	assert.Equal(t, Verdict(2), VerdictReject)
+	assert.Equal(t, Verdict(3), VerdictResultAuthFailed)
 }
