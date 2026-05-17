@@ -259,12 +259,13 @@ PARTY_BY_STEP: dict[str, str] = {
 # message flow in protocol.puml's inference + verifiable-decryption sections.
 # Each tuple is (after_parent_stage, sender_party, receiver_party, message_id);
 # the resolver pulls bytes from the per-message catalog row to size the rect.
-# input_ct hops twice on the wire: VClient -> VAgent (VClientInputCT) then
-# VAgent -> VService (VAgentInputCT); both are charged separately.
+# input_ct hops twice on the wire: VClient -> VAgent then VAgent -> VService.
+# Both `EncryptedImage` rows in MESSAGES share the same id; the (sender,
+# receiver) pair disambiguates the catalog lookup.
 TRANSFERS_PER_IMAGE: tuple[tuple[str, str, str, str], ...] = (
-    ("encrypt", "client", "agent", "VClientInputCT"),
-    ("encrypt", "agent", "service", "VAgentInputCT"),
-    ("infer", "service", "agent", "VServiceResultCT"),
-    ("mac", "agent", "client", "VAgentAuthCT"),
-    ("partial-decrypt", "client", "agent", "VClientPartialShare"),
+    ("encrypt", "client", "agent", "EncryptedImage"),
+    ("encrypt", "agent", "service", "EncryptedImage"),
+    ("infer", "service", "agent", "InferenceResult"),
+    ("mac", "agent", "client", "AuthenticatedResult"),
+    ("partial-decrypt", "client", "agent", "PartialDecryption"),
 )

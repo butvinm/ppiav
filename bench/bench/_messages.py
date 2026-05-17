@@ -13,9 +13,19 @@ messages. Resource-service-side traffic (ResourceClient↔ResourceService and
 ResourceService↔VerificationAgent in ``docs/protocol.puml`` — L14-L15,
 L18, L23-L24, L27-L28, L93-L95, L98, L101-L107) is explicitly out of scope
 per the bench-redesign-v2 plan: the bench measures the FHE protocol
-itself, not the surrounding resource-access plumbing. ``VAgentSessionInit``
-covers the ``POST /sessions`` round-trip initiated by the VAgent regardless
-of whether the upstream trigger comes from the resource service or a CLI.
+itself, not the surrounding resource-access plumbing.
+
+Naming convention: ``Message.id`` matches the Go wire-struct name in
+``internal/protocol/wire.go`` (e.g. ``SessionOpen``, ``Manifest``,
+``InferEvalKeys``, ``EncryptedImage``, ``InferenceResult``,
+``AuthenticatedResult``, ``PartialDecryption``, ``FinalizeRedirect``).
+Empty-body HTTP events that have no Go wire struct (the ``RequestX``
+GETs, the ``XxxAck`` empty-200 responses) use CamelCase names derived
+from the protocol.puml arrow labels.
+
+Same Go type traversing two hops appears as TWO catalog entries with
+the SAME ``id`` but different ``(sender, receiver)``. The catalog's
+uniqueness key is the tuple ``(id, sender, receiver)``.
 """
 
 from __future__ import annotations
@@ -134,51 +144,73 @@ class KeyInventoryRow(NamedTuple):
     size: int | None
 
 
-# Authoritative message catalog (drawn from docs/protocol.puml). Order is
-# chronological by phase: session init -> keygen -> input -> inference ->
-# verifiable decryption.
+# Authoritative message catalog. Order is chronological by phase: session
+# open → manifest fetch → keygen (pk, rlk r1, rlk r2, galois) → eval-key
+# upload → result subscription → image submission → inference → verifiable
+# decryption.
+#
+# Ids match Go wire structs in internal/protocol/wire.go where one exists.
+# CamelCase puml-arrow names cover the empty-body request/ack events.
 MESSAGES: list[Message] = [
+    # -- Session start (POST /sessions) ----------------------------------------
     Message(
-        id="VAgentSessionInit",
-        sender="agent",
-        receiver="service",
-        label_ru="Запрос сессии (агент → сервис)",
+        id="SessionOpen",
+        sender="client",
+        receiver="agent",
+        label_ru="Открытие сессии (клиент → агент)",
         bytes_source=Synthetic(64),
     ),
-    # VServiceSessionResponse bundles two HTTP round-trips into one logical
-    # wire message: docs/protocol.puml L21 (sid reply to POST /sessions) and
-    # L33 (params reply to GET /sessions/:sid/params). Both responses travel
-    # vservice -> vagent on the same physical link and together establish the
-    # session params + sid the VAgent caches. We measure the dominant payload
-    # (params.json) since sid.txt is a 64-byte uuid.
     Message(
-        id="VServiceSessionResponse",
-        sender="service",
-        receiver="agent",
-        label_ru="Параметры протокола + sid",
-        bytes_source=FilePath("keys/params.json"),
+        id="SessionOpen",
+        sender="agent",
+        receiver="service",
+        label_ru="Открытие сессии (агент → сервис)",
+        bytes_source=Synthetic(64),
     ),
     Message(
-        id="VClientParamsRequest",
+        id="VerificationSession",
+        sender="service",
+        receiver="agent",
+        label_ru="Идентификатор сессии (сервис → агент)",
+        bytes_source=Synthetic(96),
+    ),
+    Message(
+        id="VerificationSession",
+        sender="agent",
+        receiver="client",
+        label_ru="Идентификатор сессии (агент → клиент)",
+        bytes_source=Synthetic(96),
+    ),
+    # -- Manifest fetch (GET /params) -----------------------------------------
+    Message(
+        id="RequestManifest",
         sender="client",
         receiver="agent",
         label_ru="Запрос параметров протокола (клиент → агент)",
         bytes_source=Synthetic(64),
     ),
     Message(
-        id="VAgentParamsRequest",
+        id="RequestManifest",
         sender="agent",
         receiver="service",
         label_ru="Запрос параметров протокола (агент → сервис)",
         bytes_source=Synthetic(64),
     ),
     Message(
-        id="VAgentSessionParams",
+        id="Manifest",
+        sender="service",
+        receiver="agent",
+        label_ru="Параметры протокола (сервис → агент)",
+        bytes_source=FilePath("keys/params.json"),
+    ),
+    Message(
+        id="Manifest",
         sender="agent",
         receiver="client",
         label_ru="Параметры протокола (агент → клиент)",
         bytes_source=FilePath("keys/params.json"),
     ),
+    # -- PK round (POST /pk-share) -------------------------------------------
     Message(
         id="VClientPKShare",
         sender="client",
@@ -193,43 +225,54 @@ MESSAGES: list[Message] = [
         label_ru="Доля pk агента",
         bytes_source=SampleBytes("keygen.pk.agent_gen"),
     ),
+    # -- RLK round 1 (POST /rlk/round1) --------------------------------------
     Message(
-        id="VClientRLKRound1Share",
+        id="VClientRLKRound1",
         sender="client",
         receiver="agent",
         label_ru="Доля rlk клиента, раунд 1",
         bytes_source=SampleBytes("keygen.rlk-r1.client_gen"),
     ),
     Message(
-        id="VAgentRLKRound1Share",
+        id="VAgentRLKRound1",
         sender="agent",
         receiver="client",
         label_ru="Доля rlk агента, раунд 1",
         bytes_source=SampleBytes("keygen.rlk-r1.agent_gen"),
     ),
+    # -- RLK round 2 (POST /rlk/round2, empty 200 reply) --------------------
     Message(
-        id="VClientRLKRound2Share",
+        id="VClientRLKRound2",
         sender="client",
         receiver="agent",
         label_ru="Доля rlk клиента, раунд 2",
         bytes_source=SampleBytes("keygen.rlk-r2.client_gen"),
     ),
     Message(
-        id="VAgentRLKRound2Ack",
+        id="RLKRound2Ack",
         sender="agent",
         receiver="client",
-        label_ru="Подтверждение rlk",
+        label_ru="Подтверждение rlk р2 (HTTP 200)",
         bytes_source=Synthetic(32),
     ),
+    # -- Galois shares (POST /gks-shares) ------------------------------------
     Message(
-        id="VClientGaloisShare",
+        id="VClientGaloisShares",
         sender="client",
         receiver="agent",
-        label_ru="Master доля gks клиента",
+        label_ru="Master доли gks клиента",
         bytes_source=SampleBytes("keygen.galois.client_gen"),
     ),
     Message(
-        id="VAgentEvalKeyBundle",
+        id="GaloisSharesAck",
+        sender="agent",
+        receiver="client",
+        label_ru="Подтверждение gks (HTTP 200)",
+        bytes_source=Synthetic(32),
+    ),
+    # -- Eval key bundle upload (POST /eval-keys) ----------------------------
+    Message(
+        id="InferEvalKeys",
         sender="agent",
         receiver="service",
         label_ru="rlk + pk_top + gks_master → сервису",
@@ -238,60 +281,66 @@ MESSAGES: list[Message] = [
         ),
     ),
     Message(
-        id="VServiceKeysAck",
+        id="EvalKeysAck",
         sender="service",
         receiver="agent",
-        label_ru="Подтверждение установки ключей",
+        label_ru="Подтверждение установки ключей (HTTP 200)",
         bytes_source=Synthetic(32),
     ),
+    # -- Result subscription (GET /sessions/{sid}/result, SSE open) ----------
     Message(
-        id="VAgentGaloisAck",
-        sender="agent",
-        receiver="client",
-        label_ru="Подтверждение gks",
-        bytes_source=Synthetic(32),
+        id="RequestResult",
+        sender="client",
+        receiver="agent",
+        label_ru="Подписка на результат (SSE)",
+        bytes_source=Synthetic(64),
     ),
+    # -- Image submission + forward (POST /image, POST /infer) ---------------
     Message(
-        id="VClientInputCT",
+        id="EncryptedImage",
         sender="client",
         receiver="agent",
         label_ru="Шифротекст изображения (клиент → агент)",
         bytes_source=FilePath("img_0/input_ct.bin"),
     ),
     Message(
-        id="VAgentInputCT",
+        id="EncryptedImage",
         sender="agent",
         receiver="service",
         label_ru="Шифротекст изображения (агент → сервис)",
         bytes_source=FilePath("img_0/input_ct.bin"),
     ),
+    # -- Inference result (response from /infer) ------------------------------
     Message(
-        id="VServiceResultCT",
+        id="InferenceResult",
         sender="service",
         receiver="agent",
         label_ru="Шифротекст результата",
         bytes_source=FilePath("img_0/result_ct.bin"),
     ),
+    # -- Authenticated result delivery (SSE event) ---------------------------
     Message(
-        id="VAgentAuthCT",
+        id="AuthenticatedResult",
         sender="agent",
         receiver="client",
         label_ru="Аутентифицированный шифротекст",
         bytes_source=FilePath("img_0/auth_ct.bin"),
     ),
+    # -- Partial decryption return (POST /partial-decryption) ----------------
     Message(
-        id="VClientPartialShare",
+        id="PartialDecryption",
         sender="client",
         receiver="agent",
         label_ru="Частично расшифрованный шифротекст",
         bytes_source=FilePath("img_0/client_share.bin"),
     ),
+    # -- Finalize redirect (response from /partial-decryption) ---------------
     Message(
-        id="VAgentVerificationAck",
+        id="FinalizeRedirect",
         sender="agent",
         receiver="client",
-        label_ru="Подтверждение завершения верификации",
-        bytes_source=Synthetic(32),
+        label_ru="Перенаправление на страницу ресурса",
+        bytes_source=Synthetic(128),
     ),
 ]
 

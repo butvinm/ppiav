@@ -43,37 +43,46 @@ def _samples_by_name() -> dict[str, list[Sample]]:
 
 
 def test_messages_catalog_has_expected_entries() -> None:
-    """Every message id we expect to surface in summary.md must be in the catalog."""
+    """Every message id we expect to surface in summary.md must be in the catalog.
+
+    Ids match Go wire structs in internal/protocol/wire.go where one exists;
+    empty-body events use puml-arrow names (SessionOpen, RequestManifest,
+    RequestResult, RLKRound2Ack, GaloisSharesAck, EvalKeysAck).
+    """
     expected_ids = {
-        "VAgentSessionInit",
-        "VServiceSessionResponse",
-        "VClientParamsRequest",
-        "VAgentParamsRequest",
-        "VAgentSessionParams",
+        "SessionOpen",
+        "VerificationSession",
+        "RequestManifest",
+        "Manifest",
         "VClientPKShare",
         "VAgentPKShare",
-        "VClientRLKRound1Share",
-        "VAgentRLKRound1Share",
-        "VClientRLKRound2Share",
-        "VAgentRLKRound2Ack",
-        "VClientGaloisShare",
-        "VAgentEvalKeyBundle",
-        "VServiceKeysAck",
-        "VAgentGaloisAck",
-        "VClientInputCT",
-        "VAgentInputCT",
-        "VServiceResultCT",
-        "VAgentAuthCT",
-        "VClientPartialShare",
-        "VAgentVerificationAck",
+        "VClientRLKRound1",
+        "VAgentRLKRound1",
+        "VClientRLKRound2",
+        "RLKRound2Ack",
+        "VClientGaloisShares",
+        "GaloisSharesAck",
+        "InferEvalKeys",
+        "EvalKeysAck",
+        "RequestResult",
+        "EncryptedImage",
+        "InferenceResult",
+        "AuthenticatedResult",
+        "PartialDecryption",
+        "FinalizeRedirect",
     }
     actual_ids = {m.id for m in MESSAGES}
     assert actual_ids == expected_ids
 
 
-def test_messages_have_unique_ids() -> None:
-    ids = [m.id for m in MESSAGES]
-    assert len(ids) == len(set(ids)), "duplicate message ids in MESSAGES"
+def test_messages_have_unique_keys() -> None:
+    """The catalog's uniqueness key is (id, sender, receiver).
+
+    Same wire-struct id may appear on multiple hops (e.g. EncryptedImage
+    travels client→agent and agent→service). Each hop is a distinct row.
+    """
+    keys = [(m.id, m.sender, m.receiver) for m in MESSAGES]
+    assert len(keys) == len(set(keys)), "duplicate (id, sender, receiver) in MESSAGES"
 
 
 def test_keys_have_unique_names() -> None:
@@ -135,7 +144,7 @@ def test_resolve_share_message_uses_sample_bytes() -> None:
 def test_resolve_synthetic_returns_constant() -> None:
     """Synthetic-sourced messages return the declared constant."""
     samples = _samples_by_name()
-    msg = next(m for m in MESSAGES if m.id == "VAgentSessionInit")
+    msg = next(m for m in MESSAGES if m.id == "SessionOpen")
     size = resolve_message_bytes(msg, FIXTURE, samples)
     assert size == 64
 
@@ -143,7 +152,8 @@ def test_resolve_synthetic_returns_constant() -> None:
 def test_resolve_filepath_returns_stat_size() -> None:
     """FilePath-sourced messages return the file size from os.stat."""
     samples = _samples_by_name()
-    msg = next(m for m in MESSAGES if m.id == "VClientInputCT")
+    # First EncryptedImage hop (client → agent) is the canonical FilePath case.
+    msg = next(m for m in MESSAGES if m.id == "EncryptedImage" and m.sender == "client")
     size = resolve_message_bytes(msg, FIXTURE, samples)
     # Placeholder zero-byte fixture; size is 0, not None.
     assert size == 0
@@ -152,7 +162,7 @@ def test_resolve_filepath_returns_stat_size() -> None:
 def test_resolve_multifile_sums_sizes() -> None:
     """MultiFilePath sums sizes across every file when all present."""
     samples = _samples_by_name()
-    msg = next(m for m in MESSAGES if m.id == "VAgentEvalKeyBundle")
+    msg = next(m for m in MESSAGES if m.id == "InferEvalKeys")
     size = resolve_message_bytes(msg, FIXTURE, samples)
     expected = sum(
         (FIXTURE / rel).stat().st_size

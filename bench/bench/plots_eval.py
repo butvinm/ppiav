@@ -329,11 +329,23 @@ _LANE_ORDER: tuple[str, ...] = ("client", "service", "agent")
 def _bytes_for_message(
     bytes_rows: Sequence[MessageBytesRow],
     message_id: str,
+    sender: str | None = None,
+    receiver: str | None = None,
 ) -> int:
-    """Resolve a message's wire size from the catalog rows; 0 if missing."""
+    """Resolve a message's wire size from the catalog rows; 0 if missing.
+
+    When ``sender``/``receiver`` are given they disambiguate multi-hop ids
+    (e.g. ``EncryptedImage`` appears twice — client→agent and agent→service).
+    Without them the first match wins (preserved for legacy callers).
+    """
     for r in bytes_rows:
-        if r.message_id == message_id:
-            return int(r.size) if r.size is not None else 0
+        if r.message_id != message_id:
+            continue
+        if sender is not None and r.sender != sender:
+            continue
+        if receiver is not None and r.receiver != receiver:
+            continue
+        return int(r.size) if r.size is not None else 0
     return 0
 
 
@@ -435,7 +447,7 @@ def _plot_session_timeline_swimlane(
         if ms <= 0:
             continue
         for sender, receiver, message_id in transfers_after_step.get(step, []):
-            size = _bytes_for_message(bytes_rows, message_id)
+            size = _bytes_for_message(bytes_rows, message_id, sender, receiver)
             if size <= 0:
                 continue
             tx_ms = (size / bps) * 1000.0

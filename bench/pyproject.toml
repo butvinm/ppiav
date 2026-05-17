@@ -35,6 +35,7 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 # RUF001 = "ambiguous unicode" (e.g. Cyrillic с vs Latin c). The labels
 # module is Russian by design — every Cyrillic char is intentional.
 "bench/_labels_ru.py" = ["RUF001"]
+"bench/_messages.py" = ["RUF001"]
 
 [tool.mypy]
 python_version = "3.12"
