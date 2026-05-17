@@ -3,12 +3,12 @@ skinparam responseMessageBelowArrow true
 skinparam sequenceMessageAlign center
 skinparam maxMessageSize 200
 
-actor "Пользователь" as User
-participant "Клиент\nобъекта доступа" as ResourceClient
-participant "Клиент\nверификации" as VerificationClient
-participant "Агент сервиса\nверификации" as VerificationAgent
-participant "Сервис\nверификации" as VerificationService
-participant "Сервис\nобъекта доступа" as ResourceService
+actor " " as User
+participant "RClient" as ResourceClient
+participant "VClient" as VerificationClient
+participant "RService" as ResourceService
+participant "VAgent" as VerificationAgent
+participant "VService" as VerificationService
 
 activate User
 User -> ResourceClient ++ : Переход на страницу защищенного ресурса
