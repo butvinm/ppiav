@@ -497,7 +497,7 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, sid protoco
 		return
 	}
 
-	targetURL := s.vserviceURL + "/sessions/" + url.PathEscape(string(sid)) + "/image"
+	targetURL := s.vserviceURL + "/sessions/" + url.PathEscape(string(sid)) + "/infer"
 	// Forward the original bytes verbatim — we already unmarshaled to
 	// validate, but the VService handler unmarshals from the bytes itself.
 	// imageDeadline bounds the Orion inference circuit at LogN=16.
@@ -505,33 +505,35 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, sid protoco
 	defer cancelImg()
 	reqImg, err := http.NewRequestWithContext(ctxImg, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
-		s.rejectAndEvict(w, http.StatusInternalServerError, sid, fmt.Sprintf("build vservice /image request: %s", err))
+		s.rejectAndEvict(w, http.StatusInternalServerError, sid, fmt.Sprintf("build vservice /infer request: %s", err))
 		return
 	}
 	reqImg.Header.Set("Content-Type", "application/octet-stream")
 	resp, err := s.httpClient.Do(reqImg)
 	if err != nil {
 		// F3: inference unreachable.
-		s.rejectAndEvict(w, http.StatusBadGateway, sid, fmt.Sprintf("call vservice /image: %s", err))
+		s.rejectAndEvict(w, http.StatusBadGateway, sid, fmt.Sprintf("call vservice /infer: %s", err))
 		return
 	}
 	defer resp.Body.Close()
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		s.rejectAndEvict(w, http.StatusBadGateway, sid, fmt.Sprintf("read vservice /image: %s", err))
+		s.rejectAndEvict(w, http.StatusBadGateway, sid, fmt.Sprintf("read vservice /infer: %s", err))
 		return
 	}
 	if resp.StatusCode != http.StatusOK {
 		// F3: VService returned an error during inference.
-		s.rejectAndEvict(w, http.StatusBadGateway, sid, fmt.Sprintf("vservice /image returned %d: %s", resp.StatusCode, respBody))
+		s.rejectAndEvict(w, http.StatusBadGateway, sid, fmt.Sprintf("vservice /infer returned %d: %s", resp.StatusCode, respBody))
 		return
 	}
-	resultCt := &rlwe.Ciphertext{}
-	if err := resultCt.UnmarshalBinary(respBody); err != nil {
+	var result protocol.InferenceResult
+	result.Ct = &rlwe.Ciphertext{}
+	if err := result.Ct.UnmarshalBinary(respBody); err != nil {
 		// F3: VService returned a malformed ciphertext.
-		s.rejectAndEvict(w, http.StatusBadGateway, sid, fmt.Sprintf("unmarshal vservice /image response: %s", err))
+		s.rejectAndEvict(w, http.StatusBadGateway, sid, fmt.Sprintf("unmarshal vservice /infer response: %s", err))
 		return
 	}
+	resultCt := result.Ct
 
 	ctM, err := s.agent.BuildAuthenticatedCt(sid, resultCt)
 	if err != nil {
@@ -632,7 +634,7 @@ func (s *Server) handlePartialDecryption(w http.ResponseWriter, r *http.Request,
 		httputil.WriteError(w, http.StatusBadGateway, fmt.Sprintf("rservice callback: %s", err))
 		return
 	}
-	httputil.WriteJSON(w, http.StatusOK, map[string]string{"redirect": s.rservicePublicURL + "/protected"})
+	httputil.WriteJSON(w, http.StatusOK, protocol.FinalizeRedirect{Redirect: s.rservicePublicURL + "/protected"})
 }
 
 // rejectAndEvict handles F2 (malformed wire) and F3 (inference error) per

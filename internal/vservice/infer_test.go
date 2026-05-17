@@ -19,7 +19,7 @@ import (
 //
 // The LLKN hierarchy is built via `protocol.BuildLLKNParams` so the wire
 // schedule matches the strict `DefaultLLKNLogPHK` check in
-// `writeParams` — tests must drive the same canonical builder production
+// `writeManifest` — tests must drive the same canonical builder production
 // uses or the /params HTTP path will reject the response.
 func smallParams(t *testing.T) protocol.Params {
 	t.Helper()

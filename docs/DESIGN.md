@@ -91,11 +91,11 @@ sequenceDiagram
     RC->>VC: GET /verify?sid (loads SPA)
 
     %% Stage 2a — protocol parameters
-    VC->>VA: GET /sessions/:sid/params
-    VA->>VS: GET /params
-    VS-->>VA: Params
+    VC->>VA: GET /sessions/:sid/params (RequestManifest)
+    VA->>VS: GET /params (RequestManifest)
+    VS-->>VA: Manifest
     VA->>VA: persist params
-    VA-->>VC: Params
+    VA-->>VC: Manifest
 
     %% Stage 2b — public key (one round)
     VC->>VC: Keygen sk_c, pk_c
@@ -119,7 +119,7 @@ sequenceDiagram
 
     %% Stage 2d — rotation keys (gks_master + hierarchical derivation)
     VC->>VC: Keygen gks_master_c
-    VC->>VA: POST /sessions/:sid/gks-master (VClientGaloisKeyShare)
+    VC->>VA: POST /sessions/:sid/gks-shares (VClientGaloisShares)
     VA->>VA: Keygen gks_master_a, aggregate gks_master
     VA->>VA: derive gks_auth from gks_master (hierkeys)
     VA->>VS: POST /sessions/:sid/eval-keys (InferEvalKeys)
@@ -128,16 +128,16 @@ sequenceDiagram
     VA-->>VC: 200 (setup complete)
 
     %% Stage 2e — SSE channel for the eventual authenticated result
-    VC->>VA: GET /sessions/:sid/result (open SSE)
+    VC->>VA: GET /sessions/:sid/result (RequestResult, open SSE)
     VA-->>VC: 200 (event-stream)
 
     %% Stage 3 — image submission and inference
     VC->>VC: EncryptImage
     VC->>VA: POST /sessions/:sid/image (EncryptedImage)
-    VA->>VS: POST /sessions/:sid/image (EncryptedImage)
+    VA->>VS: POST /sessions/:sid/infer (EncryptedImage)
     activate VS
     VS->>VS: Infer
-    VS-->>VA: result_ct
+    VS-->>VA: InferenceResult
     deactivate VS
 
     %% Stage 4a — MPD-Auth joint decryption
@@ -148,7 +148,7 @@ sequenceDiagram
     VA->>VA: FinalDecrypt (sk_a), authenticity check, verdict = sign(logit)
 
     %% Stage 4b — verdict callback and resource access
-    VA->>RS: POST /api/callback (VerdictNotification)
+    VA->>RS: POST /api/callback/:sid (VerdictNotification)
     RS-->>VA: 200
     VA-->>VC: 302 to RClient (verification complete)
     RC->>RS: GET /protected (with sid cookie)
@@ -212,7 +212,7 @@ We do not try. The correctness contract is "with our chosen `ε` and `σ_flood`,
 
 - `protocol.Verdict` stays `{Unknown, Accept, Reject}` — no `Error` variant.
 - `Verdict = Unknown` is the marker RService uses for "session was opened but no verdict has been delivered yet"; RService treats Unknown as deny-by-default and returns 403 on resource fetch until either Accept or Reject arrives.
-- The same VAgent → RService callback (`POST /api/callback`) carries all verdict deliveries, including the failure-mode rejects.
+- The same VAgent → RService callback (`POST /api/callback/:sid`) carries all verdict deliveries, including the failure-mode rejects.
 
 ### No protocol-level timeouts
 
@@ -298,7 +298,7 @@ Out of scope for this document. Unforgeability bounds, soundness-under-flooding,
 - **Phase 4 rotation composition (asymmetric scheme).** VAgent and VService both need rotation keys but follow different routes; their constraints differ and the wire optimisation pays off differently for each.
   - **VAgent — decompose at use, no hierkeys.** Auth's rotate-and-sum loop calls `RotateNew(ct, -j)` for `j ∈ [1, λ) \ S` where `|S| = λ/2`. We control the rotation indices, so we pick a tiny base-2 atom set `{1, 2, 4, 8, 16, 32, 64}` (7 atoms at `λ = 128`) and chain each logical rotation by binary decomposition: e.g. `j = 69 = 64 + 4 + 1` becomes `Rot(·, -64) → Rot(·, -4) → Rot(·, -1)`. Chain length per rotation is `popcount(|j|)` — max 7, mean 3.52 over the 64 non-S rotations Auth uses. The auth atom keys are direct multi-party `*rlwe.GaloisKey`s minted at `GaloisElement(-atom)` at eval level; **no lattigo-hierkeys derivation** at VAgent. The library buys nothing here — derivation only earns its keep when one master atom drives many derived keys, which is VService's case.
 
-  - **VService — expand fully, hierkeys-derived.** The Orion-compiled inference circuit assumes single-rotation-per-logical-rotation: hoisted-rotation patterns share decomposition work across multiple rotations of the same input, and the compile-time noise calibration is `B_ks` per rotation (not `√k · B_ks` for chain length `k`). Retrofitting decompose-at-use would require either patching Orion or wrapping every `Rotate` and hoisted-decomposition path — non-trivial. So VService stays at single-op rotations: it receives a small `gks_master_infer` set (8 atoms at `Base = 4` over `MaxSlots`, ascending `{1, 4, 16, …, 16384}`), `hierkeys.LevelExpansion`-derives one `*rlwe.GaloisKey` per index in `ExtraRotationIndices`, and feeds the full set into `rlwe.NewMemEvaluationKeySet` — same shape as Phase 1–3 downstream of `StoreEvalKeys`.
+  - **VService — expand fully, hierkeys-derived.** The Orion-compiled inference circuit assumes single-rotation-per-logical-rotation: hoisted-rotation patterns share decomposition work across multiple rotations of the same input, and the compile-time noise calibration is `B_ks` per rotation (not `√k · B_ks` for chain length `k`). Retrofitting decompose-at-use would require either patching Orion or wrapping every `Rotate` and hoisted-decomposition path — non-trivial. So VService stays at single-op rotations: it receives a small `gks_master` set (8 atoms at `Base = 4` over `MaxSlots`, ascending `{1, 4, 16, …, 16384}`), `hierkeys.LevelExpansion`-derives one `*rlwe.GaloisKey` per index in `ExtraRotationIndices`, and feeds the full set into `rlwe.NewMemEvaluationKeySet` — same shape as Phase 1–3 downstream of `StoreEvalKeys`.
 
   Two atom sets, two consumers, one scheme: VAgent's auth atoms live at eval level with `GaloisElement(-atom)` and are shipped as raw Galois keys; VService's infer atoms live at top level with `GaloisElement(+atom)` and are shipped as `*hierkeys.MasterKey`s. The wire savings are identical: ~3.4 GB combined at `LogN = 16`, vs Phase 1–3's ~57 GB.
 
@@ -451,15 +451,20 @@ type Params struct {
 
 func Defaults() (Params, error)
 
-// AuthAtoms returns the base-2 auth atom set {1, 2, 4, …, 2^⌈log₂(λ−1)⌉}
-// used by VAgent at GaloisElement(-atom) and eval level (no hierkeys).
-// At λ = 128: {1, 2, 4, 8, 16, 32, 64} — 7 atoms.
+// AuthAtoms returns the base-2 auth atom set {1, 2, 4, …, 2^⌈log₂(λ−1)⌉}.
+// At λ = 128: {1, 2, 4, 8, 16, 32, 64} — 7 atoms. VAgent derives these from
+// the aggregated master keys via hierkeys.LevelExpansion (eval level,
+// GaloisElement(-atom)); they are NOT part of the wire CRS / Galois-key
+// handshake.
 func (p Params) AuthAtoms() []int
 
-// InferAtoms returns hierkeys.MasterRotationsForBase(Base, CKKS.MaxSlots())
-// used by VService at GaloisElement(+atom) and top level.
-// At LogN = 16, Base = 4: {1, 4, 16, 64, 256, 1024, 4096, 16384} — 8 atoms.
-func (p Params) InferAtoms() []int
+// MasterAtoms returns hierkeys.MasterRotationsForBase(Base, CKKS.MaxSlots()),
+// the single master atom set shared by both VAgent (auth-atom derivation)
+// and VService (infer-atom derivation). At LogN = 16, Base = 4:
+// {1, 4, 16, 64, 256, 1024, 4096, 16384} — 8 atoms. Used at top level,
+// GaloisElement(+atom). This is the only atom set on the wire (Stage 2d
+// CRS draw order step 4).
+func (p Params) MasterAtoms() []int
 
 // ProjectSKToEval lowers a top-level secret-key share (sk_top) to the
 // eval-level params via params.LLKN.ProjectToEvalKey. Projection is linear,
@@ -502,6 +507,22 @@ Wire messages — payload nouns; direction is implicit in the HTTP route.
 type SessionOpen           struct{}
 type VerificationSession         struct { SessionID SessionID }
 
+// Stage 2a: VService → VAgent → VClient — public manifest of protocol
+// parameters. JSON payload. Each party uses it to reconstruct its local
+// protocol.Params runtime struct; CKKS rides as json.RawMessage through
+// Lattigo's codec, LLKNLogPHK is sent explicitly so cross-runtime mismatch
+// surfaces loud.
+type Manifest struct {
+    CKKS                 json.RawMessage `json:"ckks"`
+    LLKNBase             int             `json:"llkn_base"`
+    LLKNLogPHK           []int           `json:"llkn_log_phk"`
+    AuthenticatorLambda  int             `json:"authenticator_lambda"`
+    AuthenticatorEpsilon float64         `json:"authenticator_epsilon"`
+    FloodSigma           float64         `json:"flood_sigma"`
+    ExtraRotationIndices []int           `json:"extra_rotation_indices,omitempty"`
+    InputLevel           int             `json:"input_level"`
+}
+
 // Stage 2b: pk share exchange (VClient ↔ VAgent). Each party emits one share
 // per level — eval (for the encryption pk) and top (for hierkeys.PubToRot
 // during VService's gks_infer derivation). Both shares ride in a single
@@ -524,12 +545,15 @@ type VClientRLKRound2 struct{ Share multiparty.RelinearizationKeyGenShare }
 // no round-2 reply share — round 2 just acks completion
 
 // Stage 2d: Galois-key share exchange (VClient → VAgent) in a single message
-// carrying both atom-set share lists. Auth atoms are eval-level with
-// GaloisElement(-atom); infer atoms are top-level with GaloisElement(+atom)
-// and become hierkeys MasterKeys after aggregation.
+// carrying the master-atom share list. Master atoms are top-level with
+// GaloisElement(+atom); after aggregation each share becomes a hierkeys
+// MasterKey. VAgent locally derives both gks_auth (eval-level, negative
+// direction) and the gks_master map shipped to VService from the
+// aggregated master keys via lattigo-hierkeys. There is no VAgent reply
+// share — VAgent draws its own master shares deterministically from the
+// session CRS, so VClient does not need them shipped back.
 type VClientGaloisShares struct {
-    AuthAtomShares  []multiparty.GaloisKeyGenShare // len = len(params.AuthAtoms())
-    InferAtomShares []multiparty.GaloisKeyGenShare // len = len(params.InferAtoms())
+    MasterShares []multiparty.GaloisKeyGenShare // len = len(params.MasterAtoms())
 }
 
 // VAgent → VService forward (Stage 2d): inference-side material only.
@@ -537,25 +561,31 @@ type VClientGaloisShares struct {
 // stays at VAgent and powers Auth's chain-rotation; it never crosses the
 // wire to VService.
 type InferEvalKeys struct {
-    RLK            *rlwe.RelinearizationKey
-    PKTop          *rlwe.PublicKey                // feeds hierkeys.PubToRot
-    GKSMasterInfer map[int]*hierkeys.MasterKey    // keyed by positive infer-atom int
+    RLK       *rlwe.RelinearizationKey
+    PKTop     *rlwe.PublicKey               // feeds hierkeys.PubToRot
+    GKSMaster map[int]*hierkeys.MasterKey   // keyed by positive master-atom int
 }
 
-// Stage 3: image
+// Stage 3: VClient → VAgent → VService — encrypted face image.
 type EncryptedImage struct { Ct *rlwe.Ciphertext }
 
-// Stage 4a: VAgent → VClient (over SSE) — result ct with verification values folded in
+// Stage 3: VService → VAgent — raw inference ciphertext before MAC.
+type InferenceResult struct { Ct *rlwe.Ciphertext }
+
+// Stage 4a: VAgent → VClient (over SSE) — result ct with verification values folded in.
 type AuthenticatedResult struct { Ct *rlwe.Ciphertext }
 
-// Stage 4a: VClient → VAgent — partial-decryption share with noise flooding applied
+// Stage 4a: VClient → VAgent — partial-decryption share with noise flooding applied.
 type PartialDecryption struct { Share multiparty.KeySwitchShare }
 
-// Stage 4b: VAgent → RService
+// Stage 4b: VAgent → VClient — JSON terminator pointing at the protected resource.
+type FinalizeRedirect struct { Redirect string `json:"redirect"` }
+
+// Stage 4b: VAgent → RService.
 type VerdictNotification struct { Verdict Verdict }
 ```
 
-`VerificationSession` carries the sid that VService allocated; subsequent routes carry sid in the URL path. VService never sees `PublicKeyGenShare` or `pk` directly — only the aggregated `rlk`, the top-level aggregated `pkTop`, and the aggregated `gks_master_infer` map arrive over `InferEvalKeys`. VService runs `hierkeys.PubToRot` + `LevelExpansion` in `StoreEvalKeys` to derive the per-rotation `gks_infer` set for `ExtraRotationIndices` and feeds it into `rlwe.NewMemEvaluationKeySet`.
+`VerificationSession` carries the sid that VService allocated; subsequent routes carry sid in the URL path. VService never sees `PublicKeyGenShare` or `pk` directly — only the aggregated `rlk`, the top-level aggregated `pkTop`, and the aggregated `gks_master` map arrive over `InferEvalKeys`. VService runs `hierkeys.PubToRot` + `LevelExpansion` in `StoreEvalKeys` to derive the per-rotation `gks_infer` set for `ExtraRotationIndices` and feeds it into `rlwe.NewMemEvaluationKeySet`.
 
 **CRS.** Lattigo's `multiparty.CRS` is just a `sampling.PRNG` whose byte output both parties must agree on. We use `sampling.NewKeyedPRNG(seed)` with a session-scoped, sid-derived seed — no CRS material crosses the wire.
 
@@ -580,10 +610,9 @@ The seed is `"ppiav-crs/v1|" || sid`. The domain prefix is hygiene against ever 
 1. `multiparty.PublicKeyGenProtocol(params.CKKS).SampleCRP(crs)` — Stage 2b, pk_eval.
 2. `multiparty.PublicKeyGenProtocol(params.LLKN.Top()).SampleCRP(crs)` — Stage 2b, pk_top.
 3. `multiparty.RelinearizationKeyGenProtocol(params.CKKS).SampleCRP(crs, evkParams)` — Stage 2c, used by both rounds.
-4. For each `atom` in `params.AuthAtoms()` ascending: `multiparty.GaloisKeyGenProtocol(params.CKKS).SampleCRP(crs, evkParams)` — Stage 2d, eval level.
-5. For each `atom` in `params.InferAtoms()` ascending: `multiparty.GaloisKeyGenProtocol(params.LLKN.Top()).SampleCRP(crs, evkParams)` — Stage 2d, top level.
+4. For each `atom` in `params.MasterAtoms()` ascending: `multiparty.GaloisKeyGenProtocol(params.LLKN.Top()).SampleCRP(crs, evkParams)` — Stage 2d, top level, single master atom set.
 
-VAgent and VClient iterate the same atom lists at the same levels so per-CRP byte counts line up exactly. `params.RotationIndices()` (the legacy union of inference + auth rotation indices) is no longer used for Galois CRPs — both atom sets are fixed by `params` alone, not by the inference manifest.
+VAgent and VClient iterate the same master atom list at the top level so per-CRP byte counts line up exactly. There is only one wire atom set: the auth-atom and infer-atom rotation keys are derived locally by VAgent and VService respectively from the shared master atom set via `hierkeys.LevelExpansion`. `params.RotationIndices()` (the legacy union of inference + auth rotation indices) is no longer used for Galois CRPs.
 
 #### `internal/authenticator`
 
@@ -694,9 +723,10 @@ type Client struct {
     skEval    *rlwe.SecretKey          // lazy cache of params.ProjectSKToEval(skTop)
     pkEvalAgg *rlwe.PublicKey          // aggregated pk_eval after Stage 2b (used by encryptor)
     rlkAgg    *rlwe.RelinearizationKey // aggregated rlk after Stage 2c
-    // Galois-key shares (both auth and infer atom sets) are generated and
-    // shipped during Stage 2d; VClient does not need to retain them after
-    // the rotation-key handshake.
+    // Master-atom Galois-key shares are generated and shipped during
+    // Stage 2d; VClient does not need to retain them after the
+    // rotation-key handshake (VAgent and VService locally derive both
+    // auth and infer atom keys from the aggregated master keys).
 
     encoder   *ckks.Encoder
     encryptor *rlwe.Encryptor          // built from pkEvalAgg
@@ -722,13 +752,20 @@ func (c *Client) AggregateRLKRound1(agentShare multiparty.RelinearizationKeyGenS
 func (c *Client) GenRLKShareRound2() (multiparty.RelinearizationKeyGenShare, error)
 // VClient does not finalize rlk itself — only VAgent and VService need it.
 
-// Stage 2d — two independent atom-set iterations in one message:
-//   - auth atoms (params.AuthAtoms(), eval level, GaloisElement(-atom), skEval)
-//   - infer atoms (params.InferAtoms(), top level, GaloisElement(+atom), skTop)
-// VAgent aggregates each list against its matching shares and emits the
-// two flavours of Galois material — raw eval-level keys for Auth and
-// hierkeys MasterKeys for VService.
-func (c *Client) GenAuthAndInferShares() (protocol.VClientGaloisShares, error)
+// Stage 2d — single master-atom share list (top level, GaloisElement(+atom),
+// skTop). VAgent aggregates against its matching master shares and locally
+// derives both the eval-level gks_auth (negative direction) for Auth and
+// the gks_master map shipped to VService, via lattigo-hierkeys
+// LevelExpansion + FinalizeKey.
+//
+// The returned labels are parallel to the share slice (ascending
+// params.MasterAtoms() order); VAgent uses them to validate the count of
+// the client's shares against its own stashed list.
+func (c *Client) GenMasterShares() (
+    shares []multiparty.GaloisKeyGenShare,
+    labels []int,
+    err error,
+)
 
 // Stage 3 — image must already be the preprocessed tensor (see below).
 // Hard-fails on wrong length to avoid silent zero-padding masking a
@@ -758,7 +795,7 @@ Reject inputs whose length isn't exactly `12288` rather than zero-padding — a 
 
 #### `internal/vservice`
 
-FHE inference engine. **Issues session IDs.** Holds per-session evaluator state. Receives the aggregated `rlk`, the top-level aggregated `pkTop`, and the master infer-atom map `gks_master_infer` from VAgent. Runs `hierkeys.PubToRot(p.CKKS, p.LLKN.Top(), pkTop)` to seed the `LevelExpansion`, then derives one `*rlwe.GaloisKey` per index in `params.ExtraRotationIndices()` and feeds the assembled slice into `rlwe.NewMemEvaluationKeySet` (Lattigo v6.2.0 has no `GaloisKeySet` type — the slice is what the evaluator consumes). Downstream of `StoreEvalKeys` the inference path is identical to Phase 1–3's single-rotation-per-logical-rotation shape; Orion's compiled circuit and its hoisted-rotation patterns are untouched.
+FHE inference engine. **Issues session IDs.** Holds per-session evaluator state. Receives the aggregated `rlk`, the top-level aggregated `pkTop`, and the master infer-atom map `gks_master` from VAgent. Runs `hierkeys.PubToRot(p.CKKS, p.LLKN.Top(), pkTop)` to seed the `LevelExpansion`, then derives one `*rlwe.GaloisKey` per index in `params.ExtraRotationIndices()` and feeds the assembled slice into `rlwe.NewMemEvaluationKeySet` (Lattigo v6.2.0 has no `GaloisKeySet` type — the slice is what the evaluator consumes). Downstream of `StoreEvalKeys` the inference path is identical to Phase 1–3's single-rotation-per-logical-rotation shape; Orion's compiled circuit and its hoisted-rotation patterns are untouched.
 
 ```go
 package vservice
@@ -779,14 +816,14 @@ func (s *Service) OpenSession() (protocol.SessionID, error)
 func (s *Service) Params() protocol.Params
 
 // StoreEvalKeys builds the session evaluator: hierkeys.PubToRot(pkTop) seeds
-// the LevelExpansion; gksMasterInfer is expanded across ExtraRotationIndices
+// the LevelExpansion; gksMaster is expanded across ExtraRotationIndices
 // concurrently; the resulting []*rlwe.GaloisKey is loaded into a
 // rlwe.NewMemEvaluationKeySet alongside rlk.
 func (s *Service) StoreEvalKeys(
     sid protocol.SessionID,
     rlk *rlwe.RelinearizationKey,
     pkTop *rlwe.PublicKey,
-    gksMasterInfer map[int]*hierkeys.MasterKey,
+    gksMaster map[int]*hierkeys.MasterKey,
 ) error
 
 func (s *Service) Infer(sid protocol.SessionID, inputCt *rlwe.Ciphertext) (*rlwe.Ciphertext, error)
@@ -817,7 +854,7 @@ type sessionState struct {
     pkTopAgg       *rlwe.PublicKey               // aggregated pk_top (shipped to VService in InferEvalKeys)
     rlkAgg         *rlwe.RelinearizationKey
     authchain      *authchain.Evaluator          // wraps *ckks.Evaluator + raw gks_auth Galois keys; powers Auth's chain rotation
-    gksMasterInfer map[int]*hierkeys.MasterKey   // shipped to VService in InferEvalKeys
+    gksMaster map[int]*hierkeys.MasterKey   // shipped to VService in InferEvalKeys
 
     encryptor *rlwe.Encryptor              // built from pkEvalAgg, encrypts v during Auth
     authKey   authenticator.Key            // per-session MPD-Auth key (S, seedF)
@@ -853,20 +890,30 @@ func (a *Agent) AggregateRLKRound2(
     clientShare multiparty.RelinearizationKeyGenShare,
 ) error
 
-// Stage 2d — Galois-key share generation + aggregation, two atom sets in a
-// single VClient↔VAgent round trip:
-//   - auth atoms (params.AuthAtoms(), eval level, skEval, GaloisElement(-atom))
-//     aggregate into raw *rlwe.GaloisKey list stored inside sessionState.authchain
-//     (powers Auth's chain rotation; never crosses the wire to VService).
-//   - infer atoms (params.InferAtoms(), top level, skTop, GaloisElement(+atom))
-//     aggregate into *rlwe.GaloisKey then convert via hierkeys.GaloisKeyToMasterKey
-//     into a map[int]*hierkeys.MasterKey, returned to the orchestrator alongside
-//     rlk + pkTopAgg for the onward InferEvalKeys message to VService.
-func (a *Agent) GenAuthAndInferShares(sid protocol.SessionID) (protocol.VAgentGaloisShares, error)
+// Stage 2d — master-atom Galois-key share generation + aggregation. A single
+// VClient↔VAgent round trip over the master atom set
+// (params.MasterAtoms(), top level, skTop, GaloisElement(+atom)) yields
+// aggregated *rlwe.GaloisKey values that hierkeys.GaloisKeyToMasterKey
+// converts into a map[int]*hierkeys.MasterKey. From this map VAgent
+// locally derives both:
+//   - gks_auth (raw eval-level Galois keys at GaloisElement(-atom)) stored
+//     inside sessionState.authchain — powers Auth's chain rotation; never
+//     crosses the wire to VService.
+//   - gksMaster shipped onward to VService alongside rlk + pkTopAgg in the
+//     InferEvalKeys message.
+//
+// The returned `labels` slice is parallel to `shares` (ascending
+// params.MasterAtoms() order); AggregateGaloisShares uses it to
+// cross-check VClient's parallel count.
+func (a *Agent) GenMasterShares(sid protocol.SessionID) (
+    shares []multiparty.GaloisKeyGenShare,
+    labels []int,
+    err error,
+)
 func (a *Agent) AggregateGaloisShares(
     sid protocol.SessionID,
     clientShares protocol.VClientGaloisShares,
-) (rlk *rlwe.RelinearizationKey, pkTop *rlwe.PublicKey, gksMasterInfer map[int]*hierkeys.MasterKey, err error)
+) (rlk *rlwe.RelinearizationKey, pkTop *rlwe.PublicKey, gksMaster map[int]*hierkeys.MasterKey, err error)
 
 // Stage 4a — build authenticated ciphertext
 func (a *Agent) BuildAuthenticatedCt(
@@ -973,7 +1020,7 @@ Single-page app served by VAgent at `/verify?sid=…`. TypeScript, transpiled wi
 
 **SSE via native `EventSource`.** Opens `GET /sessions/{sid}/result` and listens for the `AuthenticatedResult` event. The matching server side is ~15 lines of Go using `http.Flusher.Flush()`.
 
-**Wire formats.** JSON for control messages (`VerificationSession`, `VerdictNotification`); `application/octet-stream` for share- and ciphertext-bearing endpoints (`/pk-share`, `/rlk/round1`, `/rlk/round2`, `/gks-shares`, `/image`, `/partial-decryption`). No base64 inflation on the hot path. The `/gks-shares` body carries both auth-atom and infer-atom shares in a single `VClientGaloisShares` message — single round-trip.
+**Wire formats.** JSON for control messages (`Manifest`, `VerificationSession`, `VerdictNotification`, `FinalizeRedirect`); `application/octet-stream` for share- and ciphertext-bearing endpoints (`/pk-share`, `/rlk/round1`, `/rlk/round2`, `/gks-shares`, `/eval-keys`, `/image`, `/infer`, `/partial-decryption`). No base64 inflation on the hot path. The `/gks-shares` body carries both auth-atom and infer-atom shares in a single `VClientGaloisShares` message — single round-trip.
 
 **Sid from URL.** SPA reads `?sid=…` at load time and threads it through every subsequent request. No JS-side cookie reading.
 

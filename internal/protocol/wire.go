@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"sort"
 
@@ -357,6 +358,11 @@ type EncryptedImage struct {
 	Ct *rlwe.Ciphertext
 }
 
+// Stage 3: VService → VAgent — raw inference ciphertext before MAC.
+type InferenceResult struct {
+	Ct *rlwe.Ciphertext
+}
+
 // Stage 4a: VAgent → VClient — result ct with verification values folded in.
 type AuthenticatedResult struct {
 	Ct *rlwe.Ciphertext
@@ -370,7 +376,30 @@ type PartialDecryption struct {
 func (s PartialDecryption) MarshalBinary() ([]byte, error)     { return s.Share.MarshalBinary() }
 func (s *PartialDecryption) UnmarshalBinary(data []byte) error { return s.Share.UnmarshalBinary(data) }
 
+// Stage 4b: VAgent → VClient — JSON terminator pointing at the protected resource.
+type FinalizeRedirect struct {
+	Redirect string `json:"redirect"`
+}
+
 // Stage 4b: VAgent → RService.
 type VerdictNotification struct {
 	Verdict Verdict
+}
+
+// Manifest is the public parameter declaration VService publishes over
+// /params (proxied through VAgent). Each party uses it to rebuild its
+// local Params runtime structure. CKKS rides as `json.RawMessage` through
+// Lattigo's codec; the rest survives encoding/json untouched. LLKNBase
+// and LLKNLogPHK are serialized explicitly so the WASM bridge fails loud
+// if either side ever diverges from the canonical schedule — see
+// web/ppiav/bridge/ppiav/core.go ParseManifestJSON.
+type Manifest struct {
+	CKKS                 json.RawMessage `json:"ckks"`
+	LLKNBase             int             `json:"llkn_base"`
+	LLKNLogPHK           []int           `json:"llkn_log_phk"`
+	AuthenticatorLambda  int             `json:"authenticator_lambda"`
+	AuthenticatorEpsilon float64         `json:"authenticator_epsilon"`
+	FloodSigma           float64         `json:"flood_sigma"`
+	ExtraRotationIndices []int           `json:"extra_rotation_indices,omitempty"`
+	InputLevel           int             `json:"input_level"`
 }

@@ -49,19 +49,18 @@ func smallParams(t *testing.T) protocol.Params {
 	}
 }
 
-// paramsJSON encodes a protocol.Params into the wire shape produced by
-// vservice.writeParams (internal/vservice/http.go's paramsWire). Tests use
-// this to feed NewClient through ParseParamsJSON, exercising the same code
-// path the browser will use. LLKN is reconstructed locally inside
-// ParseParamsJSON from the on-wire CKKS shape using the canonical default
-// LLKN schedule — so the test's LLKN literal does NOT need to match the
-// reconstructed one beyond shape compatibility (same eval-level CKKS →
-// same LLKN top level).
+// paramsJSON encodes a protocol.Params into the wire manifest produced by
+// vservice.writeManifest (protocol.Manifest). Tests use this to feed
+// NewClient through ParseManifestJSON, exercising the same code path the
+// browser will use. LLKN is reconstructed locally inside ParseManifestJSON
+// from the on-wire CKKS shape using the canonical default LLKN schedule —
+// so the test's LLKN literal does NOT need to match the reconstructed one
+// beyond shape compatibility (same eval-level CKKS → same LLKN top level).
 func paramsJSON(t *testing.T, p protocol.Params) []byte {
 	t.Helper()
 	ckksBytes, err := p.CKKS.MarshalJSON()
 	require.NoError(t, err)
-	out, err := json.Marshal(paramsWire{
+	out, err := json.Marshal(protocol.Manifest{
 		CKKS:                 ckksBytes,
 		LLKNBase:             p.LLKNBase,
 		LLKNLogPHK:           protocol.DefaultLLKNLogPHK,
@@ -75,25 +74,25 @@ func paramsJSON(t *testing.T, p protocol.Params) []byte {
 	return out
 }
 
-func TestParseParamsJSONRoundTrip(t *testing.T) {
+func TestParseManifestJSONRoundTrip(t *testing.T) {
 	want := smallParams(t)
 	js := paramsJSON(t, want)
-	got, err := ParseParamsJSON(js)
+	got, err := ParseManifestJSON(js)
 	require.NoError(t, err)
 	assert.Equal(t, want.CKKS.LogN(), got.CKKS.LogN())
 	assert.Equal(t, want.CKKS.MaxLevel(), got.CKKS.MaxLevel())
 	assert.Equal(t, want.Authenticator.Lambda, got.Authenticator.Lambda)
 	assert.InDelta(t, want.Authenticator.Epsilon, got.Authenticator.Epsilon, 0)
 	assert.InDelta(t, want.FloodSigma, got.FloodSigma, 0)
-	// LLKN must be populated by ParseParamsJSON — without it,
+	// LLKN must be populated by ParseManifestJSON — without it,
 	// vclient.New crashes on params.LLKN.Top().
 	assert.Equal(t, got.CKKS.LogN(), got.LLKN.Top().LogN())
 }
 
-func TestParseParamsJSONRejectsBadInput(t *testing.T) {
-	_, err := ParseParamsJSON([]byte("not json"))
+func TestParseManifestJSONRejectsBadInput(t *testing.T) {
+	_, err := ParseManifestJSON([]byte("not json"))
 	require.Error(t, err)
-	_, err = ParseParamsJSON([]byte(`{"ckks": "garbage"}`))
+	_, err = ParseManifestJSON([]byte(`{"ckks": "garbage"}`))
 	require.Error(t, err)
 }
 
@@ -190,10 +189,10 @@ func TestAggregatePKRejectsMalformed(t *testing.T) {
 // own keygen tests.
 func TestFullKeygenRoundTripThroughBridge(t *testing.T) {
 	params := smallParams(t)
-	// Use the params decoded by ParseParamsJSON so LLKN is the one the
+	// Use the params decoded by ParseManifestJSON so LLKN is the one the
 	// bridge actually built — the test's locally-built `params` LLKN is
 	// only used for the stub's matching share generation.
-	decoded, err := ParseParamsJSON(paramsJSON(t, params))
+	decoded, err := ParseManifestJSON(paramsJSON(t, params))
 	require.NoError(t, err)
 	params = decoded
 
@@ -275,7 +274,7 @@ func TestEncryptImageRequiresAggregatedPK(t *testing.T) {
 
 func TestEncryptImageWrongLength(t *testing.T) {
 	params := smallParams(t)
-	decoded, err := ParseParamsJSON(paramsJSON(t, params))
+	decoded, err := ParseManifestJSON(paramsJSON(t, params))
 	require.NoError(t, err)
 	params = decoded
 
@@ -315,7 +314,7 @@ func TestEncryptImageWrongLength(t *testing.T) {
 
 func TestEncryptImageProducesValidCiphertext(t *testing.T) {
 	params := smallParams(t)
-	decoded, err := ParseParamsJSON(paramsJSON(t, params))
+	decoded, err := ParseManifestJSON(paramsJSON(t, params))
 	require.NoError(t, err)
 	params = decoded
 
@@ -364,7 +363,7 @@ func TestEncryptImageProducesValidCiphertext(t *testing.T) {
 
 func TestPartialDecryptRoundTrip(t *testing.T) {
 	params := smallParams(t)
-	decoded, err := ParseParamsJSON(paramsJSON(t, params))
+	decoded, err := ParseManifestJSON(paramsJSON(t, params))
 	require.NoError(t, err)
 	params = decoded
 
