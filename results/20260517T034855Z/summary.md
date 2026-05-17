@@ -1,6 +1,6 @@
 # Eval summary — 20260517T034855Z
 
-- batch dir: `/home/ubuntu/ppiav/results/20260517T034855Z`
+- batch dir: `/home/butvinm/Dev/ppiav/results/20260517T034855Z`
 - images: 10
 - keygen samples: 18
 
@@ -58,29 +58,33 @@ sub-step samples from the table above._
 
 ## Размер сообщений
 
-| id                      | сообщение                                    | отправитель | получатель |      байт |      КиБ |    МиБ |
-| ----------------------- | -------------------------------------------- | ----------- | ---------- | --------: | -------: | -----: |
-| VAgentSessionInit       | Запрос сессии (агент → сервис)               | агент       | сервис     |        64 |      0.1 |   0.00 |
-| VServiceSessionResponse | Параметры протокола + sid                    | сервис      | агент      |       764 |      0.7 |   0.00 |
-| VClientParamsRequest    | Запрос параметров протокола (клиент → агент) | клиент      | агент      |        64 |      0.1 |   0.00 |
-| VAgentParamsRequest     | Запрос параметров протокола (агент → сервис) | агент       | сервис     |        64 |      0.1 |   0.00 |
-| VAgentSessionParams     | Параметры протокола (агент → клиент)         | агент       | клиент     |       764 |      0.7 |   0.00 |
-| VClientPKShare          | Доля pk клиента                              | клиент      | агент      |  31457792 |  30720.5 |  30.00 |
-| VAgentPKShare           | Доля pk агента                               | агент       | клиент     |  31457792 |  30720.5 |  30.00 |
-| VClientRLKRound1Share   | Доля rlk клиента, раунд 1                    | клиент      | агент      |  75498784 |  73729.3 |  72.00 |
-| VAgentRLKRound1Share    | Доля rlk агента, раунд 1                     | агент       | клиент     |  75498784 |  73729.3 |  72.00 |
-| VClientRLKRound2Share   | Доля rlk клиента, раунд 2                    | клиент      | агент      |  37749424 |  36864.7 |  36.00 |
-| VAgentRLKRound2Ack      | Подтверждение rlk                            | агент       | клиент     |        32 |      0.0 |   0.00 |
-| VClientGaloisShare      | Master доля gks клиента                      | клиент      | агент      | 301995200 | 294917.2 | 288.01 |
-| VAgentEvalKeyBundle     | rlk + pk_top + gks_master → сервису          | агент       | сервис     | 717238220 | 700427.9 | 684.01 |
-| VServiceKeysAck         | Подтверждение установки ключей               | сервис      | агент      |        32 |      0.0 |   0.00 |
-| VAgentGaloisAck         | Подтверждение gks                            | агент       | клиент     |        32 |      0.0 |   0.00 |
-| VClientInputCT          | Шифротекст изображения (клиент → агент)      | клиент      | агент      |  18874958 |  18432.6 |  18.00 |
-| VAgentInputCT           | Шифротекст изображения (агент → сервис)      | агент       | сервис     |  18874958 |  18432.6 |  18.00 |
-| VServiceResultCT        | Шифротекст результата                        | сервис      | агент      |   2097486 |   2048.3 |   2.00 |
-| VAgentAuthCT            | Аутентифицированный шифротекст               | агент       | клиент     |   2097486 |   2048.3 |   2.00 |
-| VClientPartialShare     | Частично расшифрованный шифротекст           | клиент      | агент      |   1048600 |   1024.0 |   1.00 |
-| VAgentVerificationAck   | Подтверждение завершения верификации         | агент       | клиент     |        32 |      0.0 |   0.00 |
+| id                  | сообщение                                    | отправитель | получатель |      байт |      КиБ |    МиБ |
+| ------------------- | -------------------------------------------- | ----------- | ---------- | --------: | -------: | -----: |
+| SessionOpen         | Открытие сессии (клиент → агент)             | клиент      | агент      |        64 |      0.1 |   0.00 |
+| SessionOpen         | Открытие сессии (агент → сервис)             | агент       | сервис     |        64 |      0.1 |   0.00 |
+| VerificationSession | Идентификатор сессии (сервис → агент)        | сервис      | агент      |        96 |      0.1 |   0.00 |
+| VerificationSession | Идентификатор сессии (агент → клиент)        | агент       | клиент     |        96 |      0.1 |   0.00 |
+| RequestManifest     | Запрос параметров протокола (клиент → агент) | клиент      | агент      |        64 |      0.1 |   0.00 |
+| RequestManifest     | Запрос параметров протокола (агент → сервис) | агент       | сервис     |        64 |      0.1 |   0.00 |
+| Manifest            | Параметры протокола (сервис → агент)         | сервис      | агент      |       764 |      0.7 |   0.00 |
+| Manifest            | Параметры протокола (агент → клиент)         | агент       | клиент     |       764 |      0.7 |   0.00 |
+| VClientPKShare      | Доля pk клиента                              | клиент      | агент      |  31457792 |  30720.5 |  30.00 |
+| VAgentPKShare       | Доля pk агента                               | агент       | клиент     |  31457792 |  30720.5 |  30.00 |
+| VClientRLKRound1    | Доля rlk клиента, раунд 1                    | клиент      | агент      |  75498784 |  73729.3 |  72.00 |
+| VAgentRLKRound1     | Доля rlk агента, раунд 1                     | агент       | клиент     |  75498784 |  73729.3 |  72.00 |
+| VClientRLKRound2    | Доля rlk клиента, раунд 2                    | клиент      | агент      |  37749424 |  36864.7 |  36.00 |
+| RLKRound2Ack        | Подтверждение rlk р2 (HTTP 200)              | агент       | клиент     |        32 |      0.0 |   0.00 |
+| VClientGaloisShares | Master доли gks клиента                      | клиент      | агент      | 301995200 | 294917.2 | 288.01 |
+| GaloisSharesAck     | Подтверждение gks (HTTP 200)                 | агент       | клиент     |        32 |      0.0 |   0.00 |
+| InferEvalKeys       | rlk + pk_top + gks_master → сервису          | агент       | сервис     | 717238220 | 700427.9 | 684.01 |
+| EvalKeysAck         | Подтверждение установки ключей (HTTP 200)    | сервис      | агент      |        32 |      0.0 |   0.00 |
+| RequestResult       | Подписка на результат (SSE)                  | клиент      | агент      |        64 |      0.1 |   0.00 |
+| EncryptedImage      | Шифротекст изображения (клиент → агент)      | клиент      | агент      |  18874958 |  18432.6 |  18.00 |
+| EncryptedImage      | Шифротекст изображения (агент → сервис)      | агент       | сервис     |  18874958 |  18432.6 |  18.00 |
+| InferenceResult     | Шифротекст результата                        | сервис      | агент      |   2097486 |   2048.3 |   2.00 |
+| AuthenticatedResult | Аутентифицированный шифротекст               | агент       | клиент     |   2097486 |   2048.3 |   2.00 |
+| PartialDecryption   | Частично расшифрованный шифротекст           | клиент      | агент      |   1048600 |   1024.0 |   1.00 |
+| FinalizeRedirect    | Перенаправление на страницу ресурса          | агент       | клиент     |       128 |      0.1 |   0.00 |
 
 _Note: lattigo-hierkeys ships a single compressed master atom set: `gks_master.bin` is the wire
 artifact (top-level MasterKey bundle) consumed by both VAgent (derives the auth-atom keys locally on
@@ -154,26 +158,30 @@ re-derivation._
 
 ## Время передачи по сети
 
-| id                      |      байт | t @ 1 Mbps | t @ 10 Mbps | t @ 100 Mbps |
-| ----------------------- | --------: | ---------: | ----------: | -----------: |
-| VAgentSessionInit       |        64 |     0.5 ms |      0.1 ms |       0.0 ms |
-| VServiceSessionResponse |       764 |     6.1 ms |      0.6 ms |       0.1 ms |
-| VClientParamsRequest    |        64 |     0.5 ms |      0.1 ms |       0.0 ms |
-| VAgentParamsRequest     |        64 |     0.5 ms |      0.1 ms |       0.0 ms |
-| VAgentSessionParams     |       764 |     6.1 ms |      0.6 ms |       0.1 ms |
-| VClientPKShare          |  31457792 |   4.19 min |     25.17 s |       2.52 s |
-| VAgentPKShare           |  31457792 |   4.19 min |     25.17 s |       2.52 s |
-| VClientRLKRound1Share   |  75498784 |  10.07 min |    1.01 min |       6.04 s |
-| VAgentRLKRound1Share    |  75498784 |  10.07 min |    1.01 min |       6.04 s |
-| VClientRLKRound2Share   |  37749424 |   5.03 min |     30.20 s |       3.02 s |
-| VAgentRLKRound2Ack      |        32 |     0.3 ms |      0.0 ms |       0.0 ms |
-| VClientGaloisShare      | 301995200 |  40.27 min |    4.03 min |      24.16 s |
-| VAgentEvalKeyBundle     | 717238220 |     1.59 h |    9.56 min |      57.38 s |
-| VServiceKeysAck         |        32 |     0.3 ms |      0.0 ms |       0.0 ms |
-| VAgentGaloisAck         |        32 |     0.3 ms |      0.0 ms |       0.0 ms |
-| VClientInputCT          |  18874958 |   2.52 min |     15.10 s |       1.51 s |
-| VAgentInputCT           |  18874958 |   2.52 min |     15.10 s |       1.51 s |
-| VServiceResultCT        |   2097486 |    16.78 s |      1.68 s |     167.8 ms |
-| VAgentAuthCT            |   2097486 |    16.78 s |      1.68 s |     167.8 ms |
-| VClientPartialShare     |   1048600 |     8.39 s |    838.9 ms |      83.9 ms |
-| VAgentVerificationAck   |        32 |     0.3 ms |      0.0 ms |       0.0 ms |
+| id                  |      байт | t @ 1 Mbps | t @ 10 Mbps | t @ 100 Mbps |
+| ------------------- | --------: | ---------: | ----------: | -----------: |
+| SessionOpen         |        64 |     0.5 ms |      0.1 ms |       0.0 ms |
+| SessionOpen         |        64 |     0.5 ms |      0.1 ms |       0.0 ms |
+| VerificationSession |        96 |     0.8 ms |      0.1 ms |       0.0 ms |
+| VerificationSession |        96 |     0.8 ms |      0.1 ms |       0.0 ms |
+| RequestManifest     |        64 |     0.5 ms |      0.1 ms |       0.0 ms |
+| RequestManifest     |        64 |     0.5 ms |      0.1 ms |       0.0 ms |
+| Manifest            |       764 |     6.1 ms |      0.6 ms |       0.1 ms |
+| Manifest            |       764 |     6.1 ms |      0.6 ms |       0.1 ms |
+| VClientPKShare      |  31457792 |   4.19 min |     25.17 s |       2.52 s |
+| VAgentPKShare       |  31457792 |   4.19 min |     25.17 s |       2.52 s |
+| VClientRLKRound1    |  75498784 |  10.07 min |    1.01 min |       6.04 s |
+| VAgentRLKRound1     |  75498784 |  10.07 min |    1.01 min |       6.04 s |
+| VClientRLKRound2    |  37749424 |   5.03 min |     30.20 s |       3.02 s |
+| RLKRound2Ack        |        32 |     0.3 ms |      0.0 ms |       0.0 ms |
+| VClientGaloisShares | 301995200 |  40.27 min |    4.03 min |      24.16 s |
+| GaloisSharesAck     |        32 |     0.3 ms |      0.0 ms |       0.0 ms |
+| InferEvalKeys       | 717238220 |     1.59 h |    9.56 min |      57.38 s |
+| EvalKeysAck         |        32 |     0.3 ms |      0.0 ms |       0.0 ms |
+| RequestResult       |        64 |     0.5 ms |      0.1 ms |       0.0 ms |
+| EncryptedImage      |  18874958 |   2.52 min |     15.10 s |       1.51 s |
+| EncryptedImage      |  18874958 |   2.52 min |     15.10 s |       1.51 s |
+| InferenceResult     |   2097486 |    16.78 s |      1.68 s |     167.8 ms |
+| AuthenticatedResult |   2097486 |    16.78 s |      1.68 s |     167.8 ms |
+| PartialDecryption   |   1048600 |     8.39 s |    838.9 ms |      83.9 ms |
+| FinalizeRedirect    |       128 |     1.0 ms |      0.1 ms |       0.0 ms |
