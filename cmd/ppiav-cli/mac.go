@@ -11,8 +11,12 @@ import (
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 )
 
-// runMAC loads the VAgent state written by `keygen`, derives the auth-atom
-// keys locally, and runs `BuildAuthenticatedCt` on a saved result ciphertext.
+// runMAC rebuilds the VAgent from the keygen artifacts in --workdir,
+// derives the negative-atom rotation keys locally via hierkeys.LevelExpansion
+// (mac.derive_auth_keys, whose Bytes carries the summed gks_auth size),
+// then produces the MPD-Auth authenticated ciphertext from the result
+// ciphertext at --in-ct (mac.compute_ct, whose Bytes carries the auth
+// ciphertext's BinarySize). The output is written to --out-ct.
 func runMAC(args []string) error {
 	fs := flag.NewFlagSet("mac", flag.ContinueOnError)
 	workdir := fs.String("workdir", "", "per-batch keygen artifact directory (required)")

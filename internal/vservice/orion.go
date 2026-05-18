@@ -81,6 +81,67 @@ func loadOrionModel(orionDir string) (*orioneval.Model, ckks.Parameters, int, []
 	return model, ckksParams, inputLevel, rotations, nil
 }
 
+// loadOrionManifest is the lightweight twin of loadOrionModel. It calls
+// orioneval.ParseClientParams which only parses the .orion container
+// header — no biases, polynomials, or eagerly-encoded LT diagonals are
+// allocated. Use this from any caller (keygen) that only needs the CKKS
+// parameters + input level + rotation indices and never runs Forward.
+// The eager LT encoding allocated by LoadModel reaches ~65 GB at
+// LogN=16, which is unnecessary for keygen — keygen only derives keys.
+func loadOrionManifest(orionDir string) (ckks.Parameters, int, []int, error) {
+	path := filepath.Join(orionDir, orionModelFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ckks.Parameters{}, 0, nil, fmt.Errorf("vservice: read Orion model %q: %w", path, err)
+	}
+	clientParams, manifest, inputLevel, err := orioneval.ParseClientParams(data)
+	if err != nil {
+		return ckks.Parameters{}, 0, nil, fmt.Errorf("vservice: parse Orion client params %q: %w", path, err)
+	}
+	ckksParams, err := clientParams.NewCKKSParameters()
+	if err != nil {
+		return ckks.Parameters{}, 0, nil, fmt.Errorf("vservice: build CKKS params from Orion manifest: %w", err)
+	}
+	rotations := make([]int, 0, len(manifest.GaloisElements))
+	for _, ge := range manifest.GaloisElements {
+		k := ckksParams.SolveDiscreteLogGaloisElement(ge)
+		if k == 0 {
+			continue
+		}
+		rotations = append(rotations, -k)
+	}
+	return ckksParams, inputLevel, rotations, nil
+}
+
+// mergeOrionParamsLight is the lightweight twin of mergeOrionParams using
+// loadOrionManifest. Returns the merged protocol.Params without loading
+// the (~65 GB at LogN=16) Orion Model into RAM.
+func mergeOrionParamsLight(params protocol.Params, orionDir string) (protocol.Params, error) {
+	ckksParams, inputLevel, rotations, err := loadOrionManifest(orionDir)
+	if err != nil {
+		return protocol.Params{}, err
+	}
+	extendedCKKS, err := protocol.ExtendCKKSForProtocolReserve(ckksParams)
+	if err != nil {
+		return protocol.Params{}, fmt.Errorf("vservice: extend CKKS for protocol reserve: %w", err)
+	}
+	merged := params
+	merged.CKKS = extendedCKKS
+	merged.InputLevel = inputLevel + protocol.ProtocolReserveLevels
+	llknParams, err := protocol.BuildLLKNParams(extendedCKKS)
+	if err != nil {
+		return protocol.Params{}, fmt.Errorf("vservice: rebuild LLKN against extended Orion CKKS: %w", err)
+	}
+	merged.LLKN = llknParams
+	if len(params.ExtraRotationIndices) > 0 || len(rotations) > 0 {
+		combined := make([]int, 0, len(params.ExtraRotationIndices)+len(rotations))
+		combined = append(combined, params.ExtraRotationIndices...)
+		combined = append(combined, rotations...)
+		merged.ExtraRotationIndices = combined
+	}
+	return merged, nil
+}
+
 // mergeOrionParams loads the compiled Orion model at `orionDir` and folds
 // its CKKS / InputLevel / rotation-index overrides into `params`. The LLKN
 // hierarchy is rebuilt against the Orion-overridden CKKS — the caller's

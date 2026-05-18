@@ -16,10 +16,16 @@ import (
 	"github.com/tuneinsight/lattigo/v6/multiparty"
 )
 
-// runKeygen drives the bilateral collaborative keygen in-process and writes
-// every per-session artifact (keys, sid, params, mac key) to <workdir>/.
-// Per-round wall-time / RSS samples are appended to one bench.Run named
-// "keygen" with sub-step names keygen.{open,pk,rlk-r1,rlk-r2,galois}.*.
+// runKeygen drives the multi-party collaborative keygen between VClient and
+// VAgent in a single process and writes every per-session artifact (the
+// derived public + secret keys, SID, CKKS params, mac key) into <workdir>.
+// Wall-time + RSS samples for every round (open, pk, rlk-r1, rlk-r2,
+// galois) are appended to one bench.Run named "keygen", with each share
+// emission carrying its on-wire BinarySize in Sample.Bytes so the bench
+// can reconstruct keygen-handshake bandwidth without touching the .bin
+// files. The size-only `keygen.eval_keys_bundle` sample stamps the
+// agent→service eval-key upload (rlk + pk_top + gks_master) so its wire
+// size survives artifact pruning.
 func runKeygen(args []string) error {
 	fs := flag.NewFlagSet("keygen", flag.ContinueOnError)
 	workdir := fs.String("workdir", "", "per-batch directory to hold keygen artifacts (required)")
@@ -57,11 +63,14 @@ func runKeygen(args []string) error {
 	if *orionDir == "" {
 		svc = vservice.New(params)
 	} else {
-		svc, err = vservice.NewWithOrion(params, *orionDir)
+		// Manifest-only path: keygen doesn't run Forward, so skip the
+		// ~65 GB LoadModel LT-encoding pass at LogN=16. Reads only the
+		// .orion header to extract CKKS / InputLevel / rotations.
+		svc, err = vservice.NewWithOrionManifest(params, *orionDir)
 		if err != nil {
-			return fmt.Errorf("keygen: build VService with Orion: %w", err)
+			return fmt.Errorf("keygen: build VService with Orion manifest: %w", err)
 		}
-		// vservice.NewWithOrion may override CKKS / InputLevel / rotations;
+		// NewWithOrionManifest may override CKKS / InputLevel / rotations;
 		// rebuild the Agent under the service's authoritative params so all
 		// three peers consume the same source of truth (mirrors
 		// orchestrator.NewRunnerWithOrion).
@@ -301,6 +310,9 @@ func runKeygen(args []string) error {
 		if d, ok := agent.DeriveGksAuthSeconds(sid); ok {
 			run.Metadata["derive_gks_auth_seconds"] = d
 		}
+		if dErr := dumpHeapIfRequested("keygen_agent_derive"); dErr != nil {
+			fmt.Fprintf(os.Stderr, "keygen: memprofile: %v\n", dErr)
+		}
 		// service_store covers VService running hierkeys.LevelExpansion +
 		// FinalizeKey on every MasterAtom-derived target — the dominant
 		// per-session cost at LogN=16 (multi-minute sequential, tens of
@@ -315,6 +327,9 @@ func runKeygen(args []string) error {
 		}
 		if d, ok := svc.DeriveGksInferSeconds(sid); ok {
 			run.Metadata["derive_gks_infer_seconds"] = d
+		}
+		if dErr := dumpHeapIfRequested("keygen_service_derive"); dErr != nil {
+			fmt.Fprintf(os.Stderr, "keygen: memprofile: %v\n", dErr)
 		}
 	}
 

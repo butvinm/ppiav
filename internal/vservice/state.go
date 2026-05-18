@@ -50,7 +50,15 @@ func (s *Service) ExportState(sid protocol.SessionID) (*ExportedState, error) {
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownSession, sid)
 	}
-	if sess.eval == nil && sess.orionEval == nil {
+	// Manifest-only Service (NewWithOrionManifest) intentionally builds
+	// no evaluator — StoreEvalKeys stashes rlk/gks/pkTop/gksMaster on
+	// the session and returns without constructing one. ExportState
+	// still needs to round-trip those artifacts to disk for the bench
+	// keygen subcommand.
+	if !s.orionMode && sess.eval == nil && sess.orionEval == nil {
+		return nil, fmt.Errorf("%w (sid %q)", ErrNoEvaluator, sid)
+	}
+	if s.orionMode && s.orionModel != nil && sess.orionEval == nil {
 		return nil, fmt.Errorf("%w (sid %q)", ErrNoEvaluator, sid)
 	}
 	return &ExportedState{
@@ -128,6 +136,7 @@ func NewWithState(params protocol.Params, orionDir string, state *ExportedState)
 	s := &Service{
 		params:     mergedParams,
 		orionModel: model,
+		orionMode:  model != nil,
 		sessions:   map[protocol.SessionID]*sessionState{},
 	}
 
