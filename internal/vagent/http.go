@@ -207,7 +207,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		s.handleGKSShares(w, r, sessID)
 	case sub == "infer":
 		s.handleInfer(w, r, sessID)
-	case sub == "partial-decryption":
+	case sub == "partial":
 		s.handlePartialDecryption(w, r, sessID)
 	default:
 		httputil.WriteError(w, http.StatusNotFound, "not found")

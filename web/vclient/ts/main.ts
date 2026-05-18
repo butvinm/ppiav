@@ -429,7 +429,7 @@ async function runProtocol(
   const body = await uploadJSON<{ redirect?: unknown }>(
     tracker,
     "redirect",
-    "/sessions/" + sid + "/partial-decryption",
+    "/sessions/" + sid + "/partial",
     partial,
   );
   if (typeof body.redirect !== "string" || body.redirect === "") {

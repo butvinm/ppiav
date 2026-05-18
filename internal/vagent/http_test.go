@@ -500,7 +500,7 @@ func (rs *rserviceStub) snapshot() (int, protocol.SessionID, protocol.Verdict) {
 }
 
 // newHTTPFixtureWithRService extends newHTTPFixture with an additional
-// RService stub. Use for image/partial-decryption tests that exercise the
+// RService stub. Use for image/partial tests that exercise the
 // verdict callback.
 func newHTTPFixtureWithRService(t *testing.T) (
 	vagentSrv *httptest.Server,
@@ -665,7 +665,7 @@ func TestHTTPVAgent_PartialDecryption_AcceptVerdict(t *testing.T) {
 	pdBytes, err := protocol.PartialDecryption{Share: clientShare}.MarshalBinary()
 	require.NoError(t, err)
 
-	resp, err := http.Post(vagentSrv.URL+"/sessions/"+string(sid)+"/partial-decryption", "application/octet-stream", bytes.NewReader(pdBytes))
+	resp, err := http.Post(vagentSrv.URL+"/sessions/"+string(sid)+"/partial", "application/octet-stream", bytes.NewReader(pdBytes))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	respBody, err := io.ReadAll(resp.Body)
@@ -720,7 +720,7 @@ func TestHTTPVAgent_PartialDecryption_TamperedShareReject(t *testing.T) {
 	pdBytes, err := protocol.PartialDecryption{Share: clientShare}.MarshalBinary()
 	require.NoError(t, err)
 
-	resp, err := http.Post(vagentSrv.URL+"/sessions/"+string(sid)+"/partial-decryption", "application/octet-stream", bytes.NewReader(pdBytes))
+	resp, err := http.Post(vagentSrv.URL+"/sessions/"+string(sid)+"/partial", "application/octet-stream", bytes.NewReader(pdBytes))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	// A clean Ver=false finalize is reported as Reject (no error); per
@@ -738,7 +738,7 @@ func TestHTTPVAgent_PartialDecryption_MalformedShareRejectThen4xx(t *testing.T) 
 	vagentSrv, _, _, _, rstub, _, _ := newHTTPFixtureWithRService(t)
 	sid := openSessionViaHTTP(t, vagentSrv)
 
-	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/partial-decryption", []byte{0xff, 0xff, 0xff})
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/partial", []byte{0xff, 0xff, 0xff})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 
@@ -752,7 +752,7 @@ func TestHTTPVAgent_PartialDecryption_MalformedShareRejectThen4xx(t *testing.T) 
 func TestHTTPVAgent_PartialDecryption_UnknownSidNoCallback(t *testing.T) {
 	vagentSrv, _, _, _, rstub, _, _ := newHTTPFixtureWithRService(t)
 
-	resp := postOctet(t, vagentSrv.URL, "/sessions/never-opened/partial-decryption", []byte{0x00})
+	resp := postOctet(t, vagentSrv.URL, "/sessions/never-opened/partial", []byte{0x00})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 
@@ -783,7 +783,7 @@ func TestHTTPVAgent_PartialDecryption_BeforeImageRejects(t *testing.T) {
 	pdBytes, err := protocol.PartialDecryption{Share: share}.MarshalBinary()
 	require.NoError(t, err)
 
-	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/partial-decryption", pdBytes)
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/partial", pdBytes)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 
@@ -838,7 +838,7 @@ func TestHTTPVAgent_PartialDecryption_CallbackFailureReturns502(t *testing.T) {
 	pdBytes, err := protocol.PartialDecryption{Share: clientShare}.MarshalBinary()
 	require.NoError(t, err)
 
-	resp, err := http.Post(vagentSrv.URL+"/sessions/"+string(sid)+"/partial-decryption", "application/octet-stream", bytes.NewReader(pdBytes))
+	resp, err := http.Post(vagentSrv.URL+"/sessions/"+string(sid)+"/partial", "application/octet-stream", bytes.NewReader(pdBytes))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusBadGateway, resp.StatusCode, "body=%s", readAll(t, resp.Body))
@@ -847,7 +847,7 @@ func TestHTTPVAgent_PartialDecryption_CallbackFailureReturns502(t *testing.T) {
 func TestHTTPVAgent_PartialDecryption_RejectsGet(t *testing.T) {
 	vagentSrv, _, _, _, _, _, _ := newHTTPFixtureWithRService(t)
 	sid := openSessionViaHTTP(t, vagentSrv)
-	resp, err := http.Get(vagentSrv.URL + "/sessions/" + string(sid) + "/partial-decryption")
+	resp, err := http.Get(vagentSrv.URL + "/sessions/" + string(sid) + "/partial")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
@@ -1135,7 +1135,7 @@ func TestHTTPVAgent_PartialDecryption_MalformedBodyEvicts(t *testing.T) {
 	vagentSrv, _, _, agent, rstub, _, _ := newHTTPFixtureWithRService(t)
 	sid := openSessionViaHTTP(t, vagentSrv)
 
-	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/partial-decryption", []byte{0xff, 0xff, 0xff})
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/partial", []byte{0xff, 0xff, 0xff})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 

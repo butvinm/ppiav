@@ -140,7 +140,7 @@ sequenceDiagram
     VA->>VA: pick verification values, build authenticated_ct
     VA-->>VC: AuthenticatedResult (response body)
     VC->>VC: PartialDecrypt (sk_c, noise flooding)
-    VC->>VA: POST /sessions/:sid/partial-decryption (PartialDecryption)
+    VC->>VA: POST /sessions/:sid/partial (PartialDecryption)
     VA->>VA: FinalDecrypt (sk_a), authenticity check, verdict = sign(logit)
 
     %% Stage 4b — verdict callback and resource access
@@ -1013,7 +1013,7 @@ Single-page app served by VAgent at `/verify?sid=…`. TypeScript, transpiled wi
 
 **Image source: file upload only.** `<input type="file">` plus a drag-and-drop overlay. No webcam — the permissions UX (HTTPS gating, `getUserMedia` quirks across mobile platforms) is orthogonal to the FHE story.
 
-**Wire formats.** JSON for control messages (`Manifest`, `VerificationSession`, `VerdictNotification`, `FinalizeRedirect`); `application/octet-stream` for share- and ciphertext-bearing endpoints (`/pk-share`, `/rlk/round1`, `/rlk/round2`, `/gks-shares`, `/eval-keys`, `/infer`, `/partial-decryption`). The `/infer` POST blocks until inference + MPD-Auth complete and returns the marshaled `AuthenticatedResult` ciphertext in the response body — no separate result channel. No base64 inflation on the hot path. The `/gks-shares` body carries both auth-atom and infer-atom shares in a single `VClientGaloisShares` message — single round-trip.
+**Wire formats.** JSON for control messages (`Manifest`, `VerificationSession`, `VerdictNotification`, `FinalizeRedirect`); `application/octet-stream` for share- and ciphertext-bearing endpoints (`/pk-share`, `/rlk/round1`, `/rlk/round2`, `/gks-shares`, `/eval-keys`, `/infer`, `/partial`). The `/infer` POST blocks until inference + MPD-Auth complete and returns the marshaled `AuthenticatedResult` ciphertext in the response body — no separate result channel. No base64 inflation on the hot path. The `/gks-shares` body carries both auth-atom and infer-atom shares in a single `VClientGaloisShares` message — single round-trip.
 
 **Sid from URL.** SPA reads `?sid=…` at load time and threads it through every subsequent request. No JS-side cookie reading.
 

@@ -79,7 +79,7 @@ RPC — 30 с.
 | Точка API                                 | Запрос              | Ответ                                                                                                                          |
 | ----------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `POST /sessions/{sid}/infer`              | `EncryptedImage`    | `AuthenticatedResult` (блокирующий: внутри VAgent проксирует в VService `/infer`, затем применяет MPD-Auth)                    |
-| `POST /sessions/{sid}/partial-decryption` | `PartialDecryption` | `FinalizeRedirect` (JSON 200; redirect-URL для перехода на RClient). Параллельно отправляется `VerdictNotification` в RService |
+| `POST /sessions/{sid}/partial` | `PartialDecryption` | `FinalizeRedirect` (JSON 200; redirect-URL для перехода на RClient). Параллельно отправляется `VerdictNotification` в RService |
 
 ---
 
