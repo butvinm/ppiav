@@ -23,9 +23,13 @@ type decodedOutput struct {
 	NoisePerSlot []float64 `json:"noise_per_slot"`
 }
 
-// runFinalize loads the VAgent state and runs FinalizeDecryptionVerbose on a
-// saved authenticated ciphertext + the VClient's KeySwitchShare, writing the
-// verdict + noise vector to --out-decoded.
+// runFinalize rebuilds the VAgent from --workdir and combines the VClient's
+// KeySwitchShare (--in-share) with the authenticated ciphertext (--in-ct)
+// to run the final joint decryption and MPD-Auth check. The decoded
+// verdict + per-slot noise vector are written to --out-decoded; the
+// timing JSON splits the work into finalize.final_decrypt (the joint
+// decrypt + auth check) and finalize.verdict_compute (slot bookkeeping +
+// verdict packing).
 func runFinalize(args []string) error {
 	fs := flag.NewFlagSet("finalize", flag.ContinueOnError)
 	workdir := fs.String("workdir", "", "per-batch keygen artifact directory (required)")

@@ -183,7 +183,6 @@ def _plot_bandwidth_per_message(
         return
 
     ids = [r.message_id for r in rows]
-    senders = [r.sender for r in rows]
     sizes_np = np.array([float(r.size or 0) for r in rows], dtype=np.float64)
     n_msgs = len(ids)
     n_bw = len(bandwidths_mbps)
@@ -205,11 +204,7 @@ def _plot_bandwidth_per_message(
         )
     ax.set_yscale("log")
     ax.set_xticks(xs)
-    ax.set_xticklabels(ids, rotation=45, ha="right", fontsize=7)
-    # Color each x-tick label by sender — preserves the per-party color tag
-    # from `bytes_per_message.png` without doubling the bar legend.
-    for tick, sender in zip(ax.get_xticklabels(), senders, strict=True):
-        tick.set_color(_SENDER_COLORS.get(sender, "#333333"))
+    ax.set_xticklabels(ids, rotation=45, ha="right", fontsize=7, color="black")
     ax.set_xlabel(AXIS["message_name"])
     ax.set_ylabel(AXIS["transfer_seconds"])
     ax.legend(loc="upper right", fontsize=8)

@@ -44,6 +44,7 @@ deploy/.env
 # Diagram renders — regenerated from docs/*.puml via plantuml.
 docs/*.png
 docs/screenshots/svg/
+docs/screenshots/png/
 
 # IDE / editor
 .idea/
