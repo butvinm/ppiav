@@ -346,6 +346,21 @@ func runKeygen(args []string) error {
 		run.Metadata["gks_master_bytes"] = size
 	}
 
+	// keygen.eval_keys_bundle stamps the size of the agent→service eval-key
+	// upload (rlk + pk_top + gks_master) into Sample.Bytes so the Python
+	// catalog can resolve InferEvalKeys via SampleBytes — i.e. after the
+	// .bin artifacts are pruned the wire size still survives in keygen.json.
+	// Wall is intentionally 0: this is a size-only sample, not a timed step.
+	var bundleBytes uint64
+	for _, name := range []string{artifactRLK, artifactPKTop, artifactGKSMaster} {
+		size, e := fileSize(*workdir, name)
+		if e != nil {
+			return fmt.Errorf("keygen: stat %s for eval_keys_bundle: %w", name, e)
+		}
+		bundleBytes += uint64(size)
+	}
+	run.Append(bench.Sample{Name: "keygen.eval_keys_bundle", Bytes: bundleBytes})
+
 	if err := run.WriteJSON(stepOutPath(*outPath, *workdir, "keygen")); err != nil {
 		return fmt.Errorf("keygen: write run JSON: %w", err)
 	}

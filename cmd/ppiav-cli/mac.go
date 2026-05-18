@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/butvinm/ppiav/internal/bench"
@@ -124,18 +125,22 @@ func runMAC(args []string) error {
 	}
 
 	var authCt *rlwe.Ciphertext
-	computeSample, err := bench.Measure(sampleMacComputeCt, func() error {
+	computeSample, err := bench.MeasureWithSize(sampleMacComputeCt, func() (uint64, error) {
 		c, macErr := agent.BuildAuthenticatedCt(sid, ct)
 		if macErr != nil {
-			return fmt.Errorf("VAgent.BuildAuthenticatedCt: %w", macErr)
+			return 0, fmt.Errorf("VAgent.BuildAuthenticatedCt: %w", macErr)
 		}
 		authCt = c
-		return nil
+		return uint64(c.BinarySize()), nil
 	})
 	run.Append(computeSample)
 	if err != nil {
 		writeRunOnExit()
 		return fmt.Errorf("mac: %w", err)
+	}
+
+	if dErr := dumpHeapIfRequested("mac"); dErr != nil {
+		fmt.Fprintf(os.Stderr, "mac: memprofile: %v\n", dErr)
 	}
 
 	if err := writeCiphertextPath(*outCt, authCt); err != nil {

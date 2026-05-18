@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
 
 	"github.com/butvinm/ppiav/internal/bench"
 	"github.com/butvinm/ppiav/internal/vservice"
@@ -111,8 +112,15 @@ func runInfer(args []string) error {
 		return fmt.Errorf("infer: %w", err)
 	}
 
-	serializeSample, err := bench.Measure(sampleInferSerializeResult, func() error {
-		return writeCiphertextPath(*outCt, outCipher)
+	if dErr := dumpHeapIfRequested("infer"); dErr != nil {
+		fmt.Fprintf(os.Stderr, "infer: memprofile: %v\n", dErr)
+	}
+
+	serializeSample, err := bench.MeasureWithSize(sampleInferSerializeResult, func() (uint64, error) {
+		if e := writeCiphertextPath(*outCt, outCipher); e != nil {
+			return 0, e
+		}
+		return uint64(outCipher.BinarySize()), nil
 	})
 	run.Append(serializeSample)
 	if err != nil {

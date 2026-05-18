@@ -69,13 +69,13 @@ func runPartialDecrypt(args []string) error {
 	run.Metadata["sid"] = string(sid)
 
 	var share multiparty.KeySwitchShare
-	sample, err := bench.Measure("partial-decrypt", func() error {
+	sample, err := bench.MeasureWithSize("partial-decrypt", func() (uint64, error) {
 		s, pdErr := client.PartialDecrypt(ct)
 		if pdErr != nil {
-			return fmt.Errorf("VClient.PartialDecrypt: %w", pdErr)
+			return 0, fmt.Errorf("VClient.PartialDecrypt: %w", pdErr)
 		}
 		share = s
-		return nil
+		return uint64(s.BinarySize()), nil
 	})
 	run.Append(sample)
 	if err != nil {

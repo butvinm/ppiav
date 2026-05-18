@@ -71,13 +71,13 @@ func runEncrypt(args []string) error {
 	run.Metadata["sid"] = string(sid)
 
 	var ct *rlwe.Ciphertext
-	sample, err := bench.Measure("encrypt", func() error {
+	sample, err := bench.MeasureWithSize("encrypt", func() (uint64, error) {
 		c, encErr := client.EncryptImage(image)
 		if encErr != nil {
-			return fmt.Errorf("VClient.EncryptImage: %w", encErr)
+			return 0, fmt.Errorf("VClient.EncryptImage: %w", encErr)
 		}
 		ct = c
-		return nil
+		return uint64(c.BinarySize()), nil
 	})
 	run.Append(sample)
 	if err != nil {
