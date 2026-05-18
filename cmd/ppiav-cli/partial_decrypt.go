@@ -9,14 +9,15 @@ import (
 	"github.com/tuneinsight/lattigo/v6/multiparty"
 )
 
-// runPartialDecrypt loads the VClient state and emits the smudged
-// KeySwitchShare (sk_c → 0) over a saved authenticated ciphertext. The
-// output share is written to --out-share; a single-sample bench.Run named
-// "partial-decrypt" is written to --out (default <workdir>/partial-decrypt.json).
+// runPartialDecrypt rebuilds the VClient from --workdir and emits the
+// smudged KeySwitchShare (sk_c → 0) for the authenticated ciphertext at
+// --in-ct, writing the share to --out-share. The timing JSON's sole sample
+// is named "partial-decrypt"; its Bytes field carries the share's
+// BinarySize.
 //
-// pk_agg is not required for partial decryption: NewWithState wires only the
-// SkShare-driven path when PkAgg is nil. Loading pk_agg anyway would be a
-// no-op on the hot path; skipping it keeps the I/O scope minimal.
+// pk_agg is intentionally not loaded — NewWithState wires only the
+// SkShare-driven path when PkAgg is nil, and partial decryption uses
+// sk_c alone. Skipping the load keeps the I/O scope of this stage minimal.
 func runPartialDecrypt(args []string) error {
 	fs := flag.NewFlagSet("partial-decrypt", flag.ContinueOnError)
 	workdir := fs.String("workdir", "", "per-batch keygen artifact directory (required)")
@@ -69,13 +70,13 @@ func runPartialDecrypt(args []string) error {
 	run.Metadata["sid"] = string(sid)
 
 	var share multiparty.KeySwitchShare
-	sample, err := bench.Measure("partial-decrypt", func() error {
+	sample, err := bench.MeasureWithSize("partial-decrypt", func() (uint64, error) {
 		s, pdErr := client.PartialDecrypt(ct)
 		if pdErr != nil {
-			return fmt.Errorf("VClient.PartialDecrypt: %w", pdErr)
+			return 0, fmt.Errorf("VClient.PartialDecrypt: %w", pdErr)
 		}
 		share = s
-		return nil
+		return uint64(s.BinarySize()), nil
 	})
 	run.Append(sample)
 	if err != nil {

@@ -20,7 +20,7 @@
       "pause_ns": 0,
       "pre_vm_hwm": 3700,
       "vm_hwm": 3800,
-      "bytes": 0
+      "bytes": 42345
     }
   ]
 }

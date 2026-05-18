@@ -276,9 +276,7 @@ MESSAGES: list[Message] = [
         sender="agent",
         receiver="service",
         label_ru="rlk + pk_top + gks_master → сервису",
-        bytes_source=MultiFilePath(
-            ("keys/rlk.bin", "keys/pk_top.bin", "keys/gks_master.bin"),
-        ),
+        bytes_source=SampleBytes("keygen.eval_keys_bundle"),
     ),
     Message(
         id="EvalKeysAck",
@@ -301,14 +299,14 @@ MESSAGES: list[Message] = [
         sender="client",
         receiver="agent",
         label_ru="Шифротекст изображения (клиент → агент)",
-        bytes_source=FilePath("img_0/input_ct.bin"),
+        bytes_source=SampleBytes("encrypt"),
     ),
     Message(
         id="EncryptedImage",
         sender="agent",
         receiver="service",
         label_ru="Шифротекст изображения (агент → сервис)",
-        bytes_source=FilePath("img_0/input_ct.bin"),
+        bytes_source=SampleBytes("encrypt"),
     ),
     # -- Inference result (response from /infer) ------------------------------
     Message(
@@ -316,7 +314,7 @@ MESSAGES: list[Message] = [
         sender="service",
         receiver="agent",
         label_ru="Шифротекст результата",
-        bytes_source=FilePath("img_0/result_ct.bin"),
+        bytes_source=SampleBytes("infer.serialize_result"),
     ),
     # -- Authenticated result delivery (SSE event) ---------------------------
     Message(
@@ -324,7 +322,7 @@ MESSAGES: list[Message] = [
         sender="agent",
         receiver="client",
         label_ru="Аутентифицированный шифротекст",
-        bytes_source=FilePath("img_0/auth_ct.bin"),
+        bytes_source=SampleBytes("mac.compute_ct"),
     ),
     # -- Partial decryption return (POST /partial-decryption) ----------------
     Message(
@@ -332,7 +330,7 @@ MESSAGES: list[Message] = [
         sender="client",
         receiver="agent",
         label_ru="Частично расшифрованный шифротекст",
-        bytes_source=FilePath("img_0/client_share.bin"),
+        bytes_source=SampleBytes("partial-decrypt"),
     ),
     # -- Finalize redirect (response from /partial-decryption) ---------------
     Message(

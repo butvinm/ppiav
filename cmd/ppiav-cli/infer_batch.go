@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -11,12 +12,14 @@ import (
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 )
 
-// runInferBatch loads VService state + Orion model once, then runs N
-// inferences over the supplied image dirs. Orion 2.1.5's eager-encoded
-// LinearTransformations make LoadModel ~265s at LogN=16 but per-call
-// inference is fast — amortizing the load across a batch saves
-// (N-1)*load_seconds. The load_keys sample lands in the first image dir's
-// infer.json only (aggregator bucket reports n=1 with the real cost).
+// runInferBatch loads VService state + Orion model once, then runs FHE
+// inference over the N image directories listed in --image-dirs. Orion's
+// eager-encoded LinearTransformations make LoadModel ~265 s at LogN=16
+// while per-call inference is much faster, so amortizing the load across
+// a batch saves (N-1) × load_seconds compared with invoking `infer` N
+// times. The load_keys sample lands in the first image dir's infer.json
+// only (the aggregator buckets it with n=1, attributing the real cost
+// to a single session rather than every image).
 func runInferBatch(args []string) error {
 	fs := flag.NewFlagSet("infer-batch", flag.ContinueOnError)
 	workdir := fs.String("workdir", "", "per-batch keygen artifact directory (required)")
@@ -123,6 +126,12 @@ func runInferBatch(args []string) error {
 		if err != nil {
 			writeRunOnExit()
 			return fmt.Errorf("infer-batch: %s exec: %w", imgDir, err)
+		}
+
+		if i == 0 {
+			if dErr := dumpHeapIfRequested("infer"); dErr != nil {
+				fmt.Fprintf(os.Stderr, "infer-batch: memprofile: %v\n", dErr)
+			}
 		}
 
 		serializeSample, err := bench.Measure(sampleInferSerializeResult, func() error {

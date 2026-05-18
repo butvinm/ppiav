@@ -5,7 +5,7 @@
 // stream of either determinate updates (loaded/total) or indeterminate
 // elapsed ticks. Every event also appends to the dev log panel.
 
-export type StepKind = "wasm" | "network" | "sse" | "compute";
+export type StepKind = "wasm" | "network" | "compute";
 
 export interface StepSpec {
   id: string;
@@ -115,7 +115,7 @@ export class ProgressTracker {
       });
     }
     this.macroEl.hidden = false;
-    this.macroEl.textContent = "step 0 / " + this.specs.length;
+    this.macroEl.textContent = "шаг 0 / " + this.specs.length;
     this.devlogToggle.hidden = false;
   }
 
@@ -142,7 +142,7 @@ export class ProgressTracker {
   private openDevlog(): void {
     this.devlogOpen = true;
     this.devlogHost.hidden = false;
-    this.devlogToggle.textContent = "[ hide dev log ]";
+    this.devlogToggle.textContent = "[ скрыть журнал ]";
     try {
       window.sessionStorage.setItem("ppiav.devlog", "1");
     } catch {
@@ -153,7 +153,7 @@ export class ProgressTracker {
   private closeDevlog(): void {
     this.devlogOpen = false;
     this.devlogHost.hidden = true;
-    this.devlogToggle.textContent = "[ dev log ]";
+    this.devlogToggle.textContent = "[ журнал ]";
     try {
       window.sessionStorage.removeItem("ppiav.devlog");
     } catch {
@@ -186,7 +186,7 @@ export class ProgressTracker {
 
   private updateMacro(): void {
     this.macroEl.textContent =
-      "step " + this.current + " / " + this.specs.length;
+      "шаг " + this.current + " / " + this.specs.length;
   }
 
   // start a step. Returns a handle bound to that step.
@@ -202,7 +202,7 @@ export class ProgressTracker {
     row.bar.classList.add("indeterminate");
     this.logRow({
       msg: row.spec.label,
-      meta: "start (" + row.spec.kind + ")",
+      meta: "начало (" + row.spec.kind + ")",
       cls: "start",
     });
     return new StepHandle(this, row);
@@ -223,7 +223,7 @@ export class ProgressTracker {
     );
     this.logRow({
       msg: row.spec.label,
-      meta: "ok · " + dur + " ms" + (summary ? " · " + summary : ""),
+      meta: "готово · " + dur + " мс" + (summary ? " · " + summary : ""),
       cls: "ok",
     });
   }
@@ -241,7 +241,7 @@ export class ProgressTracker {
     const m = err instanceof Error ? err.message : String(err);
     this.logRow({
       msg: row.spec.label,
-      meta: "error · " + dur + " ms · " + m,
+      meta: "ошибка · " + dur + " мс · " + m,
       cls: "err",
     });
   }
@@ -300,7 +300,7 @@ export class StepHandle {
     const start = this.row.startedAt ?? performance.now();
     const tick = (): void => {
       const sec = Math.floor((performance.now() - start) / 1000);
-      this.row.sizeEl.textContent = " " + sec + "s elapsed";
+      this.row.sizeEl.textContent = " " + sec + " с";
     };
     tick();
     this.row.intervalId = window.setInterval(tick, intervalMs);

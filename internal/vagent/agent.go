@@ -111,20 +111,10 @@ type sessionState struct {
 	galSharesMaster []multiparty.GaloisKeyGenShare
 	masterLabels    []int
 
-	// authResult is the Stage-3 → Stage-4a hand-off: capacity-1 buffered so
-	// the image POST handler can deposit ct_M before the SSE receiver opens
-	// without blocking (and without bookkeeping for the pre-arrival race).
-	// Receivers must use `select { case <-authResult: ...; case <-ctx.Done(): }`
-	// to remain cancellable on browser disconnect — `sync.Cond.Wait` would
-	// not. See docs/DESIGN.md line 175 (open SSE before image POST).
-	authResult chan *rlwe.Ciphertext
-
 	// authenticatedCt caches the ct_M produced by BuildAuthenticatedCt so
 	// the Stage-4a partial-decryption handler can pass it to
-	// FinalizeDecryption without re-deriving it. The HTTP layer needs this
-	// because the SSE channel is single-receive (the browser consumed it);
-	// FinalizeDecryption's signature requires the ciphertext as input.
-	// Populated by handleImage in http.go, consumed by handlePartialDecrypt.
+	// FinalizeDecryption without re-deriving it. Populated by handleInfer
+	// in http.go, consumed by handlePartialDecryption.
 	authenticatedCt *rlwe.Ciphertext
 }
 
@@ -188,10 +178,9 @@ func (a *Agent) OpenSession(sid protocol.SessionID) error {
 		return fmt.Errorf("vagent: session %q already open", sid)
 	}
 	a.sessions[sid] = &sessionState{
-		crs:        crs,
-		skTop:      skTop,
-		authKey:    authKey,
-		authResult: make(chan *rlwe.Ciphertext, 1),
+		crs:     crs,
+		skTop:   skTop,
+		authKey: authKey,
 	}
 	return nil
 }
@@ -213,19 +202,6 @@ func (a *Agent) sessionSkEvalLocked(sess *sessionState) (*rlwe.SecretKey, error)
 	}
 	sess.skEvalCached = out
 	return out, nil
-}
-
-// SessionAuthResult exposes the per-session authResult channel for the SSE
-// handler in http.go. Returns (nil, false) if the sid is unknown.
-// Package-internal: http.go and tests are the only callers.
-func (a *Agent) SessionAuthResult(sid protocol.SessionID) (chan *rlwe.Ciphertext, bool) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	sess, ok := a.sessions[sid]
-	if !ok {
-		return nil, false
-	}
-	return sess.authResult, true
 }
 
 // storeAuthenticatedCt caches ct_M so the partial-decryption handler can

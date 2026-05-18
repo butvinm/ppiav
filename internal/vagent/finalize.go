@@ -19,7 +19,7 @@ import (
 //
 // Verdict logic (docs/DESIGN.md §`Auth/Ver`):
 //   - Ver returns (m, true) → Accept iff m > 0, else Reject.
-//   - Ver returns (_, false) → Reject (authenticity failed).
+//   - Ver returns (_, false) → ResultAuthFailed (authenticity check failed).
 //
 // The authKey is single-use: regardless of the verdict, the session entry
 // is dropped after this call so a replay cannot reuse the same authKey.
@@ -114,7 +114,7 @@ func (a *Agent) FinalizeDecryptionVerbose(
 
 	m, ok := a.auth.Ver(sess.authKey, slots)
 	if !ok {
-		return protocol.VerdictReject, slots, nil
+		return protocol.VerdictResultAuthFailed, slots, nil
 	}
 	if m > 0 {
 		return protocol.VerdictAccept, slots, nil

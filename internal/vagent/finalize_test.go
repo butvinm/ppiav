@@ -89,7 +89,7 @@ func TestFinalizeRejectsZeroLogit(t *testing.T) {
 func TestFinalizeRejectsTamperedShare(t *testing.T) {
 	// Replay the happy-path setup, but produce VClient's KeySwitchShare
 	// against a DIFFERENT sk (i.e., a wrong sk_c). Ver should fail and
-	// FinalizeDecryption returns Reject.
+	// FinalizeDecryption returns ResultAuthFailed.
 	params := smallParams(t)
 	a, err := New(params)
 	require.NoError(t, err)
@@ -122,7 +122,7 @@ func TestFinalizeRejectsTamperedShare(t *testing.T) {
 
 	verdict, err := a.FinalizeDecryption(sid, ctM, clientShare)
 	require.NoError(t, err)
-	assert.Equal(t, protocol.VerdictReject, verdict, "Ver must reject a share produced under a wrong sk_c")
+	assert.Equal(t, protocol.VerdictResultAuthFailed, verdict, "Ver must surface ResultAuthFailed for a share under a wrong sk_c")
 }
 
 func TestFinalizeDropsSessionOnSuccess(t *testing.T) {

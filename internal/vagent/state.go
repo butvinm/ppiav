@@ -107,10 +107,9 @@ func NewWithState(params protocol.Params, state *ExportedState) (*Agent, error) 
 		sessions: map[protocol.SessionID]*sessionState{},
 	}
 	sess := &sessionState{
-		crs:        crs,
-		skTop:      state.SkTop,
-		authKey:    authenticator.Key{S: sCopy, SeedF: state.MacKey.SeedF},
-		authResult: make(chan *rlwe.Ciphertext, 1),
+		crs:     crs,
+		skTop:   state.SkTop,
+		authKey: authenticator.Key{S: sCopy, SeedF: state.MacKey.SeedF},
 	}
 	if state.PkAgg != nil {
 		sess.pkAgg = state.PkAgg

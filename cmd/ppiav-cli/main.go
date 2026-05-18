@@ -1,22 +1,43 @@
-// Command ppiav-cli is the per-step driver for the §3 protocol. Each
-// subcommand runs a single cryptographic operation, loading its inputs from
-// disk and writing its outputs (artifact + timing JSON) back to disk. The
-// Python eval driver in bench/ chains these subprocesses across a batch of
-// images to produce the aggregated benchmark and accuracy numbers.
+// Command ppiav-cli is the per-stage CLI for the ppiav verification protocol.
+// Each subcommand performs exactly one cryptographic operation: it loads its
+// inputs from disk (session keys, ciphertexts, shares), runs the operation,
+// and writes its outputs back to disk as a wire artifact plus a timing JSON.
+// Chaining the subcommands across a batch of images is delegated to the
+// Python eval driver in bench/, which orchestrates a stratified UTKFace run
+// with a single shared keygen and aggregates the JSONs into summary tables
+// and plots.
+//
+// Splitting the protocol into independent processes (vs. a single in-process
+// orchestrator) gives each stage a clean RSS baseline for memory profiling
+// and lets the bench driver measure per-stage wall-time + peak resident set
+// without cross-contamination.
 //
 // Dispatch uses stdlib `flag` — no cobra — to keep dependencies tight.
 // Subcommands:
 //
-//	keygen           — bilateral collaborative keygen; writes keys + sid + params
-//	encrypt          — VClient.EncryptImage; reads --image, writes input_ct
-//	infer            — VService.Infer; reads input_ct, writes result_ct
-//	mac              — VAgent.BuildAuthenticatedCt; reads result_ct, writes auth_ct
-//	partial-decrypt  — VClient.PartialDecrypt; reads auth_ct, writes client_share
-//	finalize         — VAgent.FinalizeDecryptionVerbose; reads auth_ct + share, writes decoded.json
+//	keygen           — multi-party collaborative keygen between VClient and
+//	                   VAgent; writes the session keys, SID, and CKKS params
+//	                   into <workdir>
+//	encrypt          — VClient encrypts a preprocessed image under the
+//	                   aggregated session pk; writes input_ct
+//	infer            — VService runs the Orion-compiled FHE inference circuit
+//	                   on input_ct; writes result_ct
+//	infer-batch      — same as `infer` but over N image directories, sharing
+//	                   one VService LoadModel (avoids re-encoding the model's
+//	                   linear transforms per image)
+//	mac              — VAgent derives the auth-atom keys and produces the
+//	                   MPD-Auth authenticated ciphertext from result_ct;
+//	                   writes auth_ct
+//	partial-decrypt  — VClient emits its smudged KeySwitchShare over auth_ct;
+//	                   writes client_share
+//	finalize         — VAgent joins its own share with client_share, runs the
+//	                   final decryption + auth check, and decodes the
+//	                   broadcast logit into a verdict; writes decoded.json
 //
-// All subcommands share a `--workdir <dir>` flag pointing at the per-batch
+// All subcommands share a `--workdir <dir>` flag pointing at the per-session
 // directory containing the keygen artifacts. Each subcommand also takes an
-// explicit `--out <path>` for its timing JSON (default `<workdir>/<step>.json`).
+// explicit `--out <path>` for its timing JSON (default
+// `<workdir>/<subcommand>.json`).
 package main
 
 import (
@@ -46,23 +67,34 @@ const benchPhase = "phase2"
 
 // usage prints the top-level help and exits with status 2 (flag convention).
 func usage() {
-	fmt.Fprintf(os.Stderr, `ppiav-cli — per-step §3 protocol driver.
+	fmt.Fprintf(os.Stderr, `ppiav-cli — per-stage CLI for the ppiav verification protocol.
+
+Each subcommand runs one cryptographic operation, reading its inputs from
+<workdir> and writing its outputs (wire artifact + timing JSON) back to
+disk. The Python eval driver in bench/ chains the subcommands across an
+image batch with a single shared keygen.
 
 Usage:
   ppiav-cli <subcommand> [flags]
 
 Subcommands:
-  keygen           bilateral collaborative keygen; writes keys + sid + params
-  encrypt          VClient.EncryptImage on a fresh image
-  infer            VService.Infer on a saved input ciphertext
-  infer-batch      VService.Infer over N image dirs with a single LoadModel
-  mac              VAgent.BuildAuthenticatedCt on a saved result ciphertext
-  partial-decrypt  VClient.PartialDecrypt on a saved auth ciphertext
-  finalize         VAgent.FinalizeDecryptionVerbose on a saved auth ct + share
+  keygen           multi-party keygen between VClient and VAgent;
+                   writes session keys, SID, and CKKS params
+  encrypt          VClient encrypts an image under the session pk;
+                   writes input_ct
+  infer            VService runs the FHE inference circuit on input_ct;
+                   writes result_ct
+  infer-batch      same as infer over N image dirs, sharing one LoadModel
+  mac              VAgent emits the MPD-Auth authenticated ciphertext from
+                   result_ct; writes auth_ct
+  partial-decrypt  VClient returns its smudged KeySwitchShare for auth_ct;
+                   writes client_share
+  finalize         VAgent joins the shares, runs final decryption + auth
+                   check, decodes the verdict; writes decoded.json
 
 Shared flags:
-  --workdir string  per-batch directory holding keygen artifacts (required)
-  --out string      timing JSON output path (default <workdir>/<step>.json)
+  --workdir string  per-session directory holding keygen artifacts (required)
+  --out string      timing JSON output path (default <workdir>/<subcommand>.json)
 
 Per-subcommand flags: see "ppiav-cli <subcommand> -h".
 `)

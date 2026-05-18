@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/butvinm/ppiav/internal/bench"
@@ -10,8 +11,12 @@ import (
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 )
 
-// runMAC loads the VAgent state written by `keygen`, derives the auth-atom
-// keys locally, and runs `BuildAuthenticatedCt` on a saved result ciphertext.
+// runMAC rebuilds the VAgent from the keygen artifacts in --workdir,
+// derives the negative-atom rotation keys locally via hierkeys.LevelExpansion
+// (mac.derive_auth_keys, whose Bytes carries the summed gks_auth size),
+// then produces the MPD-Auth authenticated ciphertext from the result
+// ciphertext at --in-ct (mac.compute_ct, whose Bytes carries the auth
+// ciphertext's BinarySize). The output is written to --out-ct.
 func runMAC(args []string) error {
 	fs := flag.NewFlagSet("mac", flag.ContinueOnError)
 	workdir := fs.String("workdir", "", "per-batch keygen artifact directory (required)")
@@ -124,18 +129,22 @@ func runMAC(args []string) error {
 	}
 
 	var authCt *rlwe.Ciphertext
-	computeSample, err := bench.Measure(sampleMacComputeCt, func() error {
+	computeSample, err := bench.MeasureWithSize(sampleMacComputeCt, func() (uint64, error) {
 		c, macErr := agent.BuildAuthenticatedCt(sid, ct)
 		if macErr != nil {
-			return fmt.Errorf("VAgent.BuildAuthenticatedCt: %w", macErr)
+			return 0, fmt.Errorf("VAgent.BuildAuthenticatedCt: %w", macErr)
 		}
 		authCt = c
-		return nil
+		return uint64(c.BinarySize()), nil
 	})
 	run.Append(computeSample)
 	if err != nil {
 		writeRunOnExit()
 		return fmt.Errorf("mac: %w", err)
+	}
+
+	if dErr := dumpHeapIfRequested("mac"); dErr != nil {
+		fmt.Fprintf(os.Stderr, "mac: memprofile: %v\n", dErr)
 	}
 
 	if err := writeCiphertextPath(*outCt, authCt); err != nil {

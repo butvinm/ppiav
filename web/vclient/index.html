@@ -1,23 +1,22 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>VClient · ppiav</title>
+    <title>Клиент верификации · ppiav</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <main class="card">
-      <h1>Privacy-Preserving <span class="accent">Image Attribute</span> Verification</h1>
-      <p class="subtitle">Encrypted facial attribute check via CKKS multiparty FHE.</p>
-      <p id="status" class="status">Loading WASM...</p>
+      <h1>Приватная верификация <span class="accent">возраста по изображению</span></h1>
+      <p id="status" class="status">Загрузка WASM...</p>
       <input type="file" id="image-input" class="file-input" accept="image/*" disabled />
       <p id="macro" class="macro" hidden></p>
       <div id="steps" class="steps"></div>
       <button id="devlog-toggle" type="button" class="devlog-toggle" hidden>
-        [ dev log ]
+        [ журнал ]
       </button>
-      <section id="devlog" class="devlog" aria-label="developer log" hidden></section>
+      <section id="devlog" class="devlog" aria-label="журнал разработчика" hidden></section>
     </main>
     <!-- wasm_exec.js is the Go shim required before main.ts can fetch and
          instantiate ppiav.wasm via WebAssembly.instantiate(Streaming). -->

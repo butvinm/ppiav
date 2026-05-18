@@ -2,8 +2,6 @@ package vagent
 
 import (
 	"bytes"
-	"context"
-	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -12,7 +10,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/butvinm/ppiav/internal/httputil"
 	"github.com/butvinm/ppiav/internal/protocol"
@@ -457,104 +454,6 @@ func readAll(t *testing.T, rc io.Reader) string {
 	return string(b)
 }
 
-func TestHTTPVAgent_ResultSSE_UnknownSidReturns404(t *testing.T) {
-	_, vagentSrv, _, _, _, _ := newHTTPFixture(t)
-	resp, err := http.Get(vagentSrv.URL + "/sessions/never-opened/result")
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusNotFound, resp.StatusCode)
-}
-
-func TestHTTPVAgent_ResultSSE_RejectsPost(t *testing.T) {
-	_, vagentSrv, _, _, _, _ := newHTTPFixture(t)
-	sid := openSessionViaHTTP(t, vagentSrv)
-	resp, err := http.Post(vagentSrv.URL+"/sessions/"+string(sid)+"/result", "application/octet-stream", nil)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
-}
-
-// TestHTTPVAgent_ResultSSE_DeliversBase64Ciphertext drives the SSE handler
-// end-to-end: starts the GET request, deposits a real ciphertext into the
-// session's authResult channel, then reads the SSE `data:` line and
-// confirms it base64-decodes back to a marshalable ciphertext. Verifies
-// the headers (Content-Type / Cache-Control) and the on-wire frame shape
-// (`data: <b64>\n\n`).
-func TestHTTPVAgent_ResultSSE_DeliversBase64Ciphertext(t *testing.T) {
-	_, vagentSrv, _, _, agent, params := newHTTPFixture(t)
-	sid := openSessionViaHTTP(t, vagentSrv)
-
-	// Build a real ciphertext under the params (degree 1, max level) so
-	// MarshalBinary produces a wire payload that round-trips.
-	ct := rlwe.NewCiphertext(params.CKKS, 1, params.CKKS.MaxLevel())
-
-	// Seed the session's authResult channel before opening SSE: the
-	// pre-arrival case (image POST finishes before SSE GET opens). Buffer
-	// is capacity 1, so this non-blocking send always succeeds for a
-	// freshly-opened session.
-	ch, ok := agent.SessionAuthResult(sid)
-	require.True(t, ok)
-	ch <- ct
-
-	resp, err := http.Get(vagentSrv.URL + "/sessions/" + string(sid) + "/result")
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
-	assert.Equal(t, "no-cache", resp.Header.Get("Cache-Control"))
-
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	frame := string(body)
-	// The handler prepends `retry: …` to suppress EventSource auto-
-	// reconnects on stream close; the data frame follows.
-	require.Contains(t, frame, "retry: ", "frame must contain a retry hint: %q", frame)
-	require.Contains(t, frame, "data: ", "frame must contain a `data: ` event: %q", frame)
-	require.True(t, strings.HasSuffix(frame, "\n\n"), "SSE event separator missing: %q", frame)
-	dataIdx := strings.Index(frame, "data: ")
-	encoded := strings.TrimSuffix(frame[dataIdx+len("data: "):], "\n\n")
-	decoded, err := base64.StdEncoding.DecodeString(encoded)
-	require.NoError(t, err)
-
-	// Cross-check the base64 payload is the same MarshalBinary output the
-	// handler should have produced.
-	want, err := ct.MarshalBinary()
-	require.NoError(t, err)
-	assert.Equal(t, want, decoded)
-}
-
-// TestHTTPVAgent_ResultSSE_CancelledOnClientDisconnect verifies the
-// `r.Context().Done()` branch: starting the request with a cancellable
-// context, then cancelling before any ciphertext arrives, must return
-// without waiting forever. We use a client context with a short deadline.
-func TestHTTPVAgent_ResultSSE_CancelledOnClientDisconnect(t *testing.T) {
-	_, vagentSrv, _, _, _, _ := newHTTPFixture(t)
-	sid := openSessionViaHTTP(t, vagentSrv)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, vagentSrv.URL+"/sessions/"+string(sid)+"/result", nil)
-	require.NoError(t, err)
-	start := time.Now()
-	resp, err := http.DefaultClient.Do(req)
-	// The handler streams a one-shot retry hint before the data event, so
-	// the client receives an empty (post-retry-hint) body when its context
-	// fires. We accept either: (a) the client gets a partial body and a
-	// timely close, or (b) the http client surfaces context.DeadlineExceeded.
-	if err == nil {
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		// Only the `retry:` SSE comment frame should arrive — no `data:`
-		// event since the ciphertext channel was never deposited into.
-		assert.NotContains(t, string(body), "data: ",
-			"SSE handler must not emit a data event before cancellation")
-	} else {
-		assert.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
-	}
-	elapsed := time.Since(start)
-	require.Less(t, elapsed, 2*time.Second, "SSE handler did not exit on client disconnect")
-}
-
 // rserviceStub records the callback POSTs the VAgent makes, exposing the
 // last seen verdict for assertion. Listens on /api/callback/:sid and
 // matches RService's real wire shape (VerdictNotification JSON body).
@@ -601,7 +500,7 @@ func (rs *rserviceStub) snapshot() (int, protocol.SessionID, protocol.Verdict) {
 }
 
 // newHTTPFixtureWithRService extends newHTTPFixture with an additional
-// RService stub. Use for image/partial-decryption tests that exercise the
+// RService stub. Use for image/partial tests that exercise the
 // verdict callback.
 func newHTTPFixtureWithRService(t *testing.T) (
 	vagentSrv *httptest.Server,
@@ -662,7 +561,8 @@ func TestHTTPVAgent_Image_HappyPath(t *testing.T) {
 	_, jointPK := runFullKeygenViaHTTPThenStore(t, vagentSrv.URL, sid, stub, agent, params)
 
 	// Encrypt 0.5 at slot 0 under jointPK. The x² circuit yields ≈0.25;
-	// we don't decode here — just verify the SSE channel receives a ct_M.
+	// we don't decode here — just verify the response body is the
+	// marshaled AuthenticatedResult ciphertext.
 	encoder := ckks.NewEncoder(params.CKKS)
 	encryptor := rlwe.NewEncryptor(params.CKKS, jointPK)
 	values := make([]float64, params.CKKS.MaxSlots())
@@ -674,32 +574,30 @@ func TestHTTPVAgent_Image_HappyPath(t *testing.T) {
 	inputBytes, err := inputCt.MarshalBinary()
 	require.NoError(t, err)
 
-	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/image", inputBytes)
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/infer", inputBytes)
 	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode, "body=%s", readAll(t, resp.Body))
+	respBytes, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "body=%s", respBytes)
+	assert.Equal(t, "application/octet-stream", resp.Header.Get("Content-Type"))
 
-	// SSE channel must now carry ct_M (capacity-1 buffer captured it). We
-	// wait up to a second rather than using a `default:` branch — the
-	// image handler's storeAuthenticatedCt → ch <- ctM happens after the
-	// VService /image RPC returns, so there is a small async window.
-	ch, ok := agent.SessionAuthResult(sid)
-	require.True(t, ok)
-	select {
-	case ct := <-ch:
-		require.NotNil(t, ct)
-	case <-time.After(time.Second):
-		t.Fatal("authResult channel empty after image POST")
-	}
+	// Response body must round-trip as a ciphertext.
+	respCt := &rlwe.Ciphertext{}
+	require.NoError(t, respCt.UnmarshalBinary(respBytes))
+
 	// authenticatedCt cache must also be populated for the partial-decryption
-	// handler to retrieve.
-	ct, ok := agent.SessionAuthenticatedCt(sid)
+	// handler to retrieve, and must match the response bytes.
+	cached, ok := agent.SessionAuthenticatedCt(sid)
 	require.True(t, ok)
-	require.NotNil(t, ct, "image handler must cache ct_M")
+	require.NotNil(t, cached, "infer handler must cache ct_M")
+	cachedBytes, err := cached.MarshalBinary()
+	require.NoError(t, err)
+	assert.Equal(t, cachedBytes, respBytes)
 }
 
 func TestHTTPVAgent_Image_UnknownSidReturns404(t *testing.T) {
 	vagentSrv, _, _, _, _, _, _ := newHTTPFixtureWithRService(t)
-	resp := postOctet(t, vagentSrv.URL, "/sessions/never-opened/image", []byte{0x00})
+	resp := postOctet(t, vagentSrv.URL, "/sessions/never-opened/infer", []byte{0x00})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 	var body httputil.ErrorBody
@@ -710,7 +608,7 @@ func TestHTTPVAgent_Image_UnknownSidReturns404(t *testing.T) {
 func TestHTTPVAgent_Image_MalformedBodyReturns400(t *testing.T) {
 	vagentSrv, _, _, _, _, _, _ := newHTTPFixtureWithRService(t)
 	sid := openSessionViaHTTP(t, vagentSrv)
-	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/image", []byte{0xff, 0xff, 0xff})
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/infer", []byte{0xff, 0xff, 0xff})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
@@ -718,7 +616,7 @@ func TestHTTPVAgent_Image_MalformedBodyReturns400(t *testing.T) {
 func TestHTTPVAgent_Image_RejectsGet(t *testing.T) {
 	vagentSrv, _, _, _, _, _, _ := newHTTPFixtureWithRService(t)
 	sid := openSessionViaHTTP(t, vagentSrv)
-	resp, err := http.Get(vagentSrv.URL + "/sessions/" + string(sid) + "/image")
+	resp, err := http.Get(vagentSrv.URL + "/sessions/" + string(sid) + "/infer")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
@@ -747,7 +645,7 @@ func TestHTTPVAgent_PartialDecryption_AcceptVerdict(t *testing.T) {
 	inputBytes, err := inputCt.MarshalBinary()
 	require.NoError(t, err)
 
-	imgResp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/image", inputBytes)
+	imgResp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/infer", inputBytes)
 	require.Equal(t, http.StatusOK, imgResp.StatusCode)
 	imgResp.Body.Close()
 
@@ -767,7 +665,7 @@ func TestHTTPVAgent_PartialDecryption_AcceptVerdict(t *testing.T) {
 	pdBytes, err := protocol.PartialDecryption{Share: clientShare}.MarshalBinary()
 	require.NoError(t, err)
 
-	resp, err := http.Post(vagentSrv.URL+"/sessions/"+string(sid)+"/partial-decryption", "application/octet-stream", bytes.NewReader(pdBytes))
+	resp, err := http.Post(vagentSrv.URL+"/sessions/"+string(sid)+"/partial", "application/octet-stream", bytes.NewReader(pdBytes))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	respBody, err := io.ReadAll(resp.Body)
@@ -784,7 +682,7 @@ func TestHTTPVAgent_PartialDecryption_AcceptVerdict(t *testing.T) {
 }
 
 // TestHTTPVAgent_PartialDecryption_TamperedShareReject sends a share built
-// under a different sk_c → Ver fails → callback Reject + 302.
+// under a different sk_c → Ver fails → callback ResultAuthFailed + 200.
 func TestHTTPVAgent_PartialDecryption_TamperedShareReject(t *testing.T) {
 	vagentSrv, _, _, agent, rstub, _, params := newHTTPFixtureWithRService(t)
 	sid := openSessionViaHTTP(t, vagentSrv)
@@ -802,7 +700,7 @@ func TestHTTPVAgent_PartialDecryption_TamperedShareReject(t *testing.T) {
 	require.NoError(t, err)
 	inputBytes, err := inputCt.MarshalBinary()
 	require.NoError(t, err)
-	imgResp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/image", inputBytes)
+	imgResp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/infer", inputBytes)
 	require.Equal(t, http.StatusOK, imgResp.StatusCode)
 	imgResp.Body.Close()
 
@@ -822,7 +720,7 @@ func TestHTTPVAgent_PartialDecryption_TamperedShareReject(t *testing.T) {
 	pdBytes, err := protocol.PartialDecryption{Share: clientShare}.MarshalBinary()
 	require.NoError(t, err)
 
-	resp, err := http.Post(vagentSrv.URL+"/sessions/"+string(sid)+"/partial-decryption", "application/octet-stream", bytes.NewReader(pdBytes))
+	resp, err := http.Post(vagentSrv.URL+"/sessions/"+string(sid)+"/partial", "application/octet-stream", bytes.NewReader(pdBytes))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	// A clean Ver=false finalize is reported as Reject (no error); per
@@ -831,7 +729,7 @@ func TestHTTPVAgent_PartialDecryption_TamperedShareReject(t *testing.T) {
 
 	calls, _, gotVerd := rstub.snapshot()
 	assert.Equal(t, 1, calls)
-	assert.Equal(t, protocol.VerdictReject, gotVerd)
+	assert.Equal(t, protocol.VerdictResultAuthFailed, gotVerd)
 }
 
 // TestHTTPVAgent_PartialDecryption_MalformedShareRejectThen4xx exercises
@@ -840,7 +738,7 @@ func TestHTTPVAgent_PartialDecryption_MalformedShareRejectThen4xx(t *testing.T) 
 	vagentSrv, _, _, _, rstub, _, _ := newHTTPFixtureWithRService(t)
 	sid := openSessionViaHTTP(t, vagentSrv)
 
-	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/partial-decryption", []byte{0xff, 0xff, 0xff})
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/partial", []byte{0xff, 0xff, 0xff})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 
@@ -854,7 +752,7 @@ func TestHTTPVAgent_PartialDecryption_MalformedShareRejectThen4xx(t *testing.T) 
 func TestHTTPVAgent_PartialDecryption_UnknownSidNoCallback(t *testing.T) {
 	vagentSrv, _, _, _, rstub, _, _ := newHTTPFixtureWithRService(t)
 
-	resp := postOctet(t, vagentSrv.URL, "/sessions/never-opened/partial-decryption", []byte{0x00})
+	resp := postOctet(t, vagentSrv.URL, "/sessions/never-opened/partial", []byte{0x00})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 
@@ -885,7 +783,7 @@ func TestHTTPVAgent_PartialDecryption_BeforeImageRejects(t *testing.T) {
 	pdBytes, err := protocol.PartialDecryption{Share: share}.MarshalBinary()
 	require.NoError(t, err)
 
-	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/partial-decryption", pdBytes)
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/partial", pdBytes)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 
@@ -923,7 +821,7 @@ func TestHTTPVAgent_PartialDecryption_CallbackFailureReturns502(t *testing.T) {
 	require.NoError(t, err)
 	inputBytes, err := inputCt.MarshalBinary()
 	require.NoError(t, err)
-	imgResp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/image", inputBytes)
+	imgResp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/infer", inputBytes)
 	require.Equal(t, http.StatusOK, imgResp.StatusCode)
 	imgResp.Body.Close()
 
@@ -940,7 +838,7 @@ func TestHTTPVAgent_PartialDecryption_CallbackFailureReturns502(t *testing.T) {
 	pdBytes, err := protocol.PartialDecryption{Share: clientShare}.MarshalBinary()
 	require.NoError(t, err)
 
-	resp, err := http.Post(vagentSrv.URL+"/sessions/"+string(sid)+"/partial-decryption", "application/octet-stream", bytes.NewReader(pdBytes))
+	resp, err := http.Post(vagentSrv.URL+"/sessions/"+string(sid)+"/partial", "application/octet-stream", bytes.NewReader(pdBytes))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusBadGateway, resp.StatusCode, "body=%s", readAll(t, resp.Body))
@@ -949,7 +847,7 @@ func TestHTTPVAgent_PartialDecryption_CallbackFailureReturns502(t *testing.T) {
 func TestHTTPVAgent_PartialDecryption_RejectsGet(t *testing.T) {
 	vagentSrv, _, _, _, _, _, _ := newHTTPFixtureWithRService(t)
 	sid := openSessionViaHTTP(t, vagentSrv)
-	resp, err := http.Get(vagentSrv.URL + "/sessions/" + string(sid) + "/partial-decryption")
+	resp, err := http.Get(vagentSrv.URL + "/sessions/" + string(sid) + "/partial")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
@@ -1160,12 +1058,12 @@ func TestHTTPVAgent_GKSShares_EvalKeysForwardFailureRejectsAndEvicts(t *testing.
 	require.Error(t, err)
 }
 
-// TestHTTPVAgent_Image_MalformedBodyRejectAndEvicts: F2 on /image.
+// TestHTTPVAgent_Infer_MalformedBodyRejectAndEvicts: F2 on /infer.
 func TestHTTPVAgent_Image_MalformedBodyRejectAndEvicts(t *testing.T) {
 	vagentSrv, _, _, agent, rstub, _, _ := newHTTPFixtureWithRService(t)
 	sid := openSessionViaHTTP(t, vagentSrv)
 
-	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/image", []byte{0xff, 0xff, 0xff})
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/infer", []byte{0xff, 0xff, 0xff})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 
@@ -1176,7 +1074,7 @@ func TestHTTPVAgent_Image_MalformedBodyRejectAndEvicts(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestHTTPVAgent_Image_VServiceFailureRejectAndEvicts: F3 — VService /image
+// TestHTTPVAgent_Infer_VServiceFailureRejectAndEvicts: F3 — VService /infer
 // returns 500. VAgent must Reject + evict + surface 502.
 func TestHTTPVAgent_Image_VServiceFailureRejectAndEvicts(t *testing.T) {
 	params := smallParams(t)
@@ -1219,12 +1117,12 @@ func TestHTTPVAgent_Image_VServiceFailureRejectAndEvicts(t *testing.T) {
 	body, err := ct.MarshalBinary()
 	require.NoError(t, err)
 
-	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/image", body)
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/infer", body)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusBadGateway, resp.StatusCode)
 
 	calls, _, gotVerd := rstub.snapshot()
-	assert.Equal(t, 1, calls, "F3 on /image VService failure must trigger Reject")
+	assert.Equal(t, 1, calls, "F3 on /infer VService failure must trigger Reject")
 	assert.Equal(t, protocol.VerdictReject, gotVerd)
 	_, err = agent.session(sid)
 	require.Error(t, err)
@@ -1237,7 +1135,7 @@ func TestHTTPVAgent_PartialDecryption_MalformedBodyEvicts(t *testing.T) {
 	vagentSrv, _, _, agent, rstub, _, _ := newHTTPFixtureWithRService(t)
 	sid := openSessionViaHTTP(t, vagentSrv)
 
-	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/partial-decryption", []byte{0xff, 0xff, 0xff})
+	resp := postOctet(t, vagentSrv.URL, "/sessions/"+string(sid)+"/partial", []byte{0xff, 0xff, 0xff})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 

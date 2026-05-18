@@ -150,25 +150,50 @@ def test_resolve_synthetic_returns_constant() -> None:
 
 
 def test_resolve_filepath_returns_stat_size() -> None:
-    """FilePath-sourced messages return the file size from os.stat."""
+    """FilePath-sourced messages return the file size from os.stat.
+
+    Manifest is the only catalog message still backed by FilePath (keys/params.json),
+    since the per-image wire artifacts now resolve via SampleBytes for
+    prune-tolerance.
+    """
     samples = _samples_by_name()
-    # First EncryptedImage hop (client → agent) is the canonical FilePath case.
-    msg = next(m for m in MESSAGES if m.id == "EncryptedImage" and m.sender == "client")
+    msg = next(m for m in MESSAGES if m.id == "Manifest" and m.sender == "service")
     size = resolve_message_bytes(msg, FIXTURE, samples)
     # Placeholder zero-byte fixture; size is 0, not None.
     assert size == 0
 
 
-def test_resolve_multifile_sums_sizes() -> None:
-    """MultiFilePath sums sizes across every file when all present."""
+def test_resolve_multifile_sums_sizes(tmp_path: Path) -> None:
+    """MultiFilePath sums sizes across every file when all present.
+
+    No catalog message uses MultiFilePath anymore (InferEvalKeys moved to
+    SampleBytes("keygen.eval_keys_bundle")), so we exercise the resolver
+    against a synthetic Message instead of a catalog row.
+    """
+    (tmp_path / "keys").mkdir()
+    (tmp_path / "keys" / "a.bin").write_bytes(b"x" * 16)
+    (tmp_path / "keys" / "b.bin").write_bytes(b"y" * 48)
+    fake_msg = Message(
+        id="FakeMultiSum",
+        sender="agent",
+        receiver="service",
+        label_ru="фейковая составная",
+        bytes_source=MultiFilePath(("keys/a.bin", "keys/b.bin")),
+    )
+    assert resolve_message_bytes(fake_msg, tmp_path, {}) == 64
+
+
+def test_resolve_infer_eval_keys_from_keygen_sample() -> None:
+    """InferEvalKeys reads the agent→service bundle size from keygen Sample.Bytes.
+
+    Stamped by ppiav-cli keygen as a size-only Sample
+    (`keygen.eval_keys_bundle`, Bytes = stat sum of rlk + pk_top + gks_master);
+    survives pruning of the underlying .bin files.
+    """
     samples = _samples_by_name()
     msg = next(m for m in MESSAGES if m.id == "InferEvalKeys")
-    size = resolve_message_bytes(msg, FIXTURE, samples)
-    expected = sum(
-        (FIXTURE / rel).stat().st_size
-        for rel in ("keys/rlk.bin", "keys/pk_top.bin", "keys/gks_master.bin")
-    )
-    assert size == expected
+    # Fixture sets keygen.eval_keys_bundle.bytes = 100000.
+    assert resolve_message_bytes(msg, FIXTURE, samples) == 100000
 
 
 def test_resolve_multifile_missing_returns_none(tmp_path: Path) -> None:

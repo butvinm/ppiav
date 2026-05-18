@@ -68,8 +68,14 @@ type sessionState struct {
 type Service struct {
 	params     protocol.Params
 	orionModel *orioneval.Model
-	sessions   map[protocol.SessionID]*sessionState
-	mu         sync.Mutex
+	// orionMode is true when the Service was constructed for the Orion
+	// circuit (either NewWithOrion with full model loaded, or
+	// NewWithOrionManifest with header-only client params). Used to
+	// branch StoreEvalKeys / Infer without conflating "Orion mode" with
+	// "model is loaded" (manifest-only mode is Orion but model == nil).
+	orionMode bool
+	sessions  map[protocol.SessionID]*sessionState
+	mu        sync.Mutex
 }
 
 // New constructs a Service that runs the synthetic `x²` circuit.
@@ -107,7 +113,27 @@ func NewWithOrion(params protocol.Params, orionDir string) (*Service, error) {
 	return &Service{
 		params:     merged,
 		orionModel: model,
+		orionMode:  true,
 		sessions:   map[protocol.SessionID]*sessionState{},
+	}, nil
+}
+
+// NewWithOrionManifest is the keygen-friendly twin of NewWithOrion. It
+// reads ONLY the .orion file header (via orioneval.ParseClientParams) to
+// extract CKKS params / inputLevel / rotation indices, skipping the
+// eager LT-encoding LoadModel pass that allocates ~65 GB of resident
+// LinearTransformation diagonals at LogN=16. The returned Service cannot
+// Infer — that path requires the full Model — but it can run keygen
+// (OpenSession + StoreEvalKeys) at a fraction of the resident set.
+func NewWithOrionManifest(params protocol.Params, orionDir string) (*Service, error) {
+	merged, err := mergeOrionParamsLight(params, orionDir)
+	if err != nil {
+		return nil, err
+	}
+	return &Service{
+		params:    merged,
+		orionMode: true,
+		sessions:  map[protocol.SessionID]*sessionState{},
 	}, nil
 }
 
@@ -170,6 +196,7 @@ func (s *Service) StoreEvalKeys(
 	// unrelated session can proceed in parallel.
 	params := s.params
 	orionModel := s.orionModel
+	orionMode := s.orionMode
 	s.mu.Unlock()
 
 	gks, derive, err := deriveGksInfer(params, pkTop, gksMaster)
@@ -192,7 +219,13 @@ func (s *Service) StoreEvalKeys(
 	sess.pkTop = pkTop
 	sess.gksMaster = gksMaster
 	sess.deriveGksInferSeconds = derive
-	if orionModel != nil {
+	if orionMode {
+		// Manifest-only Service (NewWithOrionManifest): keep keygen state
+		// but skip building the Orion evaluator — there's no Model to
+		// Forward against. Infer will refuse cleanly.
+		if orionModel == nil {
+			return nil
+		}
 		// Orion path: per-session Orion Evaluator. The model is shared.
 		// C3AE does not bootstrap, so btpKeys is nil.
 		oe, err := orioneval.NewEvaluatorFromKeySet(params.CKKS, evk, nil)

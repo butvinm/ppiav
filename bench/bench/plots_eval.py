@@ -183,7 +183,6 @@ def _plot_bandwidth_per_message(
         return
 
     ids = [r.message_id for r in rows]
-    senders = [r.sender for r in rows]
     sizes_np = np.array([float(r.size or 0) for r in rows], dtype=np.float64)
     n_msgs = len(ids)
     n_bw = len(bandwidths_mbps)
@@ -205,11 +204,7 @@ def _plot_bandwidth_per_message(
         )
     ax.set_yscale("log")
     ax.set_xticks(xs)
-    ax.set_xticklabels(ids, rotation=45, ha="right", fontsize=7)
-    # Color each x-tick label by sender — preserves the per-party color tag
-    # from `bytes_per_message.png` without doubling the bar legend.
-    for tick, sender in zip(ax.get_xticklabels(), senders, strict=True):
-        tick.set_color(_SENDER_COLORS.get(sender, "#333333"))
+    ax.set_xticklabels(ids, rotation=45, ha="right", fontsize=7, color="black")
     ax.set_xlabel(AXIS["message_name"])
     ax.set_ylabel(AXIS["transfer_seconds"])
     ax.legend(loc="upper right", fontsize=8)
@@ -549,9 +544,30 @@ def write_plots(batch_dir: Path, agg_data: dict[str, Any]) -> None:
 
     ordered = _ordered_steps_and_means(keygen_run, per_image)
 
-    _plot_bytes_per_message(plots_dir / "bytes_per_message.png", message_bytes_rows)
+    # The bytes/bandwidth plots collapse the catalog to one row per logical
+    # message: drop FinalizeRedirect (browser-side navigation, not a wire
+    # payload of interest) and every *Ack envelope (32 B sentinels that
+    # distort the log axis), then keep the first occurrence per message_id
+    # so multi-hop forwards (e.g. EncryptedImage client→agent + agent→service)
+    # render as a single bar. The Gantt swimlane keeps the full catalog
+    # because each hop is its own on-wire event there.
+    plot_rows = [
+        r
+        for r in message_bytes_rows
+        if r.message_id != "FinalizeRedirect" and not r.message_id.endswith("Ack")
+    ]
+    seen: set[str] = set()
+    deduped: list[MessageBytesRow] = []
+    for r in plot_rows:
+        if r.message_id in seen:
+            continue
+        seen.add(r.message_id)
+        deduped.append(r)
+    plot_rows = deduped
+
+    _plot_bytes_per_message(plots_dir / "bytes_per_message.png", plot_rows)
     _plot_bandwidth_per_message(
-        plots_dir / "bandwidth_per_message.png", message_bytes_rows, bandwidths_mbps
+        plots_dir / "bandwidth_per_message.png", plot_rows, bandwidths_mbps
     )
     if plain_stats and fhe_stats:
         _plot_accuracy_plain_vs_fhe(

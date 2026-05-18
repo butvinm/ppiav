@@ -3,15 +3,23 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
 
 	"github.com/butvinm/ppiav/internal/bench"
 	"github.com/butvinm/ppiav/internal/vservice"
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 )
 
-// runInfer loads the VService state written by `keygen` and runs the session's
-// inference circuit on a saved input ciphertext. --orion <dir> must match the
-// Orion compiled-model directory used by keygen.
+// runInfer rebuilds the VService from the keygen artifacts in --workdir and
+// runs the session's FHE inference circuit on the input ciphertext at
+// --in-ct, writing the result ciphertext to --out-ct. --orion <dir> must
+// point at the Orion compiled-model directory used by keygen.
+//
+// The work is split into four timed sub-steps so the bench can attribute
+// the dominant costs separately: infer.load_keys (rlk + gks_infer +
+// LoadModel LT-encoding), infer.load_input_ct, infer.exec (the circuit
+// itself), and infer.serialize_result (whose Bytes carries the result
+// ciphertext's BinarySize).
 func runInfer(args []string) error {
 	fs := flag.NewFlagSet("infer", flag.ContinueOnError)
 	workdir := fs.String("workdir", "", "per-batch keygen artifact directory (required)")
@@ -111,8 +119,15 @@ func runInfer(args []string) error {
 		return fmt.Errorf("infer: %w", err)
 	}
 
-	serializeSample, err := bench.Measure(sampleInferSerializeResult, func() error {
-		return writeCiphertextPath(*outCt, outCipher)
+	if dErr := dumpHeapIfRequested("infer"); dErr != nil {
+		fmt.Fprintf(os.Stderr, "infer: memprofile: %v\n", dErr)
+	}
+
+	serializeSample, err := bench.MeasureWithSize(sampleInferSerializeResult, func() (uint64, error) {
+		if e := writeCiphertextPath(*outCt, outCipher); e != nil {
+			return 0, e
+		}
+		return uint64(outCipher.BinarySize()), nil
 	})
 	run.Append(serializeSample)
 	if err != nil {

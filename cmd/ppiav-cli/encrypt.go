@@ -9,14 +9,15 @@ import (
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
 )
 
-// runEncrypt loads the VClient state written by `keygen` and encrypts a
-// preprocessed image under the aggregated session pk. The output ciphertext
-// is written to --out-ct; a single-sample bench.Run named "encrypt" is
-// written to --out (default <workdir>/encrypt.json).
+// runEncrypt rebuilds the VClient from the keygen artifacts in --workdir and
+// encrypts a preprocessed image under the aggregated session pk. The output
+// ciphertext is written to --out-ct; the timing JSON (one sample named
+// "encrypt", whose Bytes field carries the ciphertext's BinarySize) is
+// written to --out, defaulting to <workdir>/encrypt.json.
 //
-// All of {sid, sk_c, pk_agg, params} are read from --workdir; the rebuilt
-// Client is encrypt-ready (PartialDecrypt would also work, but the bench
-// `partial-decrypt` subcommand owns that path).
+// The reconstructed Client is encrypt-only — PartialDecrypt would work
+// against it too, but that path is owned by the `partial-decrypt`
+// subcommand to keep one operation per process for clean RSS profiling.
 func runEncrypt(args []string) error {
 	fs := flag.NewFlagSet("encrypt", flag.ContinueOnError)
 	workdir := fs.String("workdir", "", "per-batch keygen artifact directory (required)")
@@ -71,13 +72,13 @@ func runEncrypt(args []string) error {
 	run.Metadata["sid"] = string(sid)
 
 	var ct *rlwe.Ciphertext
-	sample, err := bench.Measure("encrypt", func() error {
+	sample, err := bench.MeasureWithSize("encrypt", func() (uint64, error) {
 		c, encErr := client.EncryptImage(image)
 		if encErr != nil {
-			return fmt.Errorf("VClient.EncryptImage: %w", encErr)
+			return 0, fmt.Errorf("VClient.EncryptImage: %w", encErr)
 		}
 		ct = c
-		return nil
+		return uint64(c.BinarySize()), nil
 	})
 	run.Append(sample)
 	if err != nil {
