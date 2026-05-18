@@ -262,6 +262,20 @@
       "pre_vm_hwm": 2700,
       "vm_hwm": 2800,
       "bytes": 0
+    },
+    {
+      "name": "keygen.eval_keys_bundle",
+      "iter": 0,
+      "wall": 0,
+      "heap_alloc": 0,
+      "heap_inuse": 0,
+      "sys": 0,
+      "alloc_delta": 0,
+      "num_gc": 0,
+      "pause_ns": 0,
+      "pre_vm_hwm": 0,
+      "vm_hwm": 0,
+      "bytes": 100000
     }
   ]
 }
