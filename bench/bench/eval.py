@@ -766,6 +766,79 @@ def _noise_block_md(noise_stats: dict[str, float], snr: list[tuple[int, float, f
     return "\n".join(lines)
 
 
+def _security_headroom_rows(
+    img_dirs: Sequence[tuple[int, Path]],
+    decoded: dict[int, dict[str, Any]],
+) -> list[tuple[int, float, float, float, float]]:
+    """Per-image (idx, log2_scale, log2_noise_canon_linf, log2_flood_sigma, margin_bits).
+
+    log2_noise_canon_linf = log2(Δ) + log2(max|noise_per_slot|) approximates
+    the canonical-embedding L∞ norm of the residual `e` in R_q after joint
+    decryption. The Li–Micciancio bound demands σ_flood ≥ 2^κ · ||e||_canon,
+    so `margin = log2(σ_flood) - log2_noise_canon` must be ≥ κ (typ. 40)
+    for κ-bit statistical security.
+
+    Caveat: noise_per_slot is sampled only at non-S slots, so this is a
+    *lower* bound on ||e||_canon — a tight Go-side `rlwe.NoiseCiphertext`
+    against the pre-partial-decrypt ct with the aggregate sk would be more
+    rigorous. Good enough as a first-pass headroom check.
+    """
+    rows: list[tuple[int, float, float, float, float]] = []
+    for idx, _ in img_dirs:
+        d = decoded.get(idx)
+        if d is None:
+            continue
+        noise = d.get("noise_per_slot") or []
+        if not noise:
+            continue
+        log2_scale = d.get("log2_scale")
+        log2_flood = d.get("log2_flood_sigma")
+        if log2_scale is None or log2_flood is None:
+            continue
+        max_abs = float(np.max(np.abs(np.asarray(noise, dtype=np.float64))))
+        if max_abs <= 0:
+            log2_noise = float("-inf")
+        else:
+            log2_noise = float(log2_scale) + float(np.log2(max_abs))
+        margin = float(log2_flood) - log2_noise
+        rows.append((idx, float(log2_scale), log2_noise, float(log2_flood), margin))
+    return rows
+
+
+def _security_headroom_md(rows: list[tuple[int, float, float, float, float]]) -> str:
+    if not rows:
+        return "_no log2_scale / log2_flood_sigma fields in decoded.json — re-run finalize after updating ppiav-cli._"
+    lines: list[str] = []
+    log2_flood = rows[0][3]
+    margins = [r[4] for r in rows if r[4] != float("inf")]
+    noises = [r[2] for r in rows if r[2] != float("-inf")]
+    lines.append(
+        f"σ_flood = 2^{log2_flood:.1f}. Margin = log2(σ_flood) − log2(Δ·max\\|noise\\|). "
+        f"Li–Micciancio (CKKS IND-CPA^D) requires margin ≥ κ bits of statistical security "
+        f"(typically κ=40)."
+    )
+    lines.append("")
+    if margins:
+        lines.append(
+            f"**Across {len(rows)} images:** mean margin = {float(np.mean(margins)):.1f} bits, "
+            f"min = {float(np.min(margins)):.1f} bits, max = {float(np.max(margins)):.1f} bits."
+        )
+        lines.append("")
+    if noises:
+        lines.append(
+            f"**Canonical-embedding noise (log2 ||e||_∞):** mean = {float(np.mean(noises)):.1f}, "
+            f"min = {float(np.min(noises)):.1f}, max = {float(np.max(noises)):.1f}."
+        )
+        lines.append("")
+    lines.append("| idx | log2(Δ) | log2 \\|\\|e\\|\\|_∞ | log2(σ_flood) | margin (bits) |")
+    lines.append("|---:|---:|---:|---:|---:|")
+    for idx, l2s, l2n, l2f, m in rows:
+        n_str = "−∞" if l2n == float("-inf") else f"{l2n:.1f}"
+        m_str = "+∞" if m == float("inf") else f"{m:.1f}"
+        lines.append(f"| {idx} | {l2s:.1f} | {n_str} | {l2f:.1f} | {m_str} |")
+    return "\n".join(lines)
+
+
 def aggregate(batch_dir: Path) -> None:
     """Render summary.md + plots/ from per-step JSONs + decoded.json in batch_dir."""
     batch_dir = Path(batch_dir).resolve()
@@ -842,6 +915,10 @@ def aggregate(batch_dir: Path) -> None:
     sections.append("## Noise + SNR")
     sections.append("")
     sections.append(_noise_block_md(noise_stats, snr))
+    sections.append("")
+    sections.append(f"## {SECTION_HEADERS['security_headroom']}")
+    sections.append("")
+    sections.append(_security_headroom_md(_security_headroom_rows(img_dirs, decoded_by_idx)))
     sections.append("")
     sections.append(f"## {SECTION_HEADERS['network_wire_time']}")
     sections.append("")

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math"
 
 	"github.com/butvinm/ppiav/internal/bench"
 	"github.com/butvinm/ppiav/internal/protocol"
@@ -16,11 +17,18 @@ import (
 // eval driver passes via --ref-logit (per-image, from eval_inputs.json);
 // noise_per_slot is computed at non-S slots only since those carry the
 // broadcast logit m (the S slots carry the deterministic v[i]/Δ values).
+//
+// log2_scale and log2_flood_sigma let the Python aggregator reconstruct the
+// canonical-embedding noise norm ||e||_canon = Δ · max|noise_per_slot| (in
+// log2 terms) and compare against σ_flood to surface the Li–Micciancio
+// statistical-security headroom in bits.
 type decodedOutput struct {
-	Verdict      string    `json:"verdict"`
-	RefLogit     float64   `json:"ref_logit"`
-	SlotsInS     []int     `json:"slots_in_s"`
-	NoisePerSlot []float64 `json:"noise_per_slot"`
+	Verdict        string    `json:"verdict"`
+	RefLogit       float64   `json:"ref_logit"`
+	SlotsInS       []int     `json:"slots_in_s"`
+	NoisePerSlot   []float64 `json:"noise_per_slot"`
+	Log2Scale      float64   `json:"log2_scale"`
+	Log2FloodSigma float64   `json:"log2_flood_sigma"`
 }
 
 // runFinalize rebuilds the VAgent from --workdir and combines the VClient's
@@ -122,7 +130,7 @@ func runFinalize(args []string) error {
 
 	var decoded decodedOutput
 	verdictSample, err := bench.Measure(sampleFinalizeVerdictCompute, func() error {
-		d, e := buildDecodedOutput(*refLogit, params.Authenticator.Lambda, macKey.S, slots, verdict)
+		d, e := buildDecodedOutput(*refLogit, params.Authenticator.Lambda, macKey.S, slots, verdict, ct.Scale.Log2(), math.Log2(params.FloodSigma))
 		if e != nil {
 			return e
 		}
@@ -158,7 +166,7 @@ func runFinalize(args []string) error {
 // FinalizeDecryptionVerbose always returns a MaxSlots-sized vector on
 // success and MaxSlots is much greater than Lambda, so this only ever fires
 // on a contract regression.
-func buildDecodedOutput(refLogit float64, lambda int, s []int, slots []float64, verdict protocol.Verdict) (decodedOutput, error) {
+func buildDecodedOutput(refLogit float64, lambda int, s []int, slots []float64, verdict protocol.Verdict, log2Scale, log2FloodSigma float64) (decodedOutput, error) {
 	if len(slots) < lambda {
 		return decodedOutput{}, fmt.Errorf("finalize: slots length %d < lambda %d (FinalizeDecryptionVerbose contract violated)", len(slots), lambda)
 	}
@@ -176,10 +184,12 @@ func buildDecodedOutput(refLogit float64, lambda int, s []int, slots []float64, 
 		noisePerSlot = append(noisePerSlot, slots[i]-refLogit)
 	}
 	return decodedOutput{
-		Verdict:      verdict.String(),
-		RefLogit:     refLogit,
-		SlotsInS:     slotsInS,
-		NoisePerSlot: noisePerSlot,
+		Verdict:        verdict.String(),
+		RefLogit:       refLogit,
+		SlotsInS:       slotsInS,
+		NoisePerSlot:   noisePerSlot,
+		Log2Scale:      log2Scale,
+		Log2FloodSigma: log2FloodSigma,
 	}, nil
 }
 
