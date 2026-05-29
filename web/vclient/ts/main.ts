@@ -185,7 +185,7 @@ const STEP_SPECS: StepSpec[] = [
   { id: "pk-gen", label: "Генерация доли публичного ключа", kind: "wasm" },
   { id: "pk-exchange", label: "Обмен долями публичного ключа", kind: "network" },
   { id: "pk-aggregate", label: "Агрегация публичного ключа", kind: "wasm" },
-  { id: "rlk1-gen", label: "Генерация доли ключа релинеаризации, раунд 1", kind: "wasm" },
+  { id: "rlk1-gen", label: "Генерация доли ключа релинеаризации", kind: "wasm" },
   { id: "rlk1-exchange", label: "Обмен долями ключа релинеаризации, раунд 1", kind: "network" },
   { id: "rlk1-aggregate", label: "Агрегация ключа релинеаризации, раунд 1", kind: "wasm" },
   { id: "rlk2", label: "Отправка доли ключа релинеаризации, раунд 2", kind: "network" },

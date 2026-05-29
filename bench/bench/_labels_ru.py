@@ -132,6 +132,7 @@ SECTION_HEADERS: dict[str, str] = {
     "key_inventory": "Инвентарь ключей",
     "network_wire_time": "Время передачи по сети",
     "accuracy_plain_vs_fhe": "Точность: C3AE открытый текст vs FHE",
+    "security_headroom": "Запас σ_flood (Li–Micciancio)",
 }
 
 # Column headers for the per-message bytes / key inventory tables. Kept
