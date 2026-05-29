@@ -33,22 +33,22 @@ export function postBinaryXHR(
     xhr.responseType = "arraybuffer";
     const totalUp = body.byteLength;
     step.setDeterminate();
-    step.update(0, totalUp);
+    step.updateUpload(0, totalUp);
     xhr.upload.onprogress = (e: ProgressEvent): void => {
       const total = e.lengthComputable && e.total > 0 ? e.total : totalUp;
-      step.update(e.loaded, total);
+      step.updateUpload(e.loaded, total);
     };
     xhr.upload.onload = (): void => {
-      step.update(totalUp, totalUp);
+      step.updateUpload(totalUp, totalUp);
     };
     xhr.onprogress = (e: ProgressEvent): void => {
-      // Reset readout to download side as soon as the first response byte
-      // lands. Without a Content-Length, total is 0 here.
-      if (e.lengthComputable && e.total > 0) {
-        step.update(e.loaded, e.total);
-      } else {
-        step.update(e.loaded, 0);
+      // Skip pre-body progress events (loaded=0) — they would otherwise paint
+      // a misleading "Получено 0 Б" line on ACK endpoints with an empty body.
+      if (e.loaded === 0) {
+        return;
       }
+      const total = e.lengthComputable && e.total > 0 ? e.total : 0;
+      step.updateDownload(e.loaded, total);
     };
     xhr.onerror = (): void => {
       reject(new Error("POST " + url + ": network error"));
@@ -84,13 +84,13 @@ export async function postBinaryFetch(
 ): Promise<BinaryResponse> {
   const total = body.byteLength;
   step.setDeterminate();
-  step.update(0, total);
+  step.updateUpload(0, total);
   const resp = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/octet-stream" },
     body: new Uint8Array(body),
   });
-  step.update(total, total);
+  step.updateUpload(total, total);
   const buf = new Uint8Array(await resp.arrayBuffer());
   return {
     status: resp.status,
@@ -113,13 +113,13 @@ export async function postBinaryFetchJSON<T>(
 ): Promise<{ status: number; ok: boolean; body: T | null; raw: string }> {
   const total = body.byteLength;
   step.setDeterminate();
-  step.update(0, total);
+  step.updateUpload(0, total);
   const resp = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/octet-stream" },
     body: new Uint8Array(body),
   });
-  step.update(total, total);
+  step.updateUpload(total, total);
   const raw = await resp.text();
   let parsed: T | null = null;
   try {

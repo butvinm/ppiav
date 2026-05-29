@@ -16,8 +16,9 @@ export interface StepSpec {
 interface StepRow {
   spec: StepSpec;
   root: HTMLDivElement;
-  labelEl: HTMLSpanElement;
-  sizeEl: HTMLSpanElement;
+  labelEl: HTMLDivElement;
+  sizeUpEl: HTMLSpanElement;
+  sizeDlEl: HTMLSpanElement;
   bar: HTMLDivElement;
   fill: HTMLDivElement;
   startedAt: number | null;
@@ -30,15 +31,15 @@ function fmtBytes(n: number): string {
     return "—";
   }
   if (n < 1024) {
-    return n + " B";
+    return n + " Б";
   }
   if (n < 1024 * 1024) {
-    return (n / 1024).toFixed(1) + " KB";
+    return (n / 1024).toFixed(1) + " КБ";
   }
   if (n < 1024 * 1024 * 1024) {
-    return (n / (1024 * 1024)).toFixed(2) + " MB";
+    return (n / (1024 * 1024)).toFixed(2) + " МБ";
   }
-  return (n / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+  return (n / (1024 * 1024 * 1024)).toFixed(2) + " ГБ";
 }
 
 function fmtClock(ms: number): string {
@@ -83,14 +84,9 @@ export class ProgressTracker {
       root.className = "step";
       root.dataset["id"] = spec.id;
 
-      const label = document.createElement("div");
-      label.className = "step-label";
-      const labelEl = document.createElement("span");
+      const labelEl = document.createElement("div");
+      labelEl.className = "step-label";
       labelEl.textContent = spec.label;
-      const sizeEl = document.createElement("span");
-      sizeEl.className = "size";
-      label.appendChild(labelEl);
-      label.appendChild(sizeEl);
 
       const bar = document.createElement("div");
       bar.className = "bar";
@@ -98,15 +94,26 @@ export class ProgressTracker {
       fill.className = "bar-fill";
       bar.appendChild(fill);
 
-      root.appendChild(label);
+      const sizes = document.createElement("div");
+      sizes.className = "step-sizes";
+      const sizeUpEl = document.createElement("span");
+      sizeUpEl.className = "size size-up";
+      const sizeDlEl = document.createElement("span");
+      sizeDlEl.className = "size size-dl";
+      sizes.appendChild(sizeUpEl);
+      sizes.appendChild(sizeDlEl);
+
+      root.appendChild(labelEl);
       root.appendChild(bar);
+      root.appendChild(sizes);
       this.stepsHost.appendChild(root);
 
       this.rows.set(spec.id, {
         spec,
         root,
         labelEl,
-        sizeEl,
+        sizeUpEl,
+        sizeDlEl,
         bar,
         fill,
         startedAt: null,
@@ -254,17 +261,23 @@ export class StepHandle {
   private readonly row: StepRow;
   private summary = "";
   private settled = false;
+  private upLoaded = 0;
+  private upTotal = 0;
+  private dlLoaded = 0;
+  private dlTotal = 0;
+  private hasUp = false;
+  private hasDl = false;
 
   constructor(tracker: ProgressTracker, row: StepRow) {
     this.tracker = tracker;
     this.row = row;
   }
 
-  // setSize attaches a known byte total to the row's label (e.g.
-  // "Sending RLK round-1 (240.1 MB)").
+  // setSize attaches a known byte total to the row's upload line (e.g.
+  // "out=240.1 MB"). Overwritten by the first updateUpload call.
   setSize(bytes: number, prefix?: string): void {
     const p = prefix ?? "";
-    this.row.sizeEl.textContent = " " + p + fmtBytes(bytes);
+    this.row.sizeUpEl.textContent = p + fmtBytes(bytes);
   }
 
   // determinate mode: switch the bar away from the indeterminate animation.
@@ -272,17 +285,47 @@ export class StepHandle {
     this.row.bar.classList.remove("indeterminate");
   }
 
-  // update(loaded, total) drives a determinate fill. total may be 0 if
-  // unknown (e.g. chunked download with no Content-Length) — caller should
-  // either skip or use loaded only.
-  update(loaded: number, total: number): void {
+  // updateUpload(loaded, total) records request-side progress. Drives bar
+  // fill from the upload while no download bytes have arrived; once the
+  // upload finishes, bar stays at its final fill (download stays text-only).
+  updateUpload(loaded: number, total: number): void {
+    this.hasUp = true;
+    this.upLoaded = loaded;
+    this.upTotal = total;
     this.row.bar.classList.remove("indeterminate");
     if (total > 0) {
       const pct = Math.max(0, Math.min(100, (loaded / total) * 100));
       this.row.fill.style.width = pct.toFixed(2) + "%";
     }
-    this.row.sizeEl.textContent =
-      " " + fmtBytes(loaded) + (total > 0 ? " / " + fmtBytes(total) : "");
+    this.renderSize();
+  }
+
+  // updateDownload(loaded, total) records response-side progress. total may
+  // be 0 if Content-Length is missing. If there was no upload phase at all,
+  // bar fill follows the download instead.
+  updateDownload(loaded: number, total: number): void {
+    this.hasDl = true;
+    this.dlLoaded = loaded;
+    this.dlTotal = total;
+    this.row.bar.classList.remove("indeterminate");
+    if (!this.hasUp && total > 0) {
+      const pct = Math.max(0, Math.min(100, (loaded / total) * 100));
+      this.row.fill.style.width = pct.toFixed(2) + "%";
+    }
+    this.renderSize();
+  }
+
+  private renderSize(): void {
+    this.row.sizeUpEl.textContent = this.hasUp
+      ? "Отправлено " +
+        fmtBytes(this.upLoaded) +
+        (this.upTotal > 0 ? " / " + fmtBytes(this.upTotal) : "")
+      : "";
+    this.row.sizeDlEl.textContent = this.hasDl
+      ? "Получено " +
+        fmtBytes(this.dlLoaded) +
+        (this.dlTotal > 0 ? " / " + fmtBytes(this.dlTotal) : "")
+      : "";
   }
 
   // summarize stores text appended to the dev log on success (e.g. "out=83 KB"
@@ -300,7 +343,7 @@ export class StepHandle {
     const start = this.row.startedAt ?? performance.now();
     const tick = (): void => {
       const sec = Math.floor((performance.now() - start) / 1000);
-      this.row.sizeEl.textContent = " " + sec + " с";
+      this.row.sizeUpEl.textContent = sec + " с";
     };
     tick();
     this.row.intervalId = window.setInterval(tick, intervalMs);

@@ -144,11 +144,20 @@ p {
   color: var(--text);
 }
 
-.step-label .size {
+.step-sizes {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.step-sizes .size {
   color: var(--muted);
   font-family: var(--mono);
   font-size: 12px;
-  margin-left: 6px;
+}
+
+.step-sizes .size:empty {
+  display: none;
 }
 
 .bar {
